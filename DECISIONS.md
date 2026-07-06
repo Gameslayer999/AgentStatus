@@ -31,6 +31,7 @@
 | 018 | 2026-07-06 | Cursor support: Cursor natively runs `report.sh` via its Claude-compat bridge (reads `~/.claude/settings.json`), so running/idle/error/remove work for free; native `~/.cursor/hooks.json` entries add the events the bridge drops (`subagentStart/Stop`, `postToolUseFailure`). New `ide` field (`cursor` when `.cursor_version` present, else `vscode`) drives per-IDE click-to-focus; Cursor cwd = `workspace_roots[0]`; blocked is unavailable on Cursor (no event) | Accepted |
 | 019 | 2026-07-06 | Click a bar light → focus the exact **session tab** (not just its window) via a bar→extension relay: the bar writes `~/.claude/status/focus-request.json` `{session_id, requested_at}`; the per-window extension polls it and calls the popup-free in-editor `claude-vscode.editor.open`. Chosen over the `vscode://…open?session=` deep link, which shows a consent popup on every click (verified live). Complements decision 016's window-raise. Verified end-to-end (bar click from another window → correct tab) | Accepted |
 | 020 | 2026-07-06 | Single-instance guard via `tauri-plugin-single-instance` (release only): a second launch — installed copy or dev build, both keyed by `com.claudestatus.app` — pings the running instance and exits instead of drawing a duplicate overlapping bar. Off in dev so `tauri dev` runs alongside the installed copy | Accepted |
+| 021 | 2026-07-06 | Faster click-to-focus: fire a fast `osascript` System Events window-raise (`set frontmost` + AXRaise by workspace-root basename, ~0.2s) **in addition to** the decision-016 IDE CLI (~1.1s). Fast path handles the same-Space case; CLI still covers cross-Space / full-screen. Needs a one-time Accessibility grant; silently no-ops (falls back to CLI) without it | Accepted |
 
 ---
 
@@ -860,3 +861,41 @@ builds).
 `app/src-tauri/src/lib.rs` (`run()` builds a mutable builder, conditionally adds the plugin
 first). No schema, hook, or installer-contract change; takes effect once the app is rebuilt and
 reinstalled.
+
+## 021 — Faster click-to-focus (fast osascript raise + CLI fallback)
+
+**Context.** Decision 016 raises the target IDE window on a bar click via the IDE's own CLI
+(`code`/`cursor <root>`), chosen because it reaches full-screen windows on other Spaces. But the
+CLI boots a Node runtime on every invocation — measured ~1.15s — so even when the target window
+is already on the *current* Space (no Space switch needed) the window takes a second-plus to come
+forward. The user reported the lag specifically for same-Space switches.
+
+**Measurements.**
+
+| Method | Time | Window-specific? | Cross-Space / full-screen? | Permission |
+|---|---|---|---|---|
+| `code`/`cursor <root>` (decision 016) | ~1.15s | yes | yes | none |
+| `osascript` app-activate | ~0.12s | no (frontmost only) | no | Automation |
+| `osascript` System Events `set frontmost` + AXRaise by title | ~0.17–0.47s | yes | no | Accessibility |
+
+**Decision — hybrid: fast osascript raise *and* the CLI, both fired.** On a click `focus_session`
+now first runs `raise_window_fast(root, ide)`: an `osascript` that, via System Events, sets the
+IDE process `frontmost` and performs `AXRaise` on the window whose title contains the
+workspace-root basename (the project folder, which appears in the IDE window title). This brings a
+same-Space window forward in ~0.2s. The decision-016 CLI still fires right after, unchanged,
+covering the case the fast path can't: full-screen windows and windows on inactive Spaces (which
+System Events can't see/raise — the reason AppleScript was rejected as the *sole* mechanism in
+016). When the window is same-Space the CLI just re-activates the already-front window ~1s later —
+harmless, no new window.
+
+**One permission, graceful degradation.** Going through System Events (`set frontmost` + AXRaise)
+needs only **Accessibility** — not a per-app Automation/Apple-Events grant (which `tell
+application "X" to activate` would have required, one prompt per IDE). Without the Accessibility
+grant the `osascript` errors out and is ignored (`.spawn()`, result discarded), so the CLI alone
+runs — identical to pre-021 behavior. So the speedup is opt-in via the OS permission and there is
+**no regression** without it. The Accessibility grant is a manual macOS step that can't be
+scripted (TCC is user-controlled); it's documented in `install.sh` output as optional.
+
+**Scope.** `app/src-tauri/src/lib.rs` (`raise_window_fast` helper; one call at the top of
+`focus_session`'s macOS block). No change to the CLI path, the extension tab-focus relay
+(decision 019), the schema, hooks, or the installer contract.

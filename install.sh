@@ -42,6 +42,11 @@ right-click the app in Finder and choose "Open", then confirm.
 The app is an accessory app (no Dock icon). To have it start automatically:
   System Settings → General → Login Items → add ClaudeStatus.
 
+Optional — faster window switching: grant ClaudeStatus Accessibility permission
+(System Settings → Privacy & Security → Accessibility → add ClaudeStatus). This
+lets a light click raise a same-Space window in ~0.2s instead of ~1s. Without it,
+click-to-focus still works, just via the slower IDE CLI.
+
 To uninstall: delete /Applications/ClaudeStatus.app and run
   node hooks/setup.mjs uninstall
 (or restore ~/.claude/settings.json.claudestatus-bak).
