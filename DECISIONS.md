@@ -33,6 +33,7 @@
 | 020 | 2026-07-06 | Single-instance guard via `tauri-plugin-single-instance` (release only): a second launch — installed copy or dev build, both keyed by `com.claudestatus.app` — pings the running instance and exits instead of drawing a duplicate overlapping bar. Off in dev so `tauri dev` runs alongside the installed copy | Accepted |
 | 021 | 2026-07-06 | Faster click-to-focus: fire a fast `osascript` System Events window-raise (`set frontmost` + AXRaise by workspace-root basename, ~0.2s) **in addition to** the decision-016 IDE CLI (~1.1s). Fast path handles the same-Space case; CLI still covers cross-Space / full-screen. Needs a one-time Accessibility grant; silently no-ops (falls back to CLI) without it | Accepted |
 | 022 | 2026-07-06 | Persist bar position across restarts/rebuilds in `localStorage` (frontend-only, no window-state plugin), restored on launch over the config's `center: true`; drag bounded to the union of all monitors with soft edge magnetism; a user-facing **Reload** button in the settings panel; `install.sh` auto-quits+relaunches an already-running instance so rebuilds take effect past the single-instance guard | Accepted |
+| 023 | 2026-07-06 | Settings: bar **opacity** slider (0–100%) drives a `--bar-opacity` CSS variable on `#bar` that fades the whole pill together — fill, border, shadow, and backdrop-blur (multipliers normalized so 82% reproduces the original look) — while the lights stay fully opaque so the signal never fades; at 0% the pill vanishes and only the lights float. Fading the chrome (not just the fill) makes the control perceptible when the bar is minimized to a few lights. Persisted in `localStorage` as a whole percent, frontend-only, same pattern as decision 017 size/padding | Accepted |
 
 ---
 
@@ -959,3 +960,40 @@ First persistence attempt saved the window top-left and the bar jumped on Reload
 panel-closed size change described above); corrected to the lights-anchor approach and rebuilt.
 **Left to verify live:** Reload no longer moves the bar, and the anchor restores across a full
 quit/relaunch. Multi-monitor crossing/magnetism not yet observed on a real multi-display setup.
+
+---
+
+### Decision 023 — Bar opacity slider
+
+**Date:** 2026-07-06 · **Status:** Accepted
+
+**Context.** The bar's pill is drawn with a fixed translucent fill
+(`background: rgba(20, 22, 26, 0.82)`). The user wanted to control how see-through the
+bar is — e.g. make it fade further into the desktop, or make it fully solid.
+
+**Decision.** Add an **Opacity** slider (0–100%) to the settings panel, following the same
+frontend-only `localStorage` + `applyStyle()` pattern as the decision-017 size/padding
+controls. The slider drives a new `--bar-opacity` CSS variable on `#bar` (0–1, the percent / 100).
+
+**The whole pill fades together — fill, border, shadow, and blur — not just the fill.** A first
+cut varied only the fill alpha (`rgba(20, 22, 26, var(--bar-opacity))`), but when the bar is
+minimized to a few lights the fill is a small fraction of the visible chrome — the border and the
+blurred halo dominate — so the slider was barely perceptible there (user feedback). Fix: the
+border, drop-shadow, and backdrop-blur alphas/radius are all scaled by `--bar-opacity` via
+`calc()`, with multipliers **normalized so 82% reproduces the original look** (`0.11 → 0.09`
+border, `0.46 → 0.38` shadow, `17px → 14px` blur). Now the whole pill fades as one; at 0% it
+vanishes entirely and only the lights float. Range widened to 0–100 (was 20–100) for more travel
+in the transparent direction; 100% is already fully opaque (fill alpha 1.0), so that's the solid
+ceiling — there's nowhere past it.
+
+**The lights never fade.** They're separate, fully-opaque elements, so even at 0% the signal
+reads at full strength — preserving UI principle #1 (glanceable) and #2 (attention states stand
+out). When idle with no sessions, the empty-state dot (`rgba(255,255,255,0.18)`, unscaled) stays
+visible as a grab target. Stored as a whole percent to match the integer slider. `Reset to
+defaults` clears it back to 82% (the original CSS value).
+
+**Scope.** `app/src/index.html` (Opacity row, `min=0`), `app/src/styles.css` (`--bar-opacity`
+variable driving fill/border/shadow/blur + shared slider styling), `app/src/main.js`
+(`OPACITY_KEY`/`DEFAULT_OPACITY`, `currentOpacity`, `setOpacity`, `applyStyle` wiring, reset
+cleanup, event listener). No change to the status-file schema, the hook contract, or the
+event→state mapping.
