@@ -177,6 +177,11 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-09** — **Released v0.3.0.** Promoted the Codex-compatible lightbar build to the
+  next public release: bumped `0.2.0 → 0.3.0` (`tauri.conf.json`, `Cargo.toml`,
+  `package.json`, lockfiles, README DMG name), rebuilt `ClaudeStatus_0.3.0_aarch64.dmg`, and
+  installed/relaunched `/Applications/ClaudeStatus.app` locally. Headline: ClaudeStatus now
+  tracks Claude Code, Codex, and Cursor sessions from the shared lightbar.
 - **2026-07-09** — **Codex compatibility (decision 029).** ClaudeStatus now installs the shared
   `report.sh` into Codex user hooks at `~/.codex/hooks.json` as well as Claude's
   `~/.claude/settings.json`. Codex registration uses only the currently documented Codex hook
