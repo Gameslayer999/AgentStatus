@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# ClaudeStatus — the real signal hook.
+# AgentStatus — the real signal hook.
 #
 # Maps one Claude Code/Codex hook event to a session state (and a short "what it's
 # working on" description) and records it in a per-session status file:
-# $CLAUDESTATUS_DIR/sessions/<session_id>.json (default ~/.claude/status/sessions/).
+# $AGENTSTATUS_DIR/sessions/<session_id>.json (default ~/.claude/status/sessions/).
+# Legacy $CLAUDESTATUS_DIR is still honored so existing installs keep working.
 # One file per session → concurrent sessions never contend (decision 007).
 #
 # Subagents get one marker file each, under sessions/<session_id>.subagents/<agent_id>
 # (contents = agent_type). Parallel subagents therefore never race (decision 010).
 #
-# Opt-out: if $CLAUDESTATUS_IGNORE is set, the session is not tracked at all — for
-# programmatic/headless Claude calls (e.g. an app classifying text) that shouldn't
-# appear as lights. Set it in the environment where you spawn Claude (decision 013).
+# Opt-out: if $AGENTSTATUS_IGNORE is set, the session is not tracked at all — for
+# programmatic/headless agent calls (e.g. an app classifying text) that shouldn't
+# appear as lights. Legacy $CLAUDESTATUS_IGNORE is still honored.
 #
 # Contract (Claude Code 2.1.201 — DECISIONS.md #006; Cursor 3.10.11 — #018;
 # Codex hooks — official manual fetched 2026-07-09):
@@ -39,7 +40,7 @@
 #
 # Dependency: jq (present on this machine; the Milestone 5 installer will verify it).
 
-STATUS_DIR="${CLAUDESTATUS_DIR:-$HOME/.claude/status}"
+STATUS_DIR="${AGENTSTATUS_DIR:-${CLAUDESTATUS_DIR:-$HOME/.claude/status}}"
 SESSIONS_DIR="$STATUS_DIR/sessions"
 EVENT="${1:-}"
 
@@ -59,7 +60,7 @@ esac
 {
   payload="$(cat)"
   # Opt-out for programmatic/headless sessions (decision 013).
-  [ -n "$CLAUDESTATUS_IGNORE" ] && exit 0
+  { [ -n "$AGENTSTATUS_IGNORE" ] || [ -n "$CLAUDESTATUS_IGNORE" ]; } && exit 0
   sid="$(printf '%s' "$payload" | jq -r '.session_id // .thread_id // .threadId // .conversation_id // .conversationId // .thread.id // .conversation.id // empty' 2>/dev/null)"
   [ -z "$sid" ] && exit 0
   # Cursor fires sessionStart for an unopened "draft" composer — skip that phantom.

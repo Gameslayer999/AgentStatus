@@ -1,4 +1,4 @@
-// ClaudeStatus — Tauri backend.
+// AgentStatus — Tauri backend.
 // Reads the per-session status files written by the hook (decision 007) and
 // exposes them to the frontend via the `list_sessions` command.
 
@@ -13,7 +13,7 @@ mod install;
 /// Tray icon id — used to fetch the tray (`app.tray_by_id`) from the mode/image
 /// commands after it's built in `setup`.
 #[cfg(target_os = "macos")]
-const TRAY_ID: &str = "claudestatus";
+const TRAY_ID: &str = "agentstatus";
 
 #[derive(Serialize)]
 struct SessionStatus {
@@ -52,9 +52,12 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// Root status directory (~/.claude/status), honoring $CLAUDESTATUS_DIR (same
-/// override the hook uses).
+/// Root status directory (~/.claude/status), honoring $AGENTSTATUS_DIR (same
+/// override the hook uses). $CLAUDESTATUS_DIR is kept as a legacy alias.
 fn status_root() -> PathBuf {
+    if let Ok(dir) = std::env::var("AGENTSTATUS_DIR") {
+        return PathBuf::from(dir);
+    }
     if let Ok(dir) = std::env::var("CLAUDESTATUS_DIR") {
         return PathBuf::from(dir);
     }
@@ -488,7 +491,7 @@ pub fn run() {
 
     // Single-instance guard (release only). A second launch of the app — the
     // installed /Applications copy or a dev build, both sharing the identifier
-    // com.claudestatus.app — pings the already-running instance and exits, instead
+    // com.agentstatus.app — pings the already-running instance and exits, instead
     // of drawing a second overlapping bar off the same status dir. Must be the first
     // plugin registered. Gated off in dev so `npm run tauri dev` still runs while the
     // installed copy is up.
@@ -548,7 +551,7 @@ pub fn run() {
                     Ok(tray) => {
                         let _ = tray.set_visible(false);
                     }
-                    Err(e) => eprintln!("[claudestatus] tray build failed: {e}"),
+                    Err(e) => eprintln!("[agentstatus] tray build failed: {e}"),
                 }
             }
             // Packaged app self-installs its hooks. In dev we keep the repo hooks

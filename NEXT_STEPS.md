@@ -22,7 +22,7 @@
   [hooks/cursor-logger-setup.mjs](hooks/cursor-logger-setup.mjs)) kept for future Cursor
   versions. Blocked (orange) is unavailable on Cursor (no event).
 - **Milestones 1–6 done — v1 complete.** Two shipping surfaces off one signal layer:
-  (1) `/Applications/ClaudeStatus.app` — floating always-on-top bar of all sessions; self-
+  (1) `/Applications/AgentStatus.app` — floating always-on-top bar of all sessions; self-
   installs its hooks on launch. (2) The **VS Code extension** — per-window status-bar items.
   Features: four-state lights, hover (task/activity), click-to-focus, subagent badges, floats
   over full-screen, drag + position-memory, dead-session pruning. **Remaining is polish /
@@ -72,7 +72,7 @@
 ## Target architecture (working sketch)
 
 ```
-ClaudeStatus/
+AgentStatus/
 ├─ hooks/            # shell scripts + installer for the status hooks
 │   ├─ log-events.sh   # TEMPORARY Milestone 1 event logger (remove after verification)
 │   ├─ logger-setup.mjs# TEMPORARY install/uninstall for the logger
@@ -86,7 +86,7 @@ ClaudeStatus/
 ```
 
 **Data contract** — one file per session (decision 007):
-`~/.claude/status/sessions/<session_id>.json` (dir overridable via `$CLAUDESTATUS_DIR`):
+`~/.claude/status/sessions/<session_id>.json` (dir overridable via `$AGENTSTATUS_DIR`):
 ```json
 {
   "state": "running|blocked|idle|error",
@@ -138,7 +138,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
    `.app` + `.dmg`; [install.sh](install.sh) builds + installs to `/Applications`;
    [README.md](README.md) written. Verified: launched the packaged app, it wired up all 11
    hooks (deduped, backed up, non-clobbering) with zero external steps. Installed at
-   `/Applications/ClaudeStatus.app` and running. *Deferred:* launch-at-login is a manual
+   `/Applications/AgentStatus.app` and running. *Deferred:* launch-at-login is a manual
    Login-Items step (a `tauri-plugin-autostart` toggle is a future enhancement); code signing
    (unsigned → Gatekeeper right-click-Open only when redistributed).
 
@@ -177,12 +177,21 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-09** — **Renamed ClaudeStatus → AgentStatus (decision 030).** The product name now
+  matches the broader agent scope: Claude Code, Codex, and Cursor. Updated app bundle/product
+  names, Tauri identifier/window title, docs, installer paths, extension metadata/command ids,
+  localStorage keys, hook backup suffixes, and release asset naming. Kept migration support for
+  legacy `CLAUDESTATUS_DIR` / `CLAUDESTATUS_IGNORE`, and the installer removes a prior
+  `/Applications/ClaudeStatus.app` while installing `/Applications/AgentStatus.app`.
+- **2026-07-09** — **Released v0.4.0.** Branded AgentStatus release: bumped `0.3.0 → 0.4.0`,
+  rebuilt `AgentStatus_0.4.0_aarch64.dmg`, and installed/relaunched `/Applications/AgentStatus.app`
+  locally. Headline: the lightbar is now AgentStatus across the app, docs, and release artifact.
 - **2026-07-09** — **Released v0.3.0.** Promoted the Codex-compatible lightbar build to the
   next public release: bumped `0.2.0 → 0.3.0` (`tauri.conf.json`, `Cargo.toml`,
-  `package.json`, lockfiles, README DMG name), rebuilt `ClaudeStatus_0.3.0_aarch64.dmg`, and
-  installed/relaunched `/Applications/ClaudeStatus.app` locally. Headline: ClaudeStatus now
+  `package.json`, lockfiles, README DMG name), rebuilt `AgentStatus_0.3.0_aarch64.dmg`, and
+  installed/relaunched `/Applications/AgentStatus.app` locally. Headline: AgentStatus now
   tracks Claude Code, Codex, and Cursor sessions from the shared lightbar.
-- **2026-07-09** — **Codex compatibility (decision 029).** ClaudeStatus now installs the shared
+- **2026-07-09** — **Codex compatibility (decision 029).** AgentStatus now installs the shared
   `report.sh` into Codex user hooks at `~/.codex/hooks.json` as well as Claude's
   `~/.claude/settings.json`. Codex registration uses only the currently documented Codex hook
   events, while Claude/Cursor keep their existing fuller event set. The reporter accepts Codex
@@ -209,7 +218,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   confirm by closing a window and watching its light vanish within a poll.
 - **2026-07-07** — **Released v0.2.0.** Cut the second GitHub Release (follows the decision-024
   unsigned Apple-Silicon DMG pattern): bumped `0.1.0 → 0.2.0` (`tauri.conf.json`, `Cargo.toml`,
-  `package.json`, README DMG name), rebuilt `ClaudeStatus_0.2.0_aarch64.dmg` via `install.sh`,
+  `package.json`, README DMG name), rebuilt `AgentStatus_0.2.0_aarch64.dmg` via `install.sh`,
   merged `development → main`, tagged `v0.2.0`, and published the release with the DMG. Headline
   features over v0.1.0: **menu-bar mode** (decision 026) and the **sort** toggle (decision 025).
 - **2026-07-06** — **Menu-bar mode: floating ↔ macOS menu bar toggle (decision 026).** The bar
@@ -220,7 +229,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   (`error>blocked>done>running>idle`). Clicking the item drops the *same* NSPanel down as a
   **popover** (`toggle_popover`), so per-light tab-focus (#019), hover, and badges work unchanged.
   Toggle is a **Mode** segmented control in the settings panel (`localStorage`
-  `claudestatus.mode`/`.menubarcondense`); menu-bar mode **forces horizontal** (a vertical popover
+  `agentstatus.mode`/`.menubarcondense`); menu-bar mode **forces horizontal** (a vertical popover
   off the bar looks wrong) and hides the Orientation control. Amends decision 003 (menu bar is now
   an optional mode). Two macOS gotchas found + fixed live: **tray ops must run on the main thread**
   (`run_on_main_thread`; off-main they silently no-op'd, so the panel hid with no tray — plus a
@@ -240,13 +249,13 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   Answers "sort by what window a session is in"; since hooks expose no true per-window id
   (decision 006), a window is proxied by `cwd` and two windows on the *same* folder merge (user
   accepted this limit). Frontend-only: sorting moved into `tick()`, persisted in `localStorage`
-  (`claudestatus.sort`), same pattern as orientation — no hook/schema change. Touches
+  (`agentstatus.sort`), same pattern as orientation — no hook/schema change. Touches
   `app/src/index.html`, `app/src/main.js`. Rebuilt + reinstalled via `install.sh`. **Left to
   verify (live):** open the panel, toggle Window/Urgency, confirm the lights reorder (and, with
   ≥2 sessions in one folder + others elsewhere, that same-folder lights sit adjacent).
 - **2026-07-06** — **First public release v0.1.0 (decision 024).** Cut the first GitHub
   Release. Committed the pending decision-023 work, rebuilt a fresh
-  `ClaudeStatus_0.1.0_aarch64.dmg` (Apple-Silicon-only, unsigned) from the tagged commit,
+  `AgentStatus_0.1.0_aarch64.dmg` (Apple-Silicon-only, unsigned) from the tagged commit,
   tagged `v0.1.0`, and published the Release with the DMG attached. Rewrote
   [README.md](README.md) to lead with the DMG download + accurate macOS-15+/26 Gatekeeper
   steps (`xattr -dr com.apple.quarantine` or "Open Anyway"), keeping `install.sh`
@@ -261,7 +270,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   there — so the chrome now fades too.) Range widened to 0–100 for more travel toward transparent;
   at 0% the pill vanishes and only the lights float. The lights are separate, fully-opaque
   elements, so the signal never fades. Same frontend-only `localStorage`
-  (`claudestatus.baropacity`, whole percent) + `applyStyle()` pattern as decision-017; `Reset to
+  (`agentstatus.baropacity`, whole percent) + `applyStyle()` pattern as decision-017; `Reset to
   defaults` restores 82%. Touches `app/src/index.html`, `app/src/styles.css`, `app/src/main.js`.
   Rebuilt + reinstalled via `install.sh` (auto-restart), now live. **Left to verify (live):** drag
   the slider and confirm the whole pill fades smoothly to invisible while the lights stay sharp.
@@ -273,7 +282,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   `availableMonitors()` (slides across shared edges, can't leave the outer edges; center-in-a-gap
   guard pulls it onto the nearest display), with **soft edge magnetism** (`SNAP_LOGICAL = 16`
   logical px, per-monitor scaled) that pins a near edge flush (`app/src/main.js`). (3) **Position
-  persistence**: saves the **lights' screen anchor** (`{x,y,scale}`, `claudestatus.pos`) — not the
+  persistence**: saves the **lights' screen anchor** (`{x,y,scale}`, `agentstatus.pos`) — not the
   window top-left, which depends on settings-panel state — and re-anchors on launch via
   `anchorLightsTo()` over `center: true`, so restarts/rebuilds/reloads no longer move the bar
   (`app/src/main.js`). (First cut saved the window top-left and jumped on Reload because the Reload
@@ -289,7 +298,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   021).** (1) **Fixed two bars running at once** — the installed `/Applications` copy and the
   in-repo dev build were both up, drawing overlapping duplicate bars off the same status dir.
   Root cause: no instance guard. Added `tauri-plugin-single-instance` (release-gated) as the
-  first plugin in `run()`; keyed by the shared `com.claudestatus.app` identifier so it catches
+  first plugin in `run()`; keyed by the shared `com.agentstatus.app` identifier so it catches
   both bundles. **Verified:** from a clean state, launching a second copy (either path) exits
   immediately — 3 rapid launch attempts left exactly one instance. (Observed one transient
   double-instance while rapidly kill/relaunching during the rebuild; it's a narrow stale-socket
@@ -298,7 +307,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   Node runtime every click, so `focus_session` now *also* fires a fast `osascript` System Events
   raise (`set frontmost` + `AXRaise` by workspace-root basename) before it. Fast path covers the
   same-Space case; the CLI still fires and covers cross-Space / full-screen. Needs a one-time
-  **Accessibility** grant for ClaudeStatus.app (documented as optional in `install.sh`); without
+  **Accessibility** grant for AgentStatus.app (documented as optional in `install.sh`); without
   it the `osascript` no-ops and the CLI alone runs — no regression. Touched
   `app/src-tauri/Cargo.toml`, `app/src-tauri/src/lib.rs` (`raise_window_fast` + guard),
   `install.sh`. Rebuilt and reinstalled to `/Applications`. **Left to verify:** the focus
@@ -314,7 +323,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   `activate` so a stale request isn't replayed on reload). Rejected the `vscode://…open?session=`
   deep link after re-verifying live that it shows a **consent popup on every click** (the old
   "spawns new agents" note was stale — no new agent spawned — but the popup is real). **Verified
-  end-to-end:** clicked a session's light from another VS Code window → the ClaudeStatus window
+  end-to-end:** clicked a session's light from another VS Code window → the AgentStatus window
   came forward *and* the exact conversation tab was revealed. Touched `lib.rs`
   (`write_focus_request`, `focus_session` gained a `session_id` arg), `main.js` (passes `s.id`),
   `extension/src/extension.ts` (relay). Extension repackaged/reinstalled (`0.1.2`); packaged app
@@ -335,7 +344,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   `<input type="color">` for running/blocked/done/idle/error — confirmed working live on the
   NSPanel), and a "Reset to defaults." Refactored the dot geometry, wrapper padding, and state
   colors in `styles.css` to CSS variables on `#bar`, glow derived from the base color via
-  `color-mix`; JS sets them from `localStorage` (`claudestatus.dotsize`/`.barpad`/`.colors`),
+  `color-mix`; JS sets them from `localStorage` (`agentstatus.dotsize`/`.barpad`/`.colors`),
   same frontend-only pattern as orientation. Also reworked how the panel opens near a
   screen edge so the **lights stay put** and the panel grows toward the screen middle: on
   toggle we anchor the `#lights` screen position, pick the direction (panel above when the bar
@@ -362,7 +371,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   **orientation** — a horizontal/vertical segmented toggle that flips `#lights` between a row
   and a column via a `.vertical` class on `#bar`; the existing content-hugging auto-resize
   reshapes the window, so no other geometry changed. Choice persisted in webview `localStorage`
-  (`claudestatus.orientation`), app-local like `reviewedAt` — no hook/schema change. Frontend
+  (`agentstatus.orientation`), app-local like `reviewedAt` — no hook/schema change. Frontend
   only (`index.html`, `styles.css`, `main.js`); dev instance compiles + launches clean.
   **Unverified by hand:** right-click routing on the non-activating NSPanel and the vertical
   render — confirm on the running dev bar, then rebuild the packaged app (`./install.sh`).
@@ -378,7 +387,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 - **2026-07-06** — **Error signal + noise fixes (decision 013).** Red is now `StopFailure`
   only (confirmed live that tool failures produce only `PostToolUseFailure`, never
   `StopFailure`); `PostToolUseFailure` is calibration-logged but no longer flips the light.
-  Added the `CLAUDESTATUS_IGNORE` env opt-out for programmatic Claude calls (ApplicationBot's
+  Added the `AGENTSTATUS_IGNORE` env opt-out for programmatic Claude calls (ApplicationBot's
   question-classification sessions were showing as fleeting lights). Propagated the hook to
   all four copies (repo / live / app-embedded / extension-bundled).
 - **2026-07-05** — **Milestone 6 complete.** Built the VS Code extension (`extension/`):
@@ -388,7 +397,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   `code` CLI, verified live. Decision 012.
 - **2026-07-05** — **Milestone 5 complete.** Ported the hook installer to Rust
   ([app/src-tauri/src/install.rs](app/src-tauri/src/install.rs), release-gated), embedded
-  `report.sh` via `include_str!`, and bundled `ClaudeStatus.app` + `.dmg`. Installed to
+  `report.sh` via `include_str!`, and bundled `AgentStatus.app` + `.dmg`. Installed to
   `/Applications` and verified the app self-installs all 11 hooks on launch (deduped, backed
   up, non-clobbering). Wrote [install.sh](install.sh) + [README.md](README.md). Retired the
   dev server; the packaged app is the running bar now. Decision 011.
@@ -418,4 +427,4 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   machine, delivered via a self-installing app **and** an optional VS Code extension.
 - **2026-07-05** — Chose the architecture: hooks → shared JSON status file → Tauri
   always-on-top window (decisions 001–004). Adapted the project docs (CLAUDE.md,
-  DECISIONS.md, NEXT_STEPS.md) from the imported best-practices templates to ClaudeStatus.
+  DECISIONS.md, NEXT_STEPS.md) from the imported best-practices templates to AgentStatus.

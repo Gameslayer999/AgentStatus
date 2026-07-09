@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ClaudeStatus — install/uninstall the real status hooks (report.sh).
+// AgentStatus — install/uninstall the real status hooks (report.sh).
 //
 // Merges the status hooks into the user's ~/.claude/settings.json WITHOUT
 // clobbering existing settings or hooks (Agent Guideline #3). Idempotent
@@ -16,9 +16,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const CLAUDE_SETTINGS = join(homedir(), '.claude', 'settings.json');
-const CLAUDE_BACKUP = CLAUDE_SETTINGS + '.claudestatus-bak';
+const CLAUDE_BACKUP = CLAUDE_SETTINGS + '.agentstatus-bak';
 const CODEX_HOOKS = join(homedir(), '.codex', 'hooks.json');
-const CODEX_BACKUP = CODEX_HOOKS + '.claudestatus-bak';
+const CODEX_BACKUP = CODEX_HOOKS + '.agentstatus-bak';
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPORT = join(HOOKS_DIR, 'report.sh');
 
@@ -78,14 +78,14 @@ const cmd = process.argv[2] || 'status';
 if (cmd === 'install') {
   installHooks(CLAUDE_SETTINGS, CLAUDE_BACKUP);
   installHooks(CODEX_HOOKS, CODEX_BACKUP, CODEX_SIMPLE, CODEX_TOOL);
-  console.log(`Installed ClaudeStatus hooks for ${SIMPLE.length + TOOL.length} events into ${CLAUDE_SETTINGS}`);
-  console.log(`Installed ClaudeStatus Codex hooks for ${CODEX_SIMPLE.length + CODEX_TOOL.length} events into ${CODEX_HOOKS}`);
+  console.log(`Installed AgentStatus hooks for ${SIMPLE.length + TOOL.length} events into ${CLAUDE_SETTINGS}`);
+  console.log(`Installed AgentStatus Codex hooks for ${CODEX_SIMPLE.length + CODEX_TOOL.length} events into ${CODEX_HOOKS}`);
   console.log(`Backups: ${CLAUDE_BACKUP}, ${CODEX_BACKUP}`);
 } else if (cmd === 'uninstall') {
   uninstallHooks(CLAUDE_SETTINGS);
   uninstallHooks(CODEX_HOOKS);
-  console.log(`Removed ClaudeStatus hooks from ${CLAUDE_SETTINGS}`);
-  console.log(`Removed ClaudeStatus Codex hooks from ${CODEX_HOOKS}`);
+  console.log(`Removed AgentStatus hooks from ${CLAUDE_SETTINGS}`);
+  console.log(`Removed AgentStatus Codex hooks from ${CODEX_HOOKS}`);
 } else {
   const claudeEvents = hookEvents(CLAUDE_SETTINGS);
   const codexEvents = hookEvents(CODEX_HOOKS);

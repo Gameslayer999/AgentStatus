@@ -1,4 +1,4 @@
-// ClaudeStatus — self-installer (packaged app).
+// AgentStatus — self-installer (packaged app).
 //
 // On launch the bundled app makes itself work with zero external steps: it writes
 // an embedded copy of the status hook to a stable location and registers it in the
@@ -42,16 +42,19 @@ fn codex_dir() -> PathBuf {
 }
 
 fn status_dir() -> PathBuf {
-    match std::env::var("CLAUDESTATUS_DIR") {
+    match std::env::var("AGENTSTATUS_DIR") {
         Ok(d) if !d.is_empty() => PathBuf::from(d),
-        _ => claude_dir().join("status"),
+        _ => match std::env::var("CLAUDESTATUS_DIR") {
+            Ok(d) if !d.is_empty() => PathBuf::from(d),
+            _ => claude_dir().join("status"),
+        },
     }
 }
 
 /// Best-effort: never panics, never blocks the app if it fails.
 pub fn ensure_installed() {
     if let Err(e) = try_install() {
-        eprintln!("ClaudeStatus: self-install skipped: {e}");
+        eprintln!("AgentStatus: self-install skipped: {e}");
     }
 }
 
@@ -69,14 +72,14 @@ fn try_install() -> std::io::Result<()> {
     // 2. Merge our hooks into Claude and Codex user-level hook config.
     merge_hooks(
         claude_dir().join("settings.json"),
-        claude_dir().join("settings.json.claudestatus-bak"),
+        claude_dir().join("settings.json.agentstatus-bak"),
         &script_str,
         SIMPLE_EVENTS,
         TOOL_EVENTS,
     )?;
     merge_hooks(
         codex_dir().join("hooks.json"),
-        codex_dir().join("hooks.json.claudestatus-bak"),
+        codex_dir().join("hooks.json.agentstatus-bak"),
         &script_str,
         CODEX_SIMPLE_EVENTS,
         CODEX_TOOL_EVENTS,
@@ -125,7 +128,7 @@ fn merge_hooks(
             .or_insert_with(|| serde_json::json!([]))
             .as_array_mut()
             .unwrap();
-        // Drop any prior ClaudeStatus entries so re-running never duplicates.
+        // Drop any prior AgentStatus entries so re-running never duplicates.
         list.retain(|entry| !entry.to_string().contains("report.sh"));
         let hook = serde_json::json!({ "type": "command", "command": format!("{script_str} {event}") });
         let registered = if with_matcher {

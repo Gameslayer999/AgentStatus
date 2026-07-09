@@ -1,4 +1,4 @@
-// ClaudeStatus — frontend. Polls the Rust `list_sessions` command and renders
+// AgentStatus — frontend. Polls the Rust `list_sessions` command and renders
 // one light per session, sizing the window to hug the bar so the transparent
 // area never blocks clicks to apps behind it. Dots are reconciled in place (not
 // rebuilt each poll) so hovering a light never dismisses its tooltip.
@@ -28,9 +28,9 @@ let emptyEl = null;
 // Display preferences (app-local; persisted in the webview's localStorage so they
 // survive restarts without touching the hook-written status files). Right-clicking
 // the bar toggles the settings panel.
-const ORIENT_KEY = "claudestatus.orientation"; // "horizontal" | "vertical"
-const SORT_KEY = "claudestatus.sort"; // "window" | "urgency"
-const POS_KEY = "claudestatus.pos"; // last #lights screen anchor {x,y,scale} (physical px), restored on launch
+const ORIENT_KEY = "agentstatus.orientation"; // "horizontal" | "vertical"
+const SORT_KEY = "agentstatus.sort"; // "window" | "urgency"
+const POS_KEY = "agentstatus.pos"; // last #lights screen anchor {x,y,scale} (physical px), restored on launch
 
 // Light ordering (app-local display pref, like orientation). "window" groups
 // sessions that live in the same IDE window together; "urgency" surfaces the
@@ -122,8 +122,8 @@ function setOrientation(orient) {
 // item showing the lights as a generated image; clicking it reveals this same
 // panel as a popover under the menu bar. The mode + the condense sub-option are
 // app-local display prefs, same localStorage pattern as orientation/size.
-const MODE_KEY = "claudestatus.mode"; // "floating" | "menubar"
-const CONDENSE_KEY = "claudestatus.menubarcondense"; // "true" | "false"
+const MODE_KEY = "agentstatus.mode"; // "floating" | "menubar"
+const CONDENSE_KEY = "agentstatus.menubarcondense"; // "true" | "false"
 
 function currentMode() {
   return localStorage.getItem(MODE_KEY) === "menubar" ? "menubar" : "floating";
@@ -277,10 +277,10 @@ function hidePopover() {
 // Light size + per-state colors — the other display prefs, same localStorage
 // pattern as orientation. Defaults mirror the CSS so a cleared/absent pref looks
 // identical to the stock bar.
-const SIZE_KEY = "claudestatus.dotsize";
-const PAD_KEY = "claudestatus.barpad";
-const OPACITY_KEY = "claudestatus.baropacity";
-const COLORS_KEY = "claudestatus.colors";
+const SIZE_KEY = "agentstatus.dotsize";
+const PAD_KEY = "agentstatus.barpad";
+const OPACITY_KEY = "agentstatus.baropacity";
+const COLORS_KEY = "agentstatus.colors";
 const DEFAULT_SIZE = 13; // px
 const DEFAULT_PAD = 9; // px, wrapper padding around the lights
 const DEFAULT_OPACITY = 82; // percent of pill-fill alpha (matches the CSS default 0.82)
