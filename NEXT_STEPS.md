@@ -177,25 +177,18 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
-- **2026-07-09** — **Released v0.4.1: Codex live-state fallback (decision 031).** Fixed the
-  active-Codex-but-gray-light bug. Hooks remain the primary signal, but the app now synthesizes
-  Codex lights from `~/.codex/state_5.sqlite` when hooks are not yet trusted/loaded for an
-  already-running thread; recent `threads.updated_at` activity renders green. Also prunes status
-  files whose `cwd` no longer exists, removing rename ghosts from the old `ClaudeStatus` path.
 - **2026-07-09** — **Renamed ClaudeStatus → AgentStatus (decision 030).** The product name now
   matches the broader agent scope: Claude Code, Codex, and Cursor. Updated app bundle/product
   names, Tauri identifier/window title, docs, installer paths, extension metadata/command ids,
   localStorage keys, hook backup suffixes, and release asset naming. Kept migration support for
   legacy `CLAUDESTATUS_DIR` / `CLAUDESTATUS_IGNORE`, and the installer removes a prior
   `/Applications/ClaudeStatus.app` while installing `/Applications/AgentStatus.app`.
-- **2026-07-09** — **Released v0.4.0.** Branded AgentStatus release: bumped `0.3.0 → 0.4.0`,
-  rebuilt `AgentStatus_0.4.0_aarch64.dmg`, and installed/relaunched `/Applications/AgentStatus.app`
-  locally. Headline: the lightbar is now AgentStatus across the app, docs, and release artifact.
 - **2026-07-09** — **Released v0.3.0.** Promoted the Codex-compatible lightbar build to the
-  next public release: bumped `0.2.0 → 0.3.0` (`tauri.conf.json`, `Cargo.toml`,
-  `package.json`, lockfiles, README DMG name), rebuilt `AgentStatus_0.3.0_aarch64.dmg`, and
-  installed/relaunched `/Applications/AgentStatus.app` locally. Headline: AgentStatus now
-  tracks Claude Code, Codex, and Cursor sessions from the shared lightbar.
+  next public release, then repointed it to the branded AgentStatus build with the live-Codex
+  fallback fix: rebuilt `AgentStatus_0.3.0_aarch64.dmg`, installed/relaunched
+  `/Applications/AgentStatus.app` locally, and moved the `v0.3.0` tag/release to the fixed commit.
+  Headline: AgentStatus tracks Claude Code, Codex, and Cursor sessions from the shared lightbar,
+  and active Codex work renders green even when hooks are not yet trusted/loaded.
 - **2026-07-09** — **Codex compatibility (decision 029).** AgentStatus now installs the shared
   `report.sh` into Codex user hooks at `~/.codex/hooks.json` as well as Claude's
   `~/.claude/settings.json`. Codex registration uses only the currently documented Codex hook
