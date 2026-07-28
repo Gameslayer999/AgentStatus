@@ -38,7 +38,7 @@
       <rect x="0" y="0" width="252" height="74" rx="37" fill="rgba(20,22,26,0.82)" stroke="rgba(255,255,255,0.09)" stroke-width="1"/>
     </g><circle cx="45" cy="37" r="30" fill="url(#oh0)"/><circle cx="45" cy="37" r="15" fill="#2ecc71"/><circle cx="99" cy="37" r="30" fill="url(#oh1)"/><circle cx="99" cy="37" r="15" fill="#f39c12"/><circle cx="153" cy="37" r="30" fill="url(#oh2)"/><circle cx="153" cy="37" r="15" fill="#ecf0f1"/><circle cx="207" cy="37" r="15" fill="#7f8c8d" opacity="0.55"/></g>
     <g transform="translate(443.0, 20.0)"><g filter="url(#softshadow)">
-      <rect x="0" y="0" width="74" height="236" rx="118" fill="rgba(20,22,26,0.82)" stroke="rgba(255,255,255,0.09)" stroke-width="1"/>
+      <rect x="0" y="0" width="74" height="236" rx="37" fill="rgba(20,22,26,0.82)" stroke="rgba(255,255,255,0.09)" stroke-width="1"/>
     </g><circle cx="37" cy="37" r="30" fill="url(#ov0)"/><circle cx="37" cy="37" r="15" fill="#2ecc71"/><circle cx="37" cy="91" r="30" fill="url(#ov1)"/><circle cx="37" cy="91" r="15" fill="#f39c12"/><circle cx="37" cy="145" r="30" fill="url(#ov2)"/><circle cx="37" cy="145" r="15" fill="#ecf0f1"/><circle cx="37" cy="199" r="15" fill="#7f8c8d" opacity="0.55"/></g>
     <text x="170" y="205" fill="#9aa7b4" font-family="-apple-system, system-ui, sans-serif" font-size="15" text-anchor="middle">Horizontal</text>
     <text x="480" y="286" fill="#9aa7b4" font-family="-apple-system, system-ui, sans-serif" font-size="15" text-anchor="middle">Vertical</text>

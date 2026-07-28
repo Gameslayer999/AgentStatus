@@ -101,7 +101,9 @@ function backdrop(w, h, windows = false) {
 }
 
 function pill(x, y, w, h) {
-  const rx = h / 2;
+  // styles.css uses `border-radius: 999px`, which clamps to half the SMALLER side —
+  // a stadium (rounded end-caps, straight sides), whether the bar is a row or a column.
+  const rx = Math.min(w, h) / 2;
   return `<g filter="url(#softshadow)">
       <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${PILL_FILL}" stroke="${PILL_BORDER}" stroke-width="1"/>
     </g>`;
