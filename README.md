@@ -5,6 +5,10 @@ Claude Code, Codex, Cursor, or Antigravity session — so you can tell at a glan
 of your concurrent agents is working, waiting on you, idle, or errored, without hunting
 through windows.
 
+![The AgentStatus light bar floating over the desktop: green (running), orange (blocked), white (done), a running session with a blue "2" subagent badge, red (error), and a dim gray (idle) light.](docs/lightbar-hero.svg)
+
+<sub>One light per session. Left to right: running · blocked · done · running with 2 subagents · error · idle. It floats over everything, including full-screen apps.</sub>
+
 Run several agent sessions across projects and windows and it's easy to lose track of
 which one just finished, which is blocked on a permission prompt, and which hit an
 error. AgentStatus floats one colored light per session over everything on screen
@@ -70,6 +74,8 @@ same as the DMG. (On a fresh install you still need the Gatekeeper step above.)
 
 Each light is one Claude Code, Codex, Cursor, or Antigravity session:
 
+![The five light states: green running, orange blocked (pulsing), white done, dim gray idle, and red error (pulsing), each labeled with its meaning.](docs/lightbar-states.svg)
+
 | Light | Meaning |
 |---|---|
 | 🟢 green | running — actively working on a turn |
@@ -77,6 +83,8 @@ Each light is one Claude Code, Codex, Cursor, or Antigravity session:
 | ⚪ white | done — the turn just finished and you haven't looked yet |
 | ⚫ dim gray | idle — finished and acknowledged (you've focused it) |
 | 🔴 red (pulsing) | error — a turn failed |
+
+![A running light with a blue "2" subagent badge and its hover tooltip, showing the project name and state, the task, and the running subagents.](docs/lightbar-hover.svg)
 
 - **Hover** a light to see the session's project, its task, and what it's doing right now.
 - **A blue count badge** on a light means that session has that many subagents running

@@ -44,6 +44,7 @@
 | 031 | 2026-07-09 | Codex live-state fallback: if Codex lifecycle hooks are not yet trusted/loaded for an already-running thread, synthesize Codex lights from `~/.codex/state_5.sqlite` (`threads.updated_at`) so active Codex work shows green. Also prune status files whose `cwd` no longer exists, which removes rename ghosts like the old `ClaudeStatus` workspace | Accepted |
 | 032 | 2026-07-09 | Codex open/close lifecycle: Codex emits **no** signal on conversation open or close (verified: no `SessionEnd` hook exists; `SessionStart` is deferred to the first turn; `updated_at`/`recency_at` advance only on turn starts). So: installers pass an explicit `codex` arg to `report.sh` (payloads are Claude-shaped and unsniffable — replaces the never-firing #029 heuristics); Codex lights expire after 10 min idle (`CODEX_IDLE_SECS`, user-approved) instead of 2h, drop instantly when no `codex` process is alive, and exclude archived threads; click-to-focus targets the VS Code window (Codex is the `openai.chatgpt` extension; `open -a Codex` was a no-op) | Accepted |
 | 033 | 2026-07-15 | Antigravity IDE as a fourth host (retroactive — shipped in 3195f11 undocumented). Hooks install into `~/.gemini/config/hooks.json` under an `agentstatus` object key (not Claude's `hooks` map), registering `PreInvocation`/`PreToolUse`/`PostToolUse`/`Stop` as `report.sh <Event> antigravity` — declared host per #032. Payload differs from Claude: workspace in `workspacePaths[]`, tools in `toolCall.name`/`toolCall.args`, and **no prompt text**, so the task label is recovered from the thread transcript and unwrapped from `<USER_REQUEST>`. That transcript read is gated on `ide == antigravity`: ungated it walked its fallback chain into the real Claude transcript on every `UserPromptSubmit` (~98 ms + a 10 MB read per turn, discarded). Antigravity uses IDE-lock pruning and the 2h idle backstop like vscode/cursor; click-to-focus targets `Antigravity IDE.app`. **Hook events not yet verified against a live install (Guideline #4)** | Accepted, unverified |
+| 034 | 2026-07-28 | README lightbar visuals: a generator (`docs/gen-readme-art.mjs`) renders three self-contained SVGs (hero / states / hover+badge) from the exact `styles.css` values, committed under `docs/` and embedded in the README. Reproducible art (Guideline #8), not one-off screenshots; GitHub strips SVG animation so pulsing states render static and are labeled | Accepted |
 
 ---
 
@@ -1468,3 +1469,39 @@ they were committed without an observed event log. Before relying on this host, 
 events from a live session and confirm each. The `_full.jsonl`-then-`.jsonl` transcript
 fallback in particular reads as a guess. The `PostInvocation` → `running` mapping is dead code
 today: no installer registers that event.
+
+---
+
+## 034 — README lightbar visuals: reproducible SVG art from a generator
+
+**Context.** The README described the light bar entirely in prose and a state table but
+carried no picture — a poor fit for a product whose whole pitch is a *glanceable* row of
+lights. We wanted screenshots/a walkthrough without violating Guideline #8 (everything
+replicable, no one-off manual steps).
+
+**Options considered.**
+
+| Option | Authenticity | Reproducible | Effort/upkeep |
+|---|---|---|---|
+| Real screenshots of the app | Highest — real desktop | ❌ Manual re-capture, needs sessions staged in each state | Manual every time |
+| **Rendered SVG mockup from a generator** | High — pixel-accurate lights on a neutral backdrop | ✅ One `node` re-run, values mirror `styles.css` | Low |
+| Hybrid (real hero + generated diagrams) | Highest hero | ⚠️ Hero manual | Mixed |
+
+**Decision.** Generate the art with `docs/gen-readme-art.mjs`, committing three
+self-contained SVGs — `docs/lightbar-hero.svg` (a realistic mixed-state bar),
+`lightbar-states.svg` (every state labeled), and `lightbar-hover.svg` (a light with its
+subagent badge + hover tooltip). The generator mirrors the exact values from
+`app/src/styles.css` (dot geometry, the five per-state colors, glow alphas, the
+`oklch(60% 0.15 262)` badge accent → `#4c7dd9`), so the pictures stay faithful to the real
+UI and regenerate with one command after any visual change.
+
+**Reasoning.** Satisfies Guideline #8 — the pictures are a build artifact, not a manual
+capture. SVG is self-contained (no headless-browser dependency), GitHub-renderable inline,
+and each file bakes in its own dark backdrop so the frosted pill and the white "done" light
+read correctly in both GitHub light and dark themes. The one thing this can't show is the
+bar floating over the *real* desktop; the faint window panes in the hero stand in for that.
+
+**Limits.** GitHub's SVG sanitizer strips CSS animation, so the pulsing states
+(blocked/error) render static and are labeled "(pulsing)". The art is a facsimile built
+from the stylesheet, not a screenshot of the running app — if the two ever drift, re-run the
+generator (it reads the intended values, so update it alongside `styles.css`).

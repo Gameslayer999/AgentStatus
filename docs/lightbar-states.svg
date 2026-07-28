@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 282" width="620" height="282" role="img" aria-label="The five light states and what each means">
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#1b2733"/>
+        <stop offset="100%" stop-color="#0f1720"/>
+      </linearGradient>
+    </defs>
+    <rect x="0" y="0" width="620" height="282" rx="18" fill="url(#bg)"/>
+    
+    <defs><radialGradient id="s0" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#2ecc71" stop-opacity="0.630"/>
+      <stop offset="45%" stop-color="#2ecc71" stop-opacity="0.315"/>
+      <stop offset="100%" stop-color="#2ecc71" stop-opacity="0"/>
+    </radialGradient><radialGradient id="s1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f39c12" stop-opacity="0.765"/>
+      <stop offset="45%" stop-color="#f39c12" stop-opacity="0.383"/>
+      <stop offset="100%" stop-color="#f39c12" stop-opacity="0"/>
+    </radialGradient><radialGradient id="s2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ecf0f1" stop-opacity="0.540"/>
+      <stop offset="45%" stop-color="#ecf0f1" stop-opacity="0.270"/>
+      <stop offset="100%" stop-color="#ecf0f1" stop-opacity="0"/>
+    </radialGradient><radialGradient id="s4" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e74c3c" stop-opacity="0.765"/>
+      <stop offset="45%" stop-color="#e74c3c" stop-opacity="0.383"/>
+      <stop offset="100%" stop-color="#e74c3c" stop-opacity="0"/>
+    </radialGradient></defs>
+    <circle cx="52" cy="49" r="30" fill="url(#s0)"/><circle cx="52" cy="49" r="15" fill="#2ecc71"/><text x="92" y="43" fill="#eef2f6" font-family="-apple-system, system-ui, sans-serif" font-size="16" font-weight="600">running</text><text x="92" y="62" fill="#9fb0c0" font-family="-apple-system, system-ui, sans-serif" font-size="13">actively working on a turn</text><circle cx="52" cy="95" r="30" fill="url(#s1)"/><circle cx="52" cy="95" r="15" fill="#f39c12"/><text x="92" y="89" fill="#eef2f6" font-family="-apple-system, system-ui, sans-serif" font-size="16" font-weight="600">blocked (pulsing)</text><text x="92" y="108" fill="#9fb0c0" font-family="-apple-system, system-ui, sans-serif" font-size="13">waiting on you — a permission prompt or a question</text><circle cx="52" cy="141" r="30" fill="url(#s2)"/><circle cx="52" cy="141" r="15" fill="#ecf0f1"/><text x="92" y="135" fill="#eef2f6" font-family="-apple-system, system-ui, sans-serif" font-size="16" font-weight="600">done</text><text x="92" y="154" fill="#9fb0c0" font-family="-apple-system, system-ui, sans-serif" font-size="13">the turn just finished and you haven't looked yet</text><circle cx="52" cy="187" r="15" fill="#7f8c8d" opacity="0.55"/><text x="92" y="181" fill="#eef2f6" font-family="-apple-system, system-ui, sans-serif" font-size="16" font-weight="600">idle</text><text x="92" y="200" fill="#9fb0c0" font-family="-apple-system, system-ui, sans-serif" font-size="13">finished and acknowledged (you've focused it)</text><circle cx="52" cy="233" r="30" fill="url(#s4)"/><circle cx="52" cy="233" r="15" fill="#e74c3c"/><text x="92" y="227" fill="#eef2f6" font-family="-apple-system, system-ui, sans-serif" font-size="16" font-weight="600">error (pulsing)</text><text x="92" y="246" fill="#9fb0c0" font-family="-apple-system, system-ui, sans-serif" font-size="13">a turn failed</text>
+  </svg>

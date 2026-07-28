@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 200" width="620" height="200" role="img" aria-label="AgentStatus light bar with six sessions: running, blocked, done, running with two subagents, error, and idle">
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#1b2733"/>
+        <stop offset="100%" stop-color="#0f1720"/>
+      </linearGradient>
+    </defs>
+    <rect x="0" y="0" width="620" height="200" rx="18" fill="url(#bg)"/>
+    <rect x="49.6" y="28.000000000000004" width="310" height="144" rx="10" fill="#ffffff" opacity="0.03"/>
+    <rect x="384.4" y="44" width="186" height="112.00000000000001" rx="10" fill="#ffffff" opacity="0.03"/>
+    <defs><filter id="softshadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#000000" flood-opacity="0.42"/>
+    </filter><radialGradient id="g0" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#2ecc71" stop-opacity="0.630"/>
+      <stop offset="45%" stop-color="#2ecc71" stop-opacity="0.315"/>
+      <stop offset="100%" stop-color="#2ecc71" stop-opacity="0"/>
+    </radialGradient><radialGradient id="g1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f39c12" stop-opacity="0.765"/>
+      <stop offset="45%" stop-color="#f39c12" stop-opacity="0.383"/>
+      <stop offset="100%" stop-color="#f39c12" stop-opacity="0"/>
+    </radialGradient><radialGradient id="g2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ecf0f1" stop-opacity="0.540"/>
+      <stop offset="45%" stop-color="#ecf0f1" stop-opacity="0.270"/>
+      <stop offset="100%" stop-color="#ecf0f1" stop-opacity="0"/>
+    </radialGradient><radialGradient id="g3" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#2ecc71" stop-opacity="0.630"/>
+      <stop offset="45%" stop-color="#2ecc71" stop-opacity="0.315"/>
+      <stop offset="100%" stop-color="#2ecc71" stop-opacity="0"/>
+    </radialGradient><radialGradient id="g4" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e74c3c" stop-opacity="0.765"/>
+      <stop offset="45%" stop-color="#e74c3c" stop-opacity="0.383"/>
+      <stop offset="100%" stop-color="#e74c3c" stop-opacity="0"/>
+    </radialGradient></defs>
+    <g filter="url(#softshadow)">
+      <rect x="130" y="63" width="360" height="74" rx="37" fill="rgba(20,22,26,0.82)" stroke="rgba(255,255,255,0.09)" stroke-width="1"/>
+    </g>
+    <circle cx="175" cy="100" r="30" fill="url(#g0)"/><circle cx="175" cy="100" r="15" fill="#2ecc71"/><circle cx="229" cy="100" r="30" fill="url(#g1)"/><circle cx="229" cy="100" r="15" fill="#f39c12"/><circle cx="283" cy="100" r="30" fill="url(#g2)"/><circle cx="283" cy="100" r="15" fill="#ecf0f1"/><circle cx="337" cy="100" r="30" fill="url(#g3)"/><circle cx="337" cy="100" r="15" fill="#2ecc71"/><circle cx="350" cy="87" r="9.5" fill="rgba(20,22,26,0.92)"/><circle cx="350" cy="87" r="8" fill="#4c7dd9"/><text x="350" y="87.5" fill="#f4f7fe" font-family="-apple-system, system-ui, sans-serif" font-size="11" font-weight="700" text-anchor="middle" dominant-baseline="central">2</text><circle cx="391" cy="100" r="30" fill="url(#g4)"/><circle cx="391" cy="100" r="15" fill="#e74c3c"/><circle cx="445" cy="100" r="15" fill="#7f8c8d" opacity="0.55"/>
+  </svg>

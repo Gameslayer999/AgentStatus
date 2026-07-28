@@ -208,6 +208,14 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-28** — **Added lightbar visuals to the README (decision 034).** New generator
+  `docs/gen-readme-art.mjs` renders three self-contained SVGs from the exact `app/src/styles.css`
+  values — `docs/lightbar-hero.svg` (a realistic mixed-state bar), `lightbar-states.svg` (every
+  state labeled), and `lightbar-hover.svg` (a light with its subagent badge + hover tooltip) —
+  embedded in the README (hero under the tagline; states + hover in "The lights"). Reproducible
+  art per Guideline #8 (`node docs/gen-readme-art.mjs` re-runs it); not manual screenshots. The
+  one thing it can't show is the bar over the real desktop — a real screenshot hero could be
+  added later if wanted.
 - **2026-07-15** — **Released v0.4.0.** Bumped `0.3.0 → 0.4.0` (`tauri.conf.json`,
   `Cargo.toml`, `package.json`, lockfiles, README DMG name), rebuilt
   `AgentStatus_0.4.0_aarch64.dmg`, installed/relaunched `/Applications/AgentStatus.app`, and
