@@ -5,6 +5,10 @@ Claude Code, Codex, Cursor, or Antigravity session — so you can tell at a glan
 of your concurrent agents is working, waiting on you, idle, or errored, without hunting
 through windows.
 
+![The AgentStatus light bar floating over the desktop: green (running), orange (blocked), white (done), a running session with a blue "2" subagent badge, red (error), and a dim gray (idle) light.](docs/lightbar-hero.svg)
+
+<sub>One light per session. Left to right: running · blocked · done · running with 2 subagents · error · idle. It floats over everything, including full-screen apps.</sub>
+
 Run several agent sessions across projects and windows and it's easy to lose track of
 which one just finished, which is blocked on a permission prompt, and which hit an
 error. AgentStatus floats one colored light per session over everything on screen
@@ -70,6 +74,8 @@ same as the DMG. (On a fresh install you still need the Gatekeeper step above.)
 
 Each light is one Claude Code, Codex, Cursor, or Antigravity session:
 
+![The five light states: green running, orange blocked (pulsing), white done, dim gray idle, and red error (pulsing), each labeled with its meaning.](docs/lightbar-states.svg)
+
 | Light | Meaning |
 |---|---|
 | 🟢 green | running — actively working on a turn |
@@ -77,6 +83,8 @@ Each light is one Claude Code, Codex, Cursor, or Antigravity session:
 | ⚪ white | done — the turn just finished and you haven't looked yet |
 | ⚫ dim gray | idle — finished and acknowledged (you've focused it) |
 | 🔴 red (pulsing) | error — a turn failed |
+
+![A running light with a blue "2" subagent badge and its hover tooltip, showing the project name and state, the task, and the running subagents.](docs/lightbar-hover.svg)
 
 - **Hover** a light to see the session's project, its task, and what it's doing right now.
 - **A blue count badge** on a light means that session has that many subagents running
@@ -87,6 +95,23 @@ Each light is one Claude Code, Codex, Cursor, or Antigravity session:
   per-state colors, and bar opacity.
 - **Drag** the bar (grab the padding, not a light) to position it anywhere; it remembers
   where you put it and floats over everything, including full-screen apps.
+
+## Customize it
+
+**Right-click** the bar to open the settings panel — everything is adjustable and persists
+across restarts:
+
+![The AgentStatus settings panel: Orientation and Sort toggles, Size, Padding, and Opacity sliders, per-state color swatches (Running, Blocked, Done, Idle, Error), and Reload / Reset to defaults / Quit links.](docs/lightbar-settings.svg)
+
+- **Orientation** — flip the bar between a horizontal row and a vertical column; the window
+  auto-resizes to hug the new shape.
+
+![The same light bar shown as a horizontal row on the left and a vertical column on the right.](docs/lightbar-orientation.svg)
+
+- **Sort** — group lights by window, or push the attention states (blocked/error) to the front.
+- **Size, padding, and opacity** — scale the lights, tighten or loosen the bar, and fade the
+  pill (the lights themselves always stay fully opaque so the signal never dims).
+- **Per-state colors** — recolor any of the five states with a native color picker.
 
 ## How it works
 
