@@ -8,9 +8,11 @@
 //     node docs/gen-readme-art.mjs
 //
 // Outputs (committed, embedded in README.md):
-//   docs/lightbar-hero.svg    a realistic bar, mixed states — the hero
-//   docs/lightbar-states.svg  every state labeled with its meaning
-//   docs/lightbar-hover.svg   one light with its badge + hover tooltip
+//   docs/lightbar-hero.svg         a realistic bar, mixed states — the hero
+//   docs/lightbar-states.svg       every state labeled with its meaning
+//   docs/lightbar-hover.svg        one light with its badge + hover tooltip
+//   docs/lightbar-orientation.svg  the same bar horizontal vs vertical
+//   docs/lightbar-settings.svg     the right-click settings panel
 //
 // SVGs bake in their own dark backdrop so the frosted pill and the white "done"
 // light read correctly in both GitHub light and dark themes. GitHub's SVG sanitizer
@@ -37,9 +39,14 @@ const STATES = {
 // Frosted pill: rgba(20,22,26,.82) fill, rgba(255,255,255,.09) hairline border.
 const PILL_FILL = "rgba(20,22,26,0.82)";
 const PILL_BORDER = "rgba(255,255,255,0.09)";
-// Subagent badge — --ui-accent oklch(60% 0.15 262) → sRGB, and its near-white ink.
+// Subagent badge / settings accent — --ui-accent oklch(60% 0.15 262) → sRGB, near-white ink.
 const ACCENT = "#4c7dd9";
 const ACCENT_INK = "#f4f7fe";
+// Settings-panel neutrals — the OKLCH `--ui-*` vars from styles.css, resolved to sRGB.
+const PANEL_BG = "#14161a"; // pill fill (rgb 20,22,26), opaque here for a crisp panel
+const UI_INK = "#eef1f6"; // --ui-ink: values/text
+const UI_MUTED = "#9aa7b4"; // --ui-muted: labels (ink at ~60% on the dark panel)
+const UI_LINE = "rgba(238,241,246,0.14)"; // --ui-line: dividers, control borders
 
 // Geometry (styles.css uses 13px dots; scaled up here for crisp README art, ratios kept).
 const D = 30; // dot diameter
@@ -202,7 +209,146 @@ function hover() {
   </svg>\n`;
 }
 
+// A standalone bar (pill + lights) in either orientation, its top-left at (x, y).
+// Returns { svg, grads, w, h } so the caller can place it and collect gradient defs.
+function bar(x, y, seq, vertical, idPrefix) {
+  const n = seq.length;
+  const inner = n * D + (n - 1) * GAP;
+  const pad = vertical ? PAD : PAD + 8; // horizontal pills-out the sides by +8
+  const w = vertical ? D + 2 * PAD : inner + 2 * pad;
+  const h = vertical ? inner + 2 * PAD : D + 2 * PAD;
+  let grads = "";
+  let dots = "";
+  seq.forEach((it, i) => {
+    const along = (vertical ? PAD : pad) + R + i * (D + GAP);
+    const cx = vertical ? x + w / 2 : x + along;
+    const cy = vertical ? y + along : y + h / 2;
+    const gid = `${idPrefix}${i}`;
+    const s = STATES[it.state];
+    if (s.glow > 0) grads += haloGradient(gid, s.color, s.glow);
+    dots += dot(cx, cy, it.state, gid, it.badge);
+  });
+  const svg = `${pill(x, y, w, h)}${dots}`;
+  return { svg, grads, w, h };
+}
+
+// ── 4. Orientation: the same bar, horizontal and vertical ────────────────────
+function orientation() {
+  const seq = [{ state: "running" }, { state: "blocked" }, { state: "done" }, { state: "idle" }];
+  const W = 620;
+  const H = 300;
+  const hb = bar(0, 0, seq, false, "oh");
+  const vb = bar(0, 0, seq, true, "ov");
+  // Two regions (left/right); each bar is centered in its region via a group
+  // transform, with a caption below it. bar() draws from its own origin.
+  const midY = 138;
+  const lcx = 170;
+  const rcx = 480;
+  const hx = lcx - hb.w / 2;
+  const hy = midY - hb.h / 2;
+  const vx = rcx - vb.w / 2;
+  const vy = midY - vb.h / 2;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The same light bar shown as a horizontal row and as a vertical column; the settings panel flips between them.">
+    ${backdrop(W, H)}
+    <defs>${SHADOW_DEF}${hb.grads}${vb.grads}</defs>
+    <g transform="translate(${hx.toFixed(1)}, ${hy.toFixed(1)})">${hb.svg}</g>
+    <g transform="translate(${vx.toFixed(1)}, ${vy.toFixed(1)})">${vb.svg}</g>
+    <text x="${lcx}" y="${(hy + hb.h + 30).toFixed(0)}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="15" text-anchor="middle">Horizontal</text>
+    <text x="${rcx}" y="${(vy + vb.h + 30).toFixed(0)}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="15" text-anchor="middle">Vertical</text>
+    <text x="320" y="${midY + 8}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="28" text-anchor="middle">⇄</text>
+  </svg>\n`;
+}
+
+// ── 5. Settings: the right-click panel ───────────────────────────────────────
+function seg(x, y, w, labels, active) {
+  const h = 26;
+  const sw = w / labels.length;
+  let out = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="7" fill="none" stroke="${UI_LINE}" stroke-width="1"/>`;
+  labels.forEach((lab, i) => {
+    const sx = x + i * sw;
+    const on = i === active;
+    if (on) out += `<rect x="${sx}" y="${y}" width="${sw}" height="${h}" rx="${i === 0 || i === labels.length - 1 ? 7 : 0}" fill="${ACCENT}"/>`;
+    if (i > 0) out += `<line x1="${sx}" y1="${y}" x2="${sx}" y2="${y + h}" stroke="${UI_LINE}" stroke-width="1"/>`;
+    out += `<text x="${sx + sw / 2}" y="${y + h / 2 + 1}" fill="${on ? ACCENT_INK : UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" font-weight="${on ? 600 : 400}" text-anchor="middle" dominant-baseline="central">${lab}</text>`;
+  });
+  return out;
+}
+function slider(x, y, w, frac) {
+  const cy = y + 13;
+  const tx = x + w * frac;
+  return `<line x1="${x}" y1="${cy}" x2="${x + w}" y2="${cy}" stroke="${UI_LINE}" stroke-width="3" stroke-linecap="round"/>
+    <line x1="${x}" y1="${cy}" x2="${tx}" y2="${cy}" stroke="${ACCENT}" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="${tx}" cy="${cy}" r="7" fill="${ACCENT}"/>`;
+}
+function settings() {
+  const PW = 320;
+  const P = 20; // panel padding
+  const x0 = P;
+  const x1 = PW - P; // right edge of content
+  const ctrlW = 150; // segmented-control / slider width, right-aligned to x1
+  const cx = x1 - ctrlW;
+  const rows = [];
+  let y = P;
+  // Lights row at the top of the panel (settings grows below the bar).
+  const lights = [{ state: "running" }, { state: "blocked" }, { state: "done" }, { state: "idle" }];
+  let grads = "";
+  let head = "";
+  const lgap = 22;
+  const lw = lights.length * D + (lights.length - 1) * lgap;
+  lights.forEach((it, i) => {
+    const dcx = PW / 2 - lw / 2 + R + i * (D + lgap);
+    const gid = `pl${i}`;
+    const s = STATES[it.state];
+    if (s.glow > 0) grads += haloGradient(gid, s.color, s.glow);
+    head += dot(dcx, y + R, it.state, gid, null);
+  });
+  y += D + 16;
+  const sep = () => { const s = `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="${UI_LINE}" stroke-width="1"/>`; y += 16; return s; };
+  const label = (t) => `<text x="${x0}" y="${y + 13}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" dominant-baseline="central">${t}</text>`;
+  let body = sep();
+  const segRow = (t, labels, active) => { const r = label(t) + seg(cx, y, ctrlW, labels, active); y += 38; return r; };
+  const sliderRow = (t, frac) => { const r = label(t) + slider(cx, y, ctrlW, frac); y += 34; return r; };
+  body += segRow("Orientation", ["Horizontal", "Vertical"], 0);
+  body += segRow("Sort", ["Window", "Urgency"], 0);
+  body += sliderRow("Size", 0.4);
+  body += sliderRow("Padding", 0.55);
+  body += sliderRow("Opacity", 0.82);
+  body += sep();
+  // Colors: 2-column grid of state swatches.
+  const colStates = [["running", "Running"], ["blocked", "Blocked"], ["done", "Done"], ["idle", "Idle"], ["error", "Error"]];
+  const colW = (x1 - x0) / 2;
+  colStates.forEach(([st, name], i) => {
+    const col = i % 2;
+    const rowi = Math.floor(i / 2);
+    const rx = x0 + col * colW;
+    const ry = y + rowi * 26;
+    body += `<text x="${rx}" y="${ry + 10}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" dominant-baseline="central">${name}</text>`;
+    body += `<rect x="${rx + colW - 34}" y="${ry + 2}" width="22" height="16" rx="4" fill="${STATES[st].color}" stroke="${UI_LINE}" stroke-width="1"/>`;
+  });
+  y += 3 * 26 + 6;
+  body += sep();
+  // Footer links.
+  const footer = `<text x="${x0}" y="${y + 10}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" text-decoration="underline" dominant-baseline="central">Reload</text>
+    <text x="${PW / 2}" y="${y + 10}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" text-decoration="underline" text-anchor="middle" dominant-baseline="central">Reset to defaults</text>
+    <text x="${x1}" y="${y + 10}" fill="#e8807f" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" text-decoration="underline" text-anchor="end" dominant-baseline="central">Quit</text>`;
+  y += 22;
+  const PH = y + P - 10;
+  const W = 620;
+  const H = PH + 48;
+  const px = (W - PW) / 2;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The AgentStatus settings panel, opened by right-clicking the bar: orientation and sort toggles, size/padding/opacity sliders, per-state color swatches, and reload/reset/quit links.">
+    ${backdrop(W, H)}
+    <defs>${grads}</defs>
+    <g transform="translate(${px}, 24)">
+      <rect x="0" y="0" width="${PW}" height="${PH}" rx="15" fill="${PANEL_BG}" stroke="${UI_LINE}" stroke-width="1"/>
+      ${head}${body}${footer}
+    </g>
+  </svg>\n`;
+}
+
 writeFileSync(join(DIR, "lightbar-hero.svg"), hero());
 writeFileSync(join(DIR, "lightbar-states.svg"), states());
 writeFileSync(join(DIR, "lightbar-hover.svg"), hover());
-console.log("Wrote docs/lightbar-hero.svg, docs/lightbar-states.svg, docs/lightbar-hover.svg");
+writeFileSync(join(DIR, "lightbar-orientation.svg"), orientation());
+writeFileSync(join(DIR, "lightbar-settings.svg"), settings());
+console.log("Wrote docs/lightbar-{hero,states,hover,orientation,settings}.svg");

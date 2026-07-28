@@ -96,6 +96,23 @@ Each light is one Claude Code, Codex, Cursor, or Antigravity session:
 - **Drag** the bar (grab the padding, not a light) to position it anywhere; it remembers
   where you put it and floats over everything, including full-screen apps.
 
+## Customize it
+
+**Right-click** the bar to open the settings panel — everything is adjustable and persists
+across restarts:
+
+![The AgentStatus settings panel: Orientation and Sort toggles, Size, Padding, and Opacity sliders, per-state color swatches (Running, Blocked, Done, Idle, Error), and Reload / Reset to defaults / Quit links.](docs/lightbar-settings.svg)
+
+- **Orientation** — flip the bar between a horizontal row and a vertical column; the window
+  auto-resizes to hug the new shape.
+
+![The same light bar shown as a horizontal row on the left and a vertical column on the right.](docs/lightbar-orientation.svg)
+
+- **Sort** — group lights by window, or push the attention states (blocked/error) to the front.
+- **Size, padding, and opacity** — scale the lights, tighten or loosen the bar, and fade the
+  pill (the lights themselves always stay fully opaque so the signal never dims).
+- **Per-state colors** — recolor any of the five states with a native color picker.
+
 ## How it works
 
 Two pieces, decided independently (see [DECISIONS.md](DECISIONS.md) for the why):
