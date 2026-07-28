@@ -208,6 +208,18 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-28** — **Cleared build warnings (decision 037).** `cargo build` / `tauri dev`
+  emitted a batch of warnings; all are gone from the `app` crate now. (1) Gated
+  `mod install;` to `#[cfg(not(debug_assertions))]` — the self-installer's only caller is
+  already release-gated, so in a dev build the whole module read as dead code; same for the
+  release-only `let mut builder` (added `#[allow(unused_mut)]`). (2) Replaced
+  `tauri-nspanel`'s deprecated `cocoa`-typed `set_collection_behaviour` in
+  `make_overlay_panel` with `objc2-app-kit`'s typed `NSWindow::setCollectionBehavior` on the
+  window pointer from `WebviewWindow::ns_window()` — same object, same two flags
+  (`FullScreenAuxiliary | CanJoinAllSpaces`), no behavior change. Added `objc2-app-kit` as a
+  macOS-only dep pinned to `0.3` (already in the tree via Tauri, no second copy). One
+  transitive warning remains (`block v0.1.6`, inside `tauri-nspanel`), outside this repo.
+
 - **2026-07-28** — **New app icon + README format overhaul + v0.4.1 (decision 036).**
   (1) Replaced the off-brand Tauri-template swirl icon with **three glowing status lights**
   (green/orange/red) on a dark Big-Sur squircle — a reproducible SVG master at

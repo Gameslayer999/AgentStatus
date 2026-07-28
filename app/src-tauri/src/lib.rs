@@ -9,6 +9,11 @@ use tauri::Manager;
 #[cfg(target_os = "macos")]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
+// Release-only: the self-installer runs solely from the packaged app (see the
+// `ensure_installed()` call in `run`, also `#[cfg(not(debug_assertions))]`). Gating
+// the module to match keeps the whole thing out of dev builds, where it would
+// otherwise compile as dead code (dev uses the repo hooks via `node hooks/setup.mjs`).
+#[cfg(not(debug_assertions))]
 mod install;
 
 /// Tray icon id — used to fetch the tray (`app.tray_by_id`) from the mode/image
@@ -354,7 +359,7 @@ fn list_sessions() -> Vec<SessionStatus> {
 /// window type macOS lets sit over a third-party full-screen window.
 #[cfg(target_os = "macos")]
 fn make_overlay_panel(win: &tauri::WebviewWindow) {
-    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
     use tauri_nspanel::WebviewWindowExt;
 
     let Ok(panel) = win.to_panel() else { return };
@@ -368,11 +373,20 @@ fn make_overlay_panel(win: &tauri::WebviewWindow) {
     const NS_NONACTIVATING_PANEL: i32 = 1 << 7;
     panel.set_style_mask(NS_NONACTIVATING_PANEL);
 
-    // Appear on every Space, including over full-screen apps.
-    panel.set_collection_behaviour(
-        NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary
-            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces,
-    );
+    // Appear on every Space, including over full-screen apps. Set through
+    // objc2-app-kit on the underlying NSWindow rather than tauri-nspanel's
+    // `set_collection_behaviour`, whose parameter is the deprecated `cocoa` crate
+    // type. The panel is-a NSWindow (NSPanel inherits it), so this is the same object
+    // and the same two flags — no deprecation, no behavior change.
+    if let Ok(ptr) = win.ns_window() {
+        // SAFETY: ns_window() hands back this window's live NSWindow (now reclassed to
+        // an NSPanel, which inherits NSWindow); the app owns it for its whole lifetime.
+        let ns_window: &NSWindow = unsafe { &*ptr.cast::<NSWindow>() };
+        ns_window.setCollectionBehavior(
+            NSWindowCollectionBehavior::FullScreenAuxiliary
+                | NSWindowCollectionBehavior::CanJoinAllSpaces,
+        );
+    }
 
     panel.show();
 }
@@ -607,6 +621,9 @@ fn toggle_popover(win: &tauri::WebviewWindow, cx: f64, cy: f64) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // `mut` is used only by the release-gated single-instance block below; in a
+    // debug build nothing reassigns it, so allow the otherwise-unused `mut`.
+    #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
 
     // Single-instance guard (release only). A second launch of the app — the
