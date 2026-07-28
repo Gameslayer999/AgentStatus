@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  
+    <defs>
+      <linearGradient id="o2bg" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#1b2733"/>
+        <stop offset="100%" stop-color="#0f1720"/>
+      </linearGradient>
+      <radialGradient id="o2depth" cx="50%" cy="34%" r="72%">
+        <stop offset="0%" stop-color="#26384a" stop-opacity="0.55"/>
+        <stop offset="60%" stop-color="#16212c" stop-opacity="0"/>
+        <stop offset="100%" stop-color="#000000" stop-opacity="0.28"/>
+      </radialGradient>
+    </defs>
+    <rect x="0" y="0" width="1024" height="1024" rx="180" fill="url(#o2bg)"/>
+    <rect x="0" y="0" width="1024" height="1024" rx="180" fill="url(#o2depth)"/>
+    <rect x="2" y="2" width="1020" height="1020" rx="178"
+          fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="2"/>
+  <defs><radialGradient id="o2_0" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#2ecc71" stop-opacity="0.630"/>
+      <stop offset="45%" stop-color="#2ecc71" stop-opacity="0.315"/>
+      <stop offset="100%" stop-color="#2ecc71" stop-opacity="0"/>
+    </radialGradient><radialGradient id="o2_1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f39c12" stop-opacity="0.765"/>
+      <stop offset="45%" stop-color="#f39c12" stop-opacity="0.383"/>
+      <stop offset="100%" stop-color="#f39c12" stop-opacity="0"/>
+    </radialGradient><radialGradient id="o2_2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e74c3c" stop-opacity="0.765"/>
+      <stop offset="45%" stop-color="#e74c3c" stop-opacity="0.383"/>
+      <stop offset="100%" stop-color="#e74c3c" stop-opacity="0"/>
+    </radialGradient></defs>
+  <circle cx="184" cy="512" r="182.9" fill="url(#o2_0)"/><circle cx="184" cy="512" r="118" fill="#2ecc71"/><ellipse cx="184" cy="471.88" rx="64.9" ry="47.2" fill="#ffffff" fill-opacity="0.20"/><circle cx="512" cy="512" r="182.9" fill="url(#o2_1)"/><circle cx="512" cy="512" r="118" fill="#f39c12"/><ellipse cx="512" cy="471.88" rx="64.9" ry="47.2" fill="#ffffff" fill-opacity="0.20"/><circle cx="840" cy="512" r="182.9" fill="url(#o2_2)"/><circle cx="840" cy="512" r="118" fill="#e74c3c"/><ellipse cx="840" cy="471.88" rx="64.9" ry="47.2" fill="#ffffff" fill-opacity="0.20"/>
+</svg>

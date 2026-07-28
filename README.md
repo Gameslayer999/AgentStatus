@@ -1,9 +1,20 @@
+<div align="center">
+
+<img src="docs/logo.png" width="128" alt="AgentStatus icon" />
+
 # AgentStatus
 
-A small, always-on-top **bar of lights** that shows the live status of every open
-Claude Code, Codex, Cursor, or Antigravity session — so you can tell at a glance which
-of your concurrent agents is working, waiting on you, idle, or errored, without hunting
-through windows.
+**A small, always-on-top bar of lights showing the live status of every open Claude Code,
+Codex, Cursor, or Antigravity session — so you can tell at a glance which agent is working,
+waiting on you, idle, or errored, without hunting through windows.**
+
+[![Latest release](https://img.shields.io/github/v/release/Gameslayer999/AgentStatus?sort=semver&label=release)](https://github.com/Gameslayer999/AgentStatus/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/Gameslayer999/AgentStatus/total?label=downloads)](https://github.com/Gameslayer999/AgentStatus/releases)
+![Platform](https://img.shields.io/badge/platform-macOS%20·%20Apple%20Silicon-black)
+
+[Install](#install-macos-apple-silicon) · [The lights](#the-lights) · [Customize](#customize-it) · [How it works](#how-it-works) · [VS Code extension](#optional--vs-code-extension)
+
+</div>
 
 ![The AgentStatus light bar floating over the desktop: green (running), orange (blocked), white (done), a running session with a blue "2" subagent badge, red (error), and a dim gray (idle) light.](docs/lightbar-hero.svg)
 
@@ -27,7 +38,12 @@ itself on first launch.
 **Requirements:** macOS on Apple Silicon (M1 or later), and any of Claude Code, Codex,
 Cursor, or Antigravity.
 
-1. Download **`AgentStatus_0.4.0_aarch64.dmg`** from the
+> [!IMPORTANT]
+> AgentStatus is **unsigned and unnotarized**, so macOS Gatekeeper blocks it on first
+> launch. Step 3 below clears the download quarantine so it opens — nothing is code-signed
+> yet.
+
+1. Download **`AgentStatus_0.4.1_aarch64.dmg`** from the
    [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest).
 2. Open the DMG and drag **AgentStatus** into **Applications**.
 3. The app is **unsigned**, so macOS Gatekeeper blocks it on first launch. Clear the
@@ -95,6 +111,8 @@ across restarts:
 
 ![The AgentStatus settings panel: Orientation and Sort toggles, Size, Padding, and Opacity sliders, per-state color swatches (Running, Blocked, Done, Idle, Error), and Reload / Reset to defaults / Quit links.](docs/lightbar-settings.svg)
 
+- **Mode** — run the lights as the floating bar (default) or up in the **macOS menu bar** (see
+  [below](#run-it-in-the-menu-bar-instead)).
 - **Orientation** — flip the bar between a horizontal row and a vertical column; the window
   auto-resizes to hug the new shape.
 
@@ -109,6 +127,24 @@ across restarts:
   volume, in the sub-panel that appears. The chime fires once on the transition, not on a
   loop, and only while the app is running.
 
+### Run it in the menu bar instead
+
+Prefer a tidy always-there presence over a floating bar? In the settings panel set **Mode →
+Menu bar**. The same lights render as a live status item in the macOS menu bar, and clicking
+it drops the full bar down as a popover — so per-light click-to-focus, hover tooltips, and
+subagent badges all still work.
+
+- **Dots vs. Single** — show one dot per session (default), or condense to a single dot for the
+  most-urgent state (error → blocked → done → running → idle) to save menu-bar width.
+- Menu-bar mode is always horizontal (the Orientation control is hidden there).
+- macOS decides where third-party menu-bar items sit; ⌘-drag the item once to pin it where you
+  want (the OS remembers).
+
+> [!NOTE]
+> The macOS menu bar auto-hides in full-screen apps, so in menu-bar mode the lights disappear
+> while you're in a full-screen window — exactly the case the floating bar exists to cover. Use
+> floating for glancing over full-screen apps, menu bar for a tidy presence otherwise.
+
 ## How it works
 
 Two pieces, decided independently (see [DECISIONS.md](DECISIONS.md) for the why):
@@ -118,7 +154,9 @@ Two pieces, decided independently (see [DECISIONS.md](DECISIONS.md) for the why)
   **one install covers every project and Claude Code / Codex / Cursor / Antigravity window**.
   The hook does the minimum work and exits — it never blocks or slows down a turn.
 - **Display layer** — a **Tauri** app (a non-activating macOS `NSPanel`) watches that
-  directory and renders the lights.
+  directory and renders the lights, either as the floating bar or as a live menu-bar item
+  (the item is an image the webview paints from the same lights, so a click reveals the panel
+  itself as a popover — see [Run it in the menu bar instead](#run-it-in-the-menu-bar-instead)).
 
 The status file holds only what the lights need — `session_id`, coarse state, a short
 project label, and a timestamp. No prompt or transcript content is stored. (The one

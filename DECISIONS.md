@@ -46,6 +46,7 @@
 | 033 | 2026-07-15 | Antigravity IDE as a fourth host (retroactive — shipped in 3195f11 undocumented). Hooks install into `~/.gemini/config/hooks.json` under an `agentstatus` object key (not Claude's `hooks` map), registering `PreInvocation`/`PreToolUse`/`PostToolUse`/`Stop` as `report.sh <Event> antigravity` — declared host per #032. Payload differs from Claude: workspace in `workspacePaths[]`, tools in `toolCall.name`/`toolCall.args`, and **no prompt text**, so the task label is recovered from the thread transcript and unwrapped from `<USER_REQUEST>`. That transcript read is gated on `ide == antigravity`: ungated it walked its fallback chain into the real Claude transcript on every `UserPromptSubmit` (~98 ms + a 10 MB read per turn, discarded). Antigravity uses IDE-lock pruning and the 2h idle backstop like vscode/cursor; click-to-focus targets `Antigravity IDE.app`. **Hook events not yet verified against a live install (Guideline #4)** | Accepted, unverified |
 | 034 | 2026-07-28 | README lightbar visuals: a generator (`docs/gen-readme-art.mjs`) renders five self-contained SVGs (hero / states / hover+badge / orientation / settings panel) from the exact `styles.css` values, committed under `docs/` and embedded in the README. Reproducible art (Guideline #8), not one-off screenshots; GitHub strips SVG animation so pulsing states render static and are labeled | Accepted |
 | 035 | 2026-07-28 | Settings: **audio alerts** — an edge-triggered chime when a session transitions *into* an attention state (blocked/error/done). Master On/Off `.seg` toggle reveals an inline sub-panel (per-state checkboxes + volume), reusing the #015-conditional-row disclosure pattern rather than a separate OS window (which would fight the single hugging NSPanel). Chimes are short WebAudio tones (no bundled asset → no CSP/load concern); off by default (UI Principle #1). `prevChimeState` map fires only on a state *change* and is seeded silently on the first poll so pre-existing blocked sessions don't blast on launch. Frontend-only `localStorage` (`agentstatus.audio`/`.chimes`/`.volume`); never touches the status files | Accepted |
+| 036 | 2026-07-28 | App icon redesign: three glowing status lights (green/orange/red) on a dark Big Sur squircle, replacing the off-brand cyan/yellow swirl. Reproducible SVG master (`docs/icon-master.svg`) → `tauri icon` regenerates the whole set; a 256px export doubles as the README header logo (`docs/logo.png`) | Accepted |
 
 ---
 
@@ -1553,3 +1554,51 @@ other setting, and needs no backend changes.
 **Limits.** Sound plays only while the app (webview) is running — a chime is not an OS
 notification and won't fire if the app is quit. Audio requires the webview's AudioContext,
 created lazily on first play; if the platform blocks it, `playChime` fails silently.
+
+---
+
+## 036 — App icon redesign: three status lights on a dark squircle
+
+**Context.** The bundled app icon was a cyan/yellow abstract "8"-ish swirl left over from the
+Tauri template — it said nothing about the product. Everything else about AgentStatus is *a row
+of colored status lights*; the Dock/Finder/menu-bar icon should be the same visual so the app is
+recognizable at a glance. We also wanted the new icon reproducible (Guideline #8), not a
+hand-painted one-off.
+
+**How it was made.** Generated five candidate directions as self-contained SVGs (a subagent
+authored them with the exact palette mirrored from `styles.css`/`gen-readme-art.mjs`, rasterized
+via `cairosvg`, each proofed at true 32×32 for legibility — a diffusion model was not used, since
+a geometric dot icon is exactly what SVG does deterministically and on-brand). The user reviewed
+all five plus a sixth ChatGPT-generated option and chose the **three-large-dot** direction.
+
+**Options considered (the candidates):**
+
+| Option | Design | 32px legibility |
+|---|---|---|
+| 5 dots (all states) | Fullest "one light per session" story | Weak — dots ~3px, gray idle dot vanishes |
+| **3 dots — green/orange/red** ✓ | Running/blocked/error, the attention states | **Best — three clearly distinct lights** |
+| Single green bloom | Minimal | Clean but reads as a generic "online" dot |
+| 3 dots in the frosted pill | Strongest product identity at full size | Pill fades to a dark bar when small |
+| Vertical column | Orientation-flip nod | Reads like a traffic light |
+
+**Decision.** Ship the **three-dot** icon: green `#2ecc71`, orange `#f39c12`, red `#e74c3c`
+dots with the README-art radial bloom, on a top-down `#1b2733`→`#0f1720` panel with a 180px
+Big-Sur corner and transparent corners (so macOS renders it as a rounded icon, not a dark
+square). The vector master lives at `docs/icon-master.svg` (+ a 1024px `docs/icon-master.png`);
+`cd app && npx tauri icon ../docs/icon-master.png` regenerates the whole macOS icon set, and a
+256px `sips` export becomes `docs/logo.png` — the README header logo — so one source drives both.
+All six review candidates and the generation scaffold were deleted after the pick.
+
+**Reasoning.** The three signal colors *are* the product's identity and are the states a user
+acts on, so the icon doubles as a legend. Three dots is the most that stay individually
+distinct at 32×32 (the smallest generated size and the hardest constraint), which is why the
+full 5-state and the pill variants lost despite telling a richer story at 1024px. SVG master +
+`tauri icon` keeps it reproducible and editable, and sharing the master with the README logo
+means the app icon and the docs can never drift apart.
+
+**Limits.** The three-dot icon shows only running/blocked/error — it omits done (white) and idle
+(gray), which read poorly small anyway; the icon is a brand mark, not the live legend (the bar
+itself and the README states art cover all five). The macOS Dock/Finder icon is cached, so the
+new icon appears after the app is rebuilt/reinstalled (login cycle may be needed for stale
+caches). Tauri's `icon` command also emits iOS/Android assets; those are pruned — this is a
+macOS-only app and `tauri.conf.json` references only the five desktop icons.

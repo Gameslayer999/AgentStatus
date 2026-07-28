@@ -208,6 +208,20 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-28** — **New app icon + README format overhaul + v0.4.1 (decision 036).**
+  (1) Replaced the off-brand Tauri-template swirl icon with **three glowing status lights**
+  (green/orange/red) on a dark Big-Sur squircle — a reproducible SVG master at
+  `docs/icon-master.svg` (+ 1024px PNG); `cd app && npx tauri icon ../docs/icon-master.png`
+  regenerates the whole macOS icon set, and a 256px export is `docs/logo.png`, reused as the
+  README header logo. Chosen from five generated candidates + a user ChatGPT option, weighted
+  on 32px legibility. (2) **README format overhaul** to match convention (surveyed Stats, Ice,
+  Rectangle, starship, bat, lazygit, React): centered header block (logo → name → one-line
+  tagline → release/downloads/platform badges → nav links), a **menu-bar mode** section (was
+  undocumented — decision 026), and Gatekeeper/full-screen caveats moved into `> [!IMPORTANT]`
+  / `> [!NOTE]` callouts. (3) Bumped `0.4.0 → 0.4.1` (`tauri.conf.json`, `package.json`,
+  `package-lock.json`, `Cargo.toml`, `Cargo.lock`, README DMG link); shipped `v0.4.1` built
+  from `main` with `AgentStatus_0.4.1_aarch64.dmg`.
+
 - **2026-07-28** — **Audio alerts + README de-duplication (decision 035).** (1) Removed the
   status-light **table** under "The lights" in the README — the `lightbar-states.svg` graphic
   already labels all five states with their exact meanings, so the table was pure repetition.
