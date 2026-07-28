@@ -208,6 +208,21 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-07-28** — **Audio alerts + README de-duplication (decision 035).** (1) Removed the
+  status-light **table** under "The lights" in the README — the `lightbar-states.svg` graphic
+  already labels all five states with their exact meanings, so the table was pure repetition.
+  (2) Added **audio alerts** to the settings panel: an **Audio** On/Off `.seg` toggle reveals
+  an inline sub-panel (per-state chime checkboxes for Blocked/Error/Done + a Volume slider),
+  reusing the conditional-row disclosure pattern rather than a separate window (which would
+  fight the single NSPanel). Chimes are short WebAudio tones — no bundled asset, no CSP concern.
+  Edge-triggered off a `prevChimeState` map (fires once on the transition *into* an attention
+  state), seeded silently on the first poll so pre-existing blocked sessions don't blast on
+  launch. Off by default; frontend-only `localStorage` (`agentstatus.audio`/`.chimes`/`.volume`),
+  no hook/schema/backend change. Touches `app/src/index.html`, `styles.css`, `main.js`, README.
+  **Left to verify (live):** open the panel, flip Audio on, drive a session to blocked/error/done
+  and confirm the chime fires once per transition. **Also:** the `lightbar-settings.svg` art still
+  shows the pre-audio panel — regenerate `docs/gen-readme-art.mjs` to add the Audio row if the
+  graphic should stay current.
 - **2026-07-28** — **Added lightbar visuals to the README (decision 034).** New generator
   `docs/gen-readme-art.mjs` renders five self-contained SVGs from the exact `app/src/styles.css`
   values — `lightbar-hero.svg` (a realistic mixed-state bar), `lightbar-states.svg` (every

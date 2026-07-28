@@ -64,6 +64,25 @@
           <div class="crow"><span class="row-label">Idle</span><input type="color" data-state="idle" /></div>
           <div class="crow"><span class="row-label">Error</span><input type="color" data-state="error" /></div>
         </div>
+        <div class="sep"></div>
+        <div class="row">
+          <span class="row-label">Audio</span>
+          <div class="seg" id="audio-seg">
+            <button type="button" data-audio="off">Off</button>
+            <button type="button" data-audio="on">On</button>
+          </div>
+        </div>
+        <!-- Per-state chime toggles + volume: revealed only when Audio is On (same
+             conditional-row pattern as the menu-bar Condense control). -->
+        <div id="audio-panel" hidden>
+          <div class="crow"><span class="row-label">Blocked chime</span><input type="checkbox" data-chime="blocked" /></div>
+          <div class="crow"><span class="row-label">Error chime</span><input type="checkbox" data-chime="error" /></div>
+          <div class="crow"><span class="row-label">Done chime</span><input type="checkbox" data-chime="done" /></div>
+          <div class="row">
+            <span class="row-label">Volume</span>
+            <input type="range" id="vol-range" min="0" max="100" step="5" />
+          </div>
+        </div>
         <div class="footer">
           <button type="button" id="reload-btn">Reload</button>
           <button type="button" id="reset-btn">Reset to defaults</button>

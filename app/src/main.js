@@ -377,6 +377,142 @@ function setColor(state, hex) {
   applyStyle();
 }
 
+// ── Audio alerts (decision 0xx) ─────────────────────────────────────────────
+// A per-state chime plays once when a session *transitions into* an attention
+// state (blocked/error/done) — edge-triggered, so a light that stays orange beeps
+// only on arrival, not every poll. Off by default (UI Principle #1: non-intrusive);
+// the master toggle reveals per-state checkboxes + a volume slider. App-local, same
+// localStorage pattern as the other display prefs. Never touches the status files.
+const AUDIO_KEY = "agentstatus.audio"; // "on" | "off"
+const CHIME_KEY = "agentstatus.chimes"; // JSON {blocked,error,done}
+const VOL_KEY = "agentstatus.volume"; // 0–100
+const DEFAULT_CHIMES = { blocked: true, error: true, done: true };
+const DEFAULT_VOLUME = 60;
+const CHIME_STATES = ["blocked", "error", "done"];
+
+function audioEnabled() {
+  return localStorage.getItem(AUDIO_KEY) === "on";
+}
+function currentChimes() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(CHIME_KEY)) || {};
+  } catch (_) {
+    /* corrupt value → defaults */
+  }
+  return { ...DEFAULT_CHIMES, ...saved };
+}
+function currentVolume() {
+  const n = parseInt(localStorage.getItem(VOL_KEY), 10);
+  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : DEFAULT_VOLUME;
+}
+
+// Short WebAudio tones — no bundled asset, so nothing to load and no CSP concern.
+// Each state gets a distinct shape: blocked rises (a question), error is a lower
+// urgent double, done is a single soft note.
+let audioCtx = null;
+const CHIME_TONES = {
+  blocked: [{ f: 660, t: 0, d: 0.12 }, { f: 880, t: 0.12, d: 0.15 }],
+  error: [{ f: 392, t: 0, d: 0.14 }, { f: 311, t: 0.16, d: 0.2 }],
+  done: [{ f: 784, t: 0, d: 0.16 }],
+};
+
+function playChime(state, previewVol) {
+  const tones = CHIME_TONES[state];
+  if (!tones) return;
+  const vol = (previewVol != null ? previewVol : currentVolume()) / 100;
+  if (vol <= 0) return;
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const now = audioCtx.currentTime;
+    for (const tone of tones) {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = tone.f;
+      const start = now + tone.t;
+      const end = start + tone.d;
+      // Quick attack, exponential decay — a soft blip, never a click.
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.linearRampToValueAtTime(vol * 0.25, start + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, end);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(start);
+      osc.stop(end + 0.02);
+    }
+  } catch (_) {
+    /* audio unavailable → silent (never surface noise) */
+  }
+}
+
+// Edge-triggered chime dispatch. prevChimeState is seeded on the first poll WITHOUT
+// firing (audioSeeded guard) so pre-existing blocked/error sessions don't blast on
+// launch — a chime only ever marks a fresh transition.
+const prevChimeState = new Map(); // id -> displayState at last check
+let audioSeeded = false;
+function checkChimes(sessions) {
+  const seen = new Set();
+  for (const s of sessions) {
+    seen.add(s.id);
+    const ds = displayState(s);
+    const prev = prevChimeState.get(s.id);
+    prevChimeState.set(s.id, ds);
+    if (audioSeeded && ds !== prev && audioEnabled() && CHIME_STATES.includes(ds) && currentChimes()[ds]) {
+      playChime(ds);
+    }
+  }
+  for (const id of prevChimeState.keys()) {
+    if (!seen.has(id)) prevChimeState.delete(id);
+  }
+  audioSeeded = true;
+}
+
+// Sync the Audio toggle, the sub-panel visibility, and its inputs to the live prefs.
+function applyAudioButtons() {
+  const on = audioEnabled();
+  for (const btn of document.querySelectorAll("#audio-seg button")) {
+    btn.classList.toggle("active", (btn.dataset.audio === "on") === on);
+  }
+  const panel = document.getElementById("audio-panel");
+  if (!panel) return;
+  if (on) panel.removeAttribute("hidden");
+  else panel.setAttribute("hidden", "");
+  const chimes = currentChimes();
+  for (const chk of panel.querySelectorAll('input[type="checkbox"][data-chime]')) {
+    chk.checked = !!chimes[chk.dataset.chime];
+  }
+  const vol = panel.querySelector("#vol-range");
+  if (vol) vol.value = String(currentVolume());
+}
+
+// Toggling Audio grows/shrinks the panel, so re-anchor the lights around the new
+// size (same anchor→mutate→resize→anchor dance as toggleSettings) — otherwise the
+// lights would jump when the sub-panel appears. Enabling plays a confirmation blip.
+async function setAudio(on) {
+  const settingsOpen = !document.getElementById("settings").hasAttribute("hidden");
+  const anchor = settingsOpen ? await lightsScreenPos() : null;
+  localStorage.setItem(AUDIO_KEY, on ? "on" : "off");
+  applyAudioButtons();
+  if (settingsOpen) {
+    await resizeToContent();
+    await anchorLightsTo(anchor);
+  }
+  if (on) playChime("done"); // audible confirmation the toggle took
+}
+
+function setChime(state, enabled) {
+  const chimes = currentChimes();
+  chimes[state] = enabled;
+  localStorage.setItem(CHIME_KEY, JSON.stringify(chimes));
+  if (enabled) playChime(state); // preview the chime you just turned on
+}
+
+function setVolume(pct) {
+  localStorage.setItem(VOL_KEY, String(pct));
+  playChime("done", pct); // preview at the new level
+}
+
 // "Reset to defaults" clears every display pref (orientation, size, colors).
 function resetPrefs() {
   localStorage.removeItem(ORIENT_KEY);
@@ -387,10 +523,14 @@ function resetPrefs() {
   localStorage.removeItem(COLORS_KEY);
   localStorage.removeItem(MODE_KEY);
   localStorage.removeItem(CONDENSE_KEY);
+  localStorage.removeItem(AUDIO_KEY);
+  localStorage.removeItem(CHIME_KEY);
+  localStorage.removeItem(VOL_KEY);
   applyOrientation(effectiveOrientation());
   applySortButtons(currentSort());
   applyStyle();
   applyCondenseButtons();
+  applyAudioButtons();
   latestSessions = sortSessions(latestSessions);
   render(latestSessions);
   applyMode(currentMode()); // back to floating: shows the panel, hides the tray
@@ -426,6 +566,7 @@ function initSettings() {
   applyStyle();
   applyModeButtons(currentMode()); // visual only; backend mode applied after first tick
   applyCondenseButtons();
+  applyAudioButtons();
   // Right-click anywhere on the bar (including a dot) toggles the panel; suppress
   // the native context menu.
   document.getElementById("bar").addEventListener("contextmenu", (e) => {
@@ -461,6 +602,20 @@ function initSettings() {
   document.getElementById("colors").addEventListener("input", (e) => {
     const input = e.target.closest('input[type="color"]');
     if (input) setColor(input.dataset.state, input.value);
+  });
+  document.getElementById("audio-seg").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-audio]");
+    if (btn) setAudio(btn.dataset.audio === "on");
+  });
+  // Per-state checkboxes and the volume slider both live in #audio-panel; one
+  // listener handles both (checkbox → setChime, range → setVolume).
+  document.getElementById("audio-panel").addEventListener("input", (e) => {
+    const chk = e.target.closest('input[type="checkbox"][data-chime]');
+    if (chk) {
+      setChime(chk.dataset.chime, chk.checked);
+      return;
+    }
+    if (e.target.id === "vol-range") setVolume(parseInt(e.target.value, 10));
   });
   document.getElementById("reset-btn").addEventListener("click", resetPrefs);
   // Reload the webview — picks up frontend changes and recovers from any stuck
@@ -856,6 +1011,7 @@ async function tick() {
   try {
     const sessions = sortSessions(await invoke("list_sessions"));
     latestSessions = sessions;
+    checkChimes(sessions); // edge-triggered audio alerts (seeds silently on first tick)
     render(sessions);
     if (currentMode() === "menubar") await pushTrayImage();
   } catch (_) {
