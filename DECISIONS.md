@@ -47,6 +47,7 @@
 | 034 | 2026-07-28 | README lightbar visuals: a generator (`docs/gen-readme-art.mjs`) renders five self-contained SVGs (hero / states / hover+badge / orientation / settings panel) from the exact `styles.css` values, committed under `docs/` and embedded in the README. Reproducible art (Guideline #8), not one-off screenshots; GitHub strips SVG animation so pulsing states render static and are labeled | Accepted |
 | 035 | 2026-07-28 | Settings: **audio alerts** — an edge-triggered chime when a session transitions *into* an attention state (blocked/error/done). Master On/Off `.seg` toggle reveals an inline sub-panel (per-state checkboxes + volume), reusing the #015-conditional-row disclosure pattern rather than a separate OS window (which would fight the single hugging NSPanel). Chimes are short WebAudio tones (no bundled asset → no CSP/load concern); off by default (UI Principle #1). `prevChimeState` map fires only on a state *change* and is seeded silently on the first poll so pre-existing blocked sessions don't blast on launch. Frontend-only `localStorage` (`agentstatus.audio`/`.chimes`/`.volume`); never touches the status files | Accepted |
 | 036 | 2026-07-28 | App icon redesign: three glowing status lights (green/orange/red) on a dark Big Sur squircle, replacing the off-brand cyan/yellow swirl. Reproducible SVG master (`docs/icon-master.svg`) → `tauri icon` regenerates the whole set; a 256px export doubles as the README header logo (`docs/logo.png`) | Accepted |
+| 037 | 2026-07-28 | Overlay panel collection-behavior set via `objc2-app-kit` (maintained) instead of `tauri-nspanel`'s deprecated `cocoa`-typed `set_collection_behaviour`, clearing 5 `deprecated` build warnings. Also gate `mod install` to release (it's only called under `#[cfg(not(debug_assertions))]`), clearing the dev-build dead-code warnings. Same window object, same two flags — no behavior change | Accepted |
 
 ---
 
@@ -1602,3 +1603,60 @@ itself and the README states art cover all five). The macOS Dock/Finder icon is 
 new icon appears after the app is rebuilt/reinstalled (login cycle may be needed for stale
 caches). Tauri's `icon` command also emits iOS/Android assets; those are pruned — this is a
 macOS-only app and `tauri.conf.json` references only the five desktop icons.
+
+## 037 — Overlay panel collection behavior via objc2-app-kit; install module release-gated
+
+**Date:** 2026-07-28
+**Status:** Accepted
+
+**Context:** `cargo build` (and `tauri dev`) emitted a batch of warnings, in two families:
+a large "never used" group covering the entire `install` module (every function and
+constant), and 5 `deprecated` warnings on `NSWindowCollectionBehavior` in
+`make_overlay_panel`. Neither reflected a real defect, but the noise buried genuine
+warnings and made the dev build look broken.
+
+**Root causes.**
+- The `install` module's only entry point, `install::ensure_installed()`, is called
+  solely under `#[cfg(not(debug_assertions))]` (the self-installer is release-only by
+  design — dev uses the repo hooks via `node hooks/setup.mjs`, decision 011). In a debug
+  build nothing references the module, so Rust flagged all of it dead. The
+  `let mut builder` in `run()` warned the same way — its only reassignment (the
+  single-instance plugin, decision 020) is also release-gated.
+- `tauri-nspanel`'s `set_collection_behaviour()` takes the deprecated `cocoa` crate's
+  `NSWindowCollectionBehavior` as its parameter type, so any call through it forces our
+  crate to name the deprecated type. `tauri-nspanel` silences this internally with a
+  crate-level `#![allow(deprecated)]`; our crate does not.
+
+**Options considered (deprecated warnings):**
+
+| Option | Pros | Cons |
+|---|---|---|
+| `#[allow(deprecated)]` on `make_overlay_panel` | One line, zero risk | Keeps us on the unmaintained `cocoa` path; hides a real future-migration signal |
+| Migrate to `objc2-app-kit` (**chosen**) | Moves to the maintained, typed API Tauri already depends on; no deprecation | Bypasses `set_collection_behaviour` (its param is cocoa-typed), so we set the flag on the underlying NSWindow ourselves |
+| Leave them | No work | 5 warnings persist on every build |
+
+**Decision.**
+- Gate `mod install;` to `#[cfg(not(debug_assertions))]`, matching how its only caller is
+  already gated. `#[allow(unused_mut)]` on `let mut builder` for the same release-only
+  reason. This removes the whole dead-code family at the source rather than papering over
+  working code with `#[allow(dead_code)]`.
+- Set the panel's collection behavior through `objc2-app-kit`: fetch the window's NSWindow
+  pointer via Tauri's `WebviewWindow::ns_window()` and call the typed, non-deprecated
+  `NSWindow::setCollectionBehavior(FullScreenAuxiliary | CanJoinAllSpaces)`. The panel
+  is-a NSWindow (NSPanel inherits it), so this is the same object and the same two flags as
+  the old `set_collection_behaviour` call — behavior is unchanged (Guideline #7). Added
+  `objc2-app-kit` as a direct macOS-only dependency, pinned to `0.3` (the version Tauri
+  already pulls in transitively via `muda`, so no second copy), with the `NSWindow` and
+  `NSResponder` features.
+
+**Reasoning.** Both fixes remove the warning by making the code honestly reflect the build:
+the installer genuinely isn't part of a dev build, and the collection-behavior call
+genuinely doesn't need the deprecated crate — Tauri already ships `objc2-app-kit`, so
+using it adds no new transitive weight and moves us onto the maintained API. The `app`
+crate now builds with zero warnings.
+
+**Limits.** One transitive warning remains outside our code — `block v0.1.6` (pulled by
+`tauri-nspanel`) is flagged as "will be rejected by a future version of Rust"; it clears
+when `tauri-nspanel` updates its dependencies, not from anything in this repo. The
+`objc2-app-kit` call path is macOS-only (`#[cfg(target_os = "macos")]`), unchanged from the
+old code.

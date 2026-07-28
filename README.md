@@ -43,7 +43,7 @@ Cursor, or Antigravity.
 > launch. Step 3 below clears the download quarantine so it opens — nothing is code-signed
 > yet.
 
-1. Download **`AgentStatus_0.4.1_aarch64.dmg`** from the
+1. Download **`AgentStatus_0.4.2_aarch64.dmg`** from the
    [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest).
 2. Open the DMG and drag **AgentStatus** into **Applications**.
 3. The app is **unsigned**, so macOS Gatekeeper blocks it on first launch. Clear the
