@@ -314,6 +314,29 @@ body {
   border-radius: 3px;
 }
 
+/* Audio sub-panel: revealed under the Audio On/Off toggle. Same vertical stack as
+   the settings panel, and the same [hidden]-wins specificity trick as the rows. */
+#audio-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#audio-panel[hidden] {
+  display: none;
+}
+#vol-range {
+  width: 96px;
+  accent-color: var(--ui-accent);
+  cursor: pointer;
+}
+#audio-panel input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--ui-accent);
+  cursor: pointer;
+}
+
 /* Footer links — low-key, on one row (Reload left, Reset right). */
 #settings .footer {
   display: flex;

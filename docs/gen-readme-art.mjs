@@ -282,6 +282,13 @@ function slider(x, y, w, frac) {
     <line x1="${x}" y1="${cy}" x2="${tx}" y2="${cy}" stroke="${ACCENT}" stroke-width="3" stroke-linecap="round"/>
     <circle cx="${tx}" cy="${cy}" r="7" fill="${ACCENT}"/>`;
 }
+// A checkbox (per-state chime toggle): accent-filled with a check when on.
+function checkbox(x, y, on) {
+  const s = 15;
+  let out = `<rect x="${x}" y="${y}" width="${s}" height="${s}" rx="4" fill="${on ? ACCENT : "none"}" stroke="${UI_LINE}" stroke-width="1"/>`;
+  if (on) out += `<path d="M ${x + 3.5} ${y + 7.8} L ${x + 6.2} ${y + 10.6} L ${x + 11.5} ${y + 4.4}" fill="none" stroke="${ACCENT_INK}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`;
+  return out;
+}
 function settings() {
   const PW = 320;
   const P = 20; // panel padding
@@ -329,6 +336,14 @@ function settings() {
   });
   y += 3 * 26 + 6;
   body += sep();
+  // Audio: master On/Off toggle + the revealed sub-panel (per-state chimes + volume).
+  const checkRow = (t, on) => { const r = label(t) + checkbox(x1 - 15, y, on); y += 24; return r; };
+  body += segRow("Audio", ["Off", "On"], 1);
+  body += checkRow("Blocked chime", true);
+  body += checkRow("Error chime", true);
+  body += checkRow("Done chime", true);
+  body += sliderRow("Volume", 0.6);
+  body += sep();
   // Footer links.
   const footer = `<text x="${x0}" y="${y + 10}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" text-decoration="underline" dominant-baseline="central">Reload</text>
     <text x="${PW / 2}" y="${y + 10}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" text-decoration="underline" text-anchor="middle" dominant-baseline="central">Reset to defaults</text>
@@ -338,7 +353,7 @@ function settings() {
   const W = 620;
   const H = PH + 48;
   const px = (W - PW) / 2;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The AgentStatus settings panel, opened by right-clicking the bar: orientation and sort toggles, size/padding/opacity sliders, per-state color swatches, and reload/reset/quit links.">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The AgentStatus settings panel, opened by right-clicking the bar: orientation and sort toggles, size/padding/opacity sliders, per-state color swatches, an Audio On/Off toggle with per-state chime checkboxes (Blocked, Error, Done) and a volume slider, and reload/reset/quit links.">
     ${backdrop(W, H)}
     <defs>${grads}</defs>
     <g transform="translate(${px}, 24)">

@@ -76,14 +76,6 @@ Each light is one Claude Code, Codex, Cursor, or Antigravity session:
 
 ![The five light states: green running, orange blocked (pulsing), white done, dim gray idle, and red error (pulsing), each labeled with its meaning.](docs/lightbar-states.svg)
 
-| Light | Meaning |
-|---|---|
-| 🟢 green | running — actively working on a turn |
-| 🟠 orange (pulsing) | blocked — waiting for you (a permission prompt or a question) |
-| ⚪ white | done — the turn just finished and you haven't looked yet |
-| ⚫ dim gray | idle — finished and acknowledged (you've focused it) |
-| 🔴 red (pulsing) | error — a turn failed |
-
 ![A running light with a blue "2" subagent badge and its hover tooltip, showing the project name and state, the task, and the running subagents.](docs/lightbar-hover.svg)
 
 - **Hover** a light to see the session's project, its task, and what it's doing right now.
@@ -112,6 +104,10 @@ across restarts:
 - **Size, padding, and opacity** — scale the lights, tighten or loosen the bar, and fade the
   pill (the lights themselves always stay fully opaque so the signal never dims).
 - **Per-state colors** — recolor any of the five states with a native color picker.
+- **Audio alerts** — off by default; flip **Audio** on to get a short chime when a session
+  turns blocked, errors, or finishes a turn. Toggle which of those three chime, and set the
+  volume, in the sub-panel that appears. The chime fires once on the transition, not on a
+  loop, and only while the app is running.
 
 ## How it works
 

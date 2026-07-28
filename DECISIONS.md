@@ -45,6 +45,7 @@
 | 032 | 2026-07-09 | Codex open/close lifecycle: Codex emits **no** signal on conversation open or close (verified: no `SessionEnd` hook exists; `SessionStart` is deferred to the first turn; `updated_at`/`recency_at` advance only on turn starts). So: installers pass an explicit `codex` arg to `report.sh` (payloads are Claude-shaped and unsniffable — replaces the never-firing #029 heuristics); Codex lights expire after 10 min idle (`CODEX_IDLE_SECS`, user-approved) instead of 2h, drop instantly when no `codex` process is alive, and exclude archived threads; click-to-focus targets the VS Code window (Codex is the `openai.chatgpt` extension; `open -a Codex` was a no-op) | Accepted |
 | 033 | 2026-07-15 | Antigravity IDE as a fourth host (retroactive — shipped in 3195f11 undocumented). Hooks install into `~/.gemini/config/hooks.json` under an `agentstatus` object key (not Claude's `hooks` map), registering `PreInvocation`/`PreToolUse`/`PostToolUse`/`Stop` as `report.sh <Event> antigravity` — declared host per #032. Payload differs from Claude: workspace in `workspacePaths[]`, tools in `toolCall.name`/`toolCall.args`, and **no prompt text**, so the task label is recovered from the thread transcript and unwrapped from `<USER_REQUEST>`. That transcript read is gated on `ide == antigravity`: ungated it walked its fallback chain into the real Claude transcript on every `UserPromptSubmit` (~98 ms + a 10 MB read per turn, discarded). Antigravity uses IDE-lock pruning and the 2h idle backstop like vscode/cursor; click-to-focus targets `Antigravity IDE.app`. **Hook events not yet verified against a live install (Guideline #4)** | Accepted, unverified |
 | 034 | 2026-07-28 | README lightbar visuals: a generator (`docs/gen-readme-art.mjs`) renders five self-contained SVGs (hero / states / hover+badge / orientation / settings panel) from the exact `styles.css` values, committed under `docs/` and embedded in the README. Reproducible art (Guideline #8), not one-off screenshots; GitHub strips SVG animation so pulsing states render static and are labeled | Accepted |
+| 035 | 2026-07-28 | Settings: **audio alerts** — an edge-triggered chime when a session transitions *into* an attention state (blocked/error/done). Master On/Off `.seg` toggle reveals an inline sub-panel (per-state checkboxes + volume), reusing the #015-conditional-row disclosure pattern rather than a separate OS window (which would fight the single hugging NSPanel). Chimes are short WebAudio tones (no bundled asset → no CSP/load concern); off by default (UI Principle #1). `prevChimeState` map fires only on a state *change* and is seeded silently on the first poll so pre-existing blocked sessions don't blast on launch. Frontend-only `localStorage` (`agentstatus.audio`/`.chimes`/`.volume`); never touches the status files | Accepted |
 
 ---
 
@@ -1508,3 +1509,47 @@ bar floating over the *real* desktop; the faint window panes in the hero stand i
 (blocked/error) render static and are labeled "(pulsing)". The art is a facsimile built
 from the stylesheet, not a screenshot of the running app — if the two ever drift, re-run the
 generator (it reads the intended values, so update it alongside `styles.css`).
+
+---
+
+## 035 — Settings: audio alerts (per-state chimes)
+
+**Date:** 2026-07-28
+**Status:** Accepted
+
+**Context:** The lights are silent — a session going orange (blocked) or red (error) is
+only noticed if you're looking at the bar. UI Principle #2 says attention states must never
+be missed; a sound is the natural way to catch them when your eyes are on the code. The
+question was what triggers a sound and how to expose the controls without cluttering the
+one-screen settings panel.
+
+**Options — where the controls live:**
+
+| Option | Pros | Cons |
+|---|---|---|
+| Separate OS-window popup for audio settings | Room to grow | Needs new Rust window lifecycle + positioning; a non-activating NSPanel spawning a focused child window fights the single "hugging pill" model (#008); heavy for a few toggles |
+| **Inline disclosure in the existing panel** | Reuses the #015 conditional-row pattern (`#condense-row`), `.seg`, `.crow`, and the range slider; window auto-regrows to hug it; zero Rust | Panel grows taller when expanded (acceptable — it already resizes) |
+
+**Decision.** Add an **Audio** On/Off `.seg` toggle to the settings panel. When On it reveals
+an inline `#audio-panel` sub-block — per-state chime checkboxes (**Blocked**, **Error**,
+**Done**) and a **Volume** slider — the same disclosure pattern the menu-bar Condense control
+already uses. Chimes are short **WebAudio** oscillator tones (blocked = rising two-note,
+error = lower urgent double, done = single soft note); no bundled audio asset, so nothing to
+load and no CSP concern. Dispatch is **edge-triggered**: a `prevChimeState` map records each
+session's `displayState`, and a chime fires only when it *changes into* blocked/error/done —
+a light that stays orange beeps once on arrival, not every poll. The map is seeded silently on
+the first poll (`audioSeeded` guard) so pre-existing blocked/error sessions don't blast on
+launch. Off by default (UI Principle #1). Toggling a state checkbox or moving the volume
+slider plays a preview. All frontend-only in `localStorage` (`agentstatus.audio` /
+`.chimes` / `.volume`); the hook and status files are untouched.
+
+**Reasoning.** Blocked and error are exactly the states the user must act on, and "done"
+covers walking away from a finishing turn — all three were requested, each independently
+toggleable per the user's ask. WebAudio keeps it dependency-free and asset-free. Edge-trigger
++ silent seeding is what makes it non-intrusive: no repeat nagging, no startup blast. The
+inline disclosure keeps the whole surface in one right-click panel, consistent with every
+other setting, and needs no backend changes.
+
+**Limits.** Sound plays only while the app (webview) is running — a chime is not an OS
+notification and won't fire if the app is quit. Audio requires the webview's AudioContext,
+created lazily on first play; if the platform blocks it, `playChime` fails silently.
