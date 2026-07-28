@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 300" width="620" height="300" role="img" aria-label="The same light bar shown as a horizontal row and as a vertical column; the settings panel flips between them.">
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#1b2733"/>
+        <stop offset="100%" stop-color="#0f1720"/>
+      </linearGradient>
+    </defs>
+    <rect x="0" y="0" width="620" height="300" rx="18" fill="url(#bg)"/>
+    
+    <defs><filter id="softshadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#000000" flood-opacity="0.42"/>
+    </filter><radialGradient id="oh0" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#2ecc71" stop-opacity="0.630"/>
+      <stop offset="45%" stop-color="#2ecc71" stop-opacity="0.315"/>
+      <stop offset="100%" stop-color="#2ecc71" stop-opacity="0"/>
+    </radialGradient><radialGradient id="oh1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f39c12" stop-opacity="0.765"/>
+      <stop offset="45%" stop-color="#f39c12" stop-opacity="0.383"/>
+      <stop offset="100%" stop-color="#f39c12" stop-opacity="0"/>
+    </radialGradient><radialGradient id="oh2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ecf0f1" stop-opacity="0.540"/>
+      <stop offset="45%" stop-color="#ecf0f1" stop-opacity="0.270"/>
+      <stop offset="100%" stop-color="#ecf0f1" stop-opacity="0"/>
+    </radialGradient><radialGradient id="ov0" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#2ecc71" stop-opacity="0.630"/>
+      <stop offset="45%" stop-color="#2ecc71" stop-opacity="0.315"/>
+      <stop offset="100%" stop-color="#2ecc71" stop-opacity="0"/>
+    </radialGradient><radialGradient id="ov1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f39c12" stop-opacity="0.765"/>
+      <stop offset="45%" stop-color="#f39c12" stop-opacity="0.383"/>
+      <stop offset="100%" stop-color="#f39c12" stop-opacity="0"/>
+    </radialGradient><radialGradient id="ov2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ecf0f1" stop-opacity="0.540"/>
+      <stop offset="45%" stop-color="#ecf0f1" stop-opacity="0.270"/>
+      <stop offset="100%" stop-color="#ecf0f1" stop-opacity="0"/>
+    </radialGradient></defs>
+    <g transform="translate(44.0, 101.0)"><g filter="url(#softshadow)">
+      <rect x="0" y="0" width="252" height="74" rx="37" fill="rgba(20,22,26,0.82)" stroke="rgba(255,255,255,0.09)" stroke-width="1"/>
+    </g><circle cx="45" cy="37" r="30" fill="url(#oh0)"/><circle cx="45" cy="37" r="15" fill="#2ecc71"/><circle cx="99" cy="37" r="30" fill="url(#oh1)"/><circle cx="99" cy="37" r="15" fill="#f39c12"/><circle cx="153" cy="37" r="30" fill="url(#oh2)"/><circle cx="153" cy="37" r="15" fill="#ecf0f1"/><circle cx="207" cy="37" r="15" fill="#7f8c8d" opacity="0.55"/></g>
+    <g transform="translate(443.0, 20.0)"><g filter="url(#softshadow)">
+      <rect x="0" y="0" width="74" height="236" rx="37" fill="rgba(20,22,26,0.82)" stroke="rgba(255,255,255,0.09)" stroke-width="1"/>
+    </g><circle cx="37" cy="37" r="30" fill="url(#ov0)"/><circle cx="37" cy="37" r="15" fill="#2ecc71"/><circle cx="37" cy="91" r="30" fill="url(#ov1)"/><circle cx="37" cy="91" r="15" fill="#f39c12"/><circle cx="37" cy="145" r="30" fill="url(#ov2)"/><circle cx="37" cy="145" r="15" fill="#ecf0f1"/><circle cx="37" cy="199" r="15" fill="#7f8c8d" opacity="0.55"/></g>
+    <text x="170" y="205" fill="#9aa7b4" font-family="-apple-system, system-ui, sans-serif" font-size="15" text-anchor="middle">Horizontal</text>
+    <text x="480" y="286" fill="#9aa7b4" font-family="-apple-system, system-ui, sans-serif" font-size="15" text-anchor="middle">Vertical</text>
+    <text x="320" y="146" fill="#9aa7b4" font-family="-apple-system, system-ui, sans-serif" font-size="28" text-anchor="middle">⇄</text>
+  </svg>
