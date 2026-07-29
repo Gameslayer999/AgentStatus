@@ -25,6 +25,19 @@ const appWindow = getCurrentWindow();
 const dots = new Map(); // session id -> dot element
 let emptyEl = null;
 
+// Cursor menu-bar mirror (decision 038). Cursor's live running/idle status is
+// renderer-memory-only, but its macOS menu-bar item exposes an aggregate count of
+// composers awaiting the user — the one attention bit its hooks don't provide. We
+// poll it (throttled) and render it as ONE extra pip, distinct from the per-session
+// Cursor lights the hooks drive, so it never masquerades as a specific session.
+let cursorPipEl = null;
+let cursorAttention = 0; // last count read off Cursor's menu-bar item
+let tickCount = 0;
+// Poll Cursor's menu-bar item rarely: the AX read can dismiss the item's own popover if it
+// lands while the user has it open, and the notification count changes seldom — so a gentle
+// cadence keeps the pip fresh enough without interfering with Cursor's menu bar (decision 038).
+const CURSOR_POLL_EVERY = 20; // every 20th tick (~20s)
+
 // Display preferences (app-local; persisted in the webview's localStorage so they
 // survive restarts without touching the hook-written status files). Right-clicking
 // the bar toggles the settings panel.
@@ -679,13 +692,16 @@ function render(sessions) {
   const lights = document.getElementById("lights");
   let sizeChanged = false;
 
-  if (sessions.length === 0) {
+  // The Cursor menu-bar pip counts as content, so a bar with only pending Cursor
+  // notifications (no tracked sessions) shows the pip, not the "empty" placeholder.
+  if (sessions.length === 0 && cursorAttention === 0) {
     for (const [id, el] of dots) {
       el.remove();
       dots.delete(id);
       reviewedAt.delete(id);
       sizeChanged = true;
     }
+    if (renderCursorPip(lights)) sizeChanged = true; // removes a lingering pip
     if (!emptyEl) {
       emptyEl = document.createElement("div");
       emptyEl.className = "dot empty";
@@ -760,7 +776,48 @@ function render(sessions) {
     }
   }
 
+  if (renderCursorPip(lights)) sizeChanged = true;
+
   if (sizeChanged) resizeToContent();
+}
+
+// Render (or remove) the single aggregate Cursor menu-bar pip as the last element in
+// the bar. It shows the count of Cursor composers awaiting the user (decision 038),
+// clicks to bring Cursor forward, and is styled distinctly (.cursor-pip) so it reads
+// as the Cursor menu-bar mirror, not a session light. Returns true if it added or
+// removed the element (so the caller re-measures the bar).
+function renderCursorPip(lights) {
+  if (cursorAttention > 0) {
+    let created = false;
+    if (!cursorPipEl) {
+      cursorPipEl = document.createElement("div");
+      cursorPipEl.className = "dot done cursor-pip";
+      cursorPipEl.addEventListener("click", () => {
+        focusSession("", "cursor", ""); // empty cwd ⇒ just activate Cursor.app
+        suppressHover();
+        if (currentMode() === "menubar") hidePopover();
+      });
+      const badge = document.createElement("span");
+      badge.className = "badge";
+      cursorPipEl.appendChild(badge);
+      created = true;
+    }
+    const txt = String(cursorAttention);
+    const badge = cursorPipEl.firstElementChild;
+    if (badge.textContent !== txt) badge.textContent = txt;
+    const title =
+      `Cursor — ${cursorAttention} composer${cursorAttention > 1 ? "s" : ""} awaiting you\n` +
+      `↳ from Cursor's menu bar · click to open Cursor`;
+    if (cursorPipEl.title !== title) cursorPipEl.title = title;
+    if (lights.lastElementChild !== cursorPipEl) lights.appendChild(cursorPipEl);
+    return created;
+  }
+  if (cursorPipEl) {
+    cursorPipEl.remove();
+    cursorPipEl = null;
+    return true;
+  }
+  return false;
 }
 
 async function resizeToContent() {
@@ -997,7 +1054,9 @@ async function chooseGrowthDirection(anchor) {
 }
 
 async function focusSession(cwd, ide, id) {
-  if (!cwd) return;
+  // Empty cwd is normally a no-op (nothing to focus), except the Cursor menu-bar pip
+  // (decision 038) passes an empty cwd on purpose — the backend just activates Cursor.
+  if (!cwd && ide !== "cursor") return;
   try {
     // sessionId → the extension focuses that exact session's tab (decision 019);
     // cwd/ide → the backend raises the right window. Tauri maps camelCase → snake_case.
@@ -1009,6 +1068,16 @@ async function focusSession(cwd, ide, id) {
 
 async function tick() {
   try {
+    // Refresh the Cursor menu-bar count on a slower cadence than the session poll —
+    // it shells out to osascript (~150ms), so once every few ticks is plenty and
+    // keeps the AX read off the hot path (decision 038). Fail-closed to 0.
+    if (tickCount++ % CURSOR_POLL_EVERY === 0) {
+      try {
+        cursorAttention = await invoke("cursor_attention_count");
+      } catch (_) {
+        cursorAttention = 0;
+      }
+    }
     const sessions = sortSessions(await invoke("list_sessions"));
     latestSessions = sessions;
     checkChimes(sessions); // edge-triggered audio alerts (seeds silently on first tick)

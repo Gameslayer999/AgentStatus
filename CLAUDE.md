@@ -134,6 +134,16 @@ and reassess, not to proceed.
     Before any commit, verify with `git status` that no runtime state, session data, or
     user paths appear.
 
+13. **Keep `README.md` current with the tool.** The README is the user-facing description
+    of what AgentStatus does and how to run it — it must always reflect the tool's actual
+    current state, never a past or planned one. Any change that adds, removes, or alters a
+    user-visible feature, setting, install/uninstall step, supported host, keyboard/mouse
+    interaction, or the download/version details **must update the README in the same
+    change** — document a new feature, drop a removed one, fix a step that no longer
+    matches. A feature the code has but the README doesn't mention is an incomplete task,
+    the same as a missing `DECISIONS.md` entry (#9). Internal-only work (refactors, bug
+    fixes, build-warning cleanup) with no user-visible change needs no README edit.
+
 ---
 
 ## UI Design Principles
