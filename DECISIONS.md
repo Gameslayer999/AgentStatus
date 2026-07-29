@@ -48,6 +48,9 @@
 | 035 | 2026-07-28 | Settings: **audio alerts** — an edge-triggered chime when a session transitions *into* an attention state (blocked/error/done). Master On/Off `.seg` toggle reveals an inline sub-panel (per-state checkboxes + volume), reusing the #015-conditional-row disclosure pattern rather than a separate OS window (which would fight the single hugging NSPanel). Chimes are short WebAudio tones (no bundled asset → no CSP/load concern); off by default (UI Principle #1). `prevChimeState` map fires only on a state *change* and is seeded silently on the first poll so pre-existing blocked sessions don't blast on launch. Frontend-only `localStorage` (`agentstatus.audio`/`.chimes`/`.volume`); never touches the status files | Accepted |
 | 036 | 2026-07-28 | App icon redesign: three glowing status lights (green/orange/red) on a dark Big Sur squircle, replacing the off-brand cyan/yellow swirl. Reproducible SVG master (`docs/icon-master.svg`) → `tauri icon` regenerates the whole set; a 256px export doubles as the README header logo (`docs/logo.png`) | Accepted |
 | 037 | 2026-07-28 | Overlay panel collection-behavior set via `objc2-app-kit` (maintained) instead of `tauri-nspanel`'s deprecated `cocoa`-typed `set_collection_behaviour`, clearing 5 `deprecated` build warnings. Also gate `mod install` to release (it's only called under `#[cfg(not(debug_assertions))]`), clearing the dev-build dead-code warnings. Same window object, same two flags — no behavior change | Accepted |
+| 038 | 2026-07-28 | Cursor fix + menu-bar mirror: (1) stop lock-pruning Cursor sessions — Cursor writes no `~/.claude/ide/*.lock`, so decision-027 pruning deleted every Cursor light the moment any VS Code window was open; Cursor now prunes like Codex (drop when no `Cursor` process, plus the idle backstop). (2) Add a supplementary **Cursor menu-bar pip**: Cursor's live status is renderer-memory-only, but its macOS menu-bar item exposes an aggregate count of composers awaiting the user (its only externally observable attention signal), read via the **Accessibility API directly** (AXExtrasMenuBar → child title, needs only Accessibility not Automation) and rendered as one hollow-ring pip that clicks to activate Cursor — the "done"/attention bit Cursor's hooks don't provide | Accepted |
+| 039 | 2026-07-28 | Sign the app with a stable **self-signed** code-signing identity (`hooks/sign-app.sh`, run by `install.sh`) so macOS Accessibility (TCC) trust survives rebuilds. Ad-hoc signing keys trust to the code hash, which changes every build — invalidating the grant the Cursor pip (038) and fast window-raise (021) need, so trust never stuck during iteration. A stable Designated Requirement (`identifier "com.agentstatus.app" and certificate leaf = H"…"`) makes the grant persist. Revises the "unsigned" decisions 011/024 for local builds; downloaded DMGs are unaffected (self-signed anchor is per-machine) | Accepted |
+| 040 | 2026-07-29 | **Remove Codex and Antigravity support** (reverses #029/#031/#032 for Codex and #033 for Antigravity). Neither host was ever verified against a live install per Guideline #4 — #033 shipped explicitly "Accepted, unverified", and the Codex path leaned on unverifiable inference (a `state_5.sqlite` read, a `pgrep codex` liveness probe, a 10-min bespoke idle timeout) to paper over lifecycle events that may not fire. Unverified hosts can only produce lying lights (UI Principle #4). Removed: both installers' host registrations, `report.sh`'s declared-host `$2` arg and every Codex/Antigravity payload shape, the sqlite fallback and `CODEX_*` timeouts, and their click-to-focus targets. `install.rs` and `setup.mjs` now **clean up** the entries earlier versions wrote to `~/.codex/hooks.json` and `~/.gemini/config/hooks.json`, preserving any other hooks in those files. Supported hosts are Claude Code (VS Code) and Cursor | Accepted |
 
 ---
 
@@ -1660,3 +1663,224 @@ crate now builds with zero warnings.
 when `tauri-nspanel` updates its dependencies, not from anything in this repo. The
 `objc2-app-kit` call path is macOS-only (`#[cfg(target_os = "macos")]`), unchanged from the
 old code.
+
+## 038 — Cursor: fix stale-pruning + mirror the menu-bar attention item
+
+**Date:** 2026-07-28
+**Status:** Accepted (fixes the decision-018 Cursor integration; refines decision-027 pruning)
+
+**Context.** The Cursor integration (decision 018) had stopped producing lights. Diagnosed
+two independent problems, one fatal:
+
+1. **Pruning deleted every Cursor light.** Decision 027 prunes a session the instant its
+   workspace maps to no live `~/.claude/ide/*.lock`. Those lock files are written **only by
+   Claude Code's VS Code extension** — Cursor's native agent writes none (verified: every
+   lock on the machine was `ideName: "Visual Studio Code"`, none Cursor). But
+   `list_sessions` had `ide == "cursor"` in its `uses_ide_locks` set, so a Cursor session's
+   `cwd` matched no live lock and was deleted on the next poll whenever *any* VS Code window
+   was open — i.e. essentially always. The hooks fired correctly (bridged
+   `beforeSubmitPrompt`/`stop` → `report.sh`, exit 0, verified in Cursor's hook logs); the
+   display layer nuked the result a poll later.
+2. **Cursor sessions can never light as "done".** The "done" attention state (decision 014)
+   is `idle && detail != ""`, and `detail` is the turn's wrap-up message. Cursor's bridged
+   `Stop` carries no assistant message (verified by replaying a synthetic Cursor payload
+   through `report.sh` — `detail` came out `""`), so a finished Cursor turn only ever renders
+   as plain dim idle. The user never gets a bright "this Cursor agent is waiting for you" cue.
+
+**What the menu-bar item actually is (investigated in the Cursor 3.12.10 bundle).** The
+user asked to "wire the Cursor menu bar item into the lightbar." Reading `out/main.js`: the
+tray (`TrayMainService`) has only **two** icon states (`trayTemplate` vs `trayNotifyWhite`)
+plus a numeric title showing an **unread notification count**, driven by a per-window
+composer snapshot merged across windows (`hasNotification`/`unreadCount` per composer). It is
+a **notification/attention indicator, not a live "agent working" spinner** — there is no
+running/generating state in the tray. Live status (`chatStatus`: generating/applying/running;
+`composerStatus`: the `BackgroundComposerStatus` enum) lives **only in renderer memory**; the
+persisted `composerData.status` in `state.vscdb` is terminal-only (`none`/`aborted`) and
+stale. So the only externally observable, real-time attention signal Cursor exposes is the
+menu-bar item's aggregate count.
+
+**Options considered.**
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Read the menu-bar count as the *primary* Cursor signal | Simple; robust to internals | Aggregate only (no per-window, no green/running, no click-to-focus a specific session) — a downgrade from VS Code parity |
+| Fix the hooks only | Restores per-session running/idle + click-to-focus | Cursor still never shows a "done"/attention cue (no wrap-up, no permission event) |
+| **Both (chosen)** | Per-session live lights from the (now un-pruned) hooks **and** the menu-bar count as a supplementary attention pip covering the one bit hooks can't | Two mechanisms; the pip needs Accessibility permission |
+
+**Decision.**
+- **Pruning (Rust `list_sessions`):** remove `cursor` from `uses_ide_locks` so Cursor
+  sessions are never lock-pruned. Prune them like Codex instead — dropped when no `Cursor`
+  process is alive (`cursor_running()`, `pgrep -x Cursor`, fails open) — with the existing
+  `MAX_IDLE_SECS` (2h) idle backstop and the `cwd`-gone check still applying. Clean closes are
+  still handled by the bridged `SessionEnd` → file delete.
+- **Menu-bar pip (Rust `cursor_attention_count` + frontend):** a new command reads Cursor's
+  status item via the **Accessibility API directly** — `AXUIElementCreateApplication(pid)` →
+  `AXExtrasMenuBar` → `AXChildren` → the first child whose `AXTitle` carries a digit — and
+  fails **closed to 0** on any error (Cursor not running, item absent, AX not granted). It
+  parses the count from the title `" N"`; it does **not** filter on `AXDescription` (a Swift AX
+  probe showed the item's `AXDescription` is `nil` — AppleScript's "description" was a different
+  attribute; an early cut matched `"status menu"` and always returned 0). Chosen over
+  `osascript → System Events`, which additionally needs the **Automation** permission an
+  unsigned rebuild lacks, so it read nothing. The frontend polls it on a gentle ~20s cadence
+  (see below) and renders **one** pip (`.cursor-pip`, a hollow ring + count badge) as the last bar element when
+  count > 0 — styled unlike a session light so it reads as the Cursor menu-bar mirror, not a
+  specific session. Clicking it activates `Cursor.app` (`focus_session` with an empty `cwd`;
+  the JS `focusSession` no-op-on-empty-cwd guard is relaxed for `ide == "cursor"`). No
+  status-file/schema change — display-only, like the `reviewedAt` map. The frontend polls the
+  count on a **gentle ~20s cadence** — the AX read can dismiss Cursor's own menu-bar popover if
+  it lands while the user has it open (observed live), and the count changes seldom, so a slow
+  poll keeps the pip fresh without interfering with Cursor's menu bar (Guideline #3).
+
+**Reasoning.** The pruning change is the actual fix and restores real per-session Cursor
+lights + click-to-focus at VS Code parity (minus blocked, which Cursor still has no event
+for). The menu-bar pip adds back the only attention signal Cursor exposes externally, so a
+finished/awaiting Cursor composer is glanceable even though its hooks carry no wrap-up — at
+the honest cost of being an aggregate (it never claims to be one session). Reading via the AX
+API needs only the Accessibility grant decision 021 already documents (not Automation), and
+degrades to "no pip" without it, so it never blocks or lies. Making that grant *stick* across
+rebuilds required stable signing — see decision 039.
+
+**Validation.** (1) Wrote a synthetic `ide:"cursor"` session whose `cwd` is a real folder
+*not* in any IDE lock, against the running app: under the old code it vanished within a poll;
+after the fix it **survived** across multiple polls. (2) Replayed synthetic Cursor
+`beforeSubmitPrompt`/`stop` payloads through `report.sh`: correct `ide:"cursor"`, `cwd` from
+`workspace_roots[0]`, running→idle, `detail` empty (confirming the "done" gap). (3) A
+standalone Swift AX probe from a trusted context returned the item's title `" 1"` (and
+`AXDescription = nil`), validating the traversal. (4) With the app signed (decision 039) and
+Accessibility granted, a marker-gated debug log in the running app read `trusted=true count=1`
+and the **pip appeared live** on the bar; trust then **persisted across a rebuild**, confirming
+signing solved the reset loop. **Verified with the user:** the pip shows the Cursor menu-bar
+count. (Per-session Cursor lights still require a folder-open Cursor window — Cursor runs no
+hooks in a folder-less window: `MainThreadShellExec not initialized`.)
+
+## 039 — Stable self-signed code signing so Accessibility trust survives rebuilds
+
+**Date:** 2026-07-28
+**Status:** Accepted (revises the "unsigned" trade-off in decisions 011 and 024, for local builds)
+
+**Context.** The Cursor menu-bar pip (decision 038) reads another app's UI via the
+Accessibility API, which requires AgentStatus to hold a macOS Accessibility (TCC) grant. In
+practice the grant never stuck: after granting, `AXIsProcessTrusted()` still returned `false`,
+so `cursor_attention_count` read 0 and the pip never appeared. Root cause: `tauri build`
+**ad-hoc signs** the app (`flags=0x2 adhoc`), and an ad-hoc signature's Designated Requirement
+(DR) is its **code hash**. Every rebuild produces a new hash → a new DR → macOS treats it as a
+different app and invalidates the prior grant. During iteration each `./install.sh` silently
+reset trust; the user was granting build N while the next build replaced it. Even a single
+grant was fragile (a stale entry pinned to an old hash).
+
+**Options considered.**
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| Keep ad-hoc, re-grant each build | No new machinery | Trust resets every rebuild/update — unusable for a feature that depends on it |
+| `osascript`-only, guide user to grant Automation too | Small | Automation is *also* hash-bound; same reset problem, plus a second permission |
+| **Self-signed identity, sign every build (chosen)** | Stable DR → grant once, persists across all future rebuilds/updates; unblocks free rebuilding | Creates a per-machine keychain cert; revises the unsigned-distribution stance |
+
+**Decision.** `hooks/sign-app.sh` (run by `install.sh` after copying to `/Applications`)
+ensures a self-signed code-signing identity **"AgentStatus Self-Signed"** exists (created once
+via `openssl` with a `codeSigning` EKU, imported into the login keychain with
+`-T /usr/bin/codesign`, trusted for the code-signing policy) and re-signs the bundle with it:
+`codesign --force --deep --sign "AgentStatus Self-Signed"`. The resulting DR is stable —
+`identifier "com.agentstatus.app" and certificate leaf = H"b0c976…"` — so TCC keys on the
+signing identity, not the code hash. Grant Accessibility once and it survives every rebuild.
+Idempotent (reuses the cert; re-signs each time); undo with
+`security delete-identity -c "AgentStatus Self-Signed"`.
+
+**Trade-offs / notes.**
+- **Distribution unchanged.** A self-signed anchor is per-machine and does nothing for
+  Gatekeeper on a *downloaded* copy — those still clear quarantine as decision 024 describes.
+  Signing only stabilizes the on-device identity for TCC on locally-built installs. So this
+  refines 011/024 for the local-build path without changing the download story.
+- **App startup also prompts** for Accessibility (`AXIsProcessTrustedWithOptions`, release
+  only) so the grant is discoverable; combined with stable signing, that prompt appears once.
+- **One-time keychain touch.** Creating/trusting the cert may prompt for the login password
+  once. `install.sh` warns (not fails) if signing can't complete, degrading to ad-hoc.
+- **OpenSSL 3 gotcha:** the PKCS#12 the cert is imported through must be written with `-legacy`
+  and a non-empty transient password, or macOS's `security import` rejects the MAC
+  ("MAC verification failed").
+
+**Validation.** After signing, `codesign --verify --deep --strict` passes and the DR shows the
+stable leaf. `tccutil reset Accessibility com.agentstatus.app` cleared the stale ad-hoc
+entries; a single fresh grant then flipped the running app's marker-gated log to
+`trusted=true count=1` (live, no relaunch), the pip appeared, and — the key result — trust
+**persisted across a subsequent `./install.sh` rebuild** (log still `trusted=true` afterward),
+which ad-hoc never did.
+
+
+---
+
+## 040 — Remove Codex and Antigravity support
+
+**Date:** 2026-07-29
+**Status:** Accepted (reverses #029, #031, #032 for Codex; #033 for Antigravity)
+
+**Context.** AgentStatus shipped four hosts: Claude Code (VS Code), Cursor, Codex, and
+Antigravity. Only the first two were ever verified against a live install. Guideline #4
+requires confirming an event actually fires with the expected shape before building on it,
+and decision #033 was logged as **"Accepted, unverified"** in its own status column. The
+Codex path was built on inference rather than observation too: because its lifecycle events
+could not be relied on, the display layer compensated with a `~/.codex/state_5.sqlite`
+read, a `pgrep -x codex` liveness probe, and a bespoke 10-minute idle timeout — three
+mechanisms whose only purpose was to guess at a signal the hooks weren't confirmed to
+deliver.
+
+An unverified host cannot produce a trustworthy light, and a wrong light is worse than no
+light (UI Principle #4). Carrying both also spread host-specific branching through every
+layer — the hook's jq program, the pruning logic, click-to-focus, and both installers.
+
+**Options considered.**
+
+| Option | Pros | Cons |
+|---|---|---|
+| Keep as-is | No work; the code exists | Ships unverified hosts that can show wrong state; host branching taxes every future change to the hook and the pruner |
+| Keep the code but gate it behind a setting | Reversible without a re-implementation | Same unverified lights, now with a switch; more surface, not less |
+| **Remove, and clean up prior installs** (chosen) | Every remaining light comes from a verified host; the hook and pruner drop back to the Claude/Cursor shapes; no orphaned hooks left behind | Re-adding either host means re-implementing it — deliberately, against a live install |
+
+**Decision.** Remove both hosts, and have the installers clean up what earlier versions
+wrote.
+
+- **`hooks/report.sh`** — dropped the declared-host `$2` argument (no host besides Claude and
+  Cursor is registered now, and Cursor is sniffed from `cursor_version` in the payload), the
+  Codex thread/conversation id fallbacks, the `env.PWD` cwd fallback, the
+  `PreInvocation`/`PostInvocation` state mappings, Antigravity's `workspacePaths[]` /
+  `toolCall.*` payload shapes and its aliased tool names, the camelCase
+  `lastAssistantMessage`/`message` fallbacks, and the `<USER_REQUEST>` unwrap. This also
+  removes the transcript read and its `python3` spawn — **the hook no longer reads any
+  transcript at all**, which is the stronger form of Guideline #5.
+- **`hooks/setup.mjs` and `app/src-tauri/src/install.rs`** — install into
+  `~/.claude/settings.json` only.
+- **`app/src-tauri/src/lib.rs`** — removed `read_codex_threads` and the sqlite read,
+  `codex_running`, `label_from_cwd_or_title`, `CODEX_ACTIVE_SECS`/`CODEX_IDLE_SECS`, the
+  Codex/Antigravity pruning branches, and their `focus_session`/`raise_window_fast` targets.
+  Every session now prunes on the single `MAX_IDLE_SECS` backstop plus its host's liveness
+  rule (IDE locks for vscode, process liveness for cursor).
+
+**Cleanup of prior installs.** Deleting the install code alone would strand hook entries in
+`~/.codex/hooks.json` and `~/.gemini/config/hooks.json` on any machine that ran an earlier
+build — they would keep invoking `report.sh` from a host it no longer understands, writing
+status files that produce exactly the mislabeled lights this decision removes. Both
+installers therefore run a cleanup on install *and* uninstall: Codex entries are filtered
+out of its Claude-shaped `hooks` map by the same `report.sh` marker the installer uses, and
+Antigravity's top-level `agentstatus` key is deleted. Neither path creates a file that
+isn't already present, and hooks belonging to anything else in those files are preserved
+(Guideline #3: idempotent, reversible, non-clobbering).
+
+**Trade-offs / notes.**
+- **History preserved.** Decisions #029/#031/#032/#033 stay in this file. They record what
+  was tried and what was learned about each host's lifecycle — the input any future
+  re-implementation should start from.
+- **Reinstating a host is deliberate work.** That is the point: it should mean logging real
+  events from a real session first (Guideline #4), not restoring code.
+- **Validation.** `cargo check` clean in both debug and release (release compiles
+  `install.rs`; the only warning is the pre-existing upstream `block v0.1.6` notice).
+  `report.sh` re-verified end to end against a scratch `$AGENTSTATUS_DIR`: running →
+  blocked → idle for Claude, plus a Cursor `beforeSubmitPrompt` producing `ide:"cursor"`
+  with the workspace from `workspace_roots[]`, and `SessionEnd` removing the file. **Both**
+  installers were then exercised against a throwaway `$HOME` seeded with an old install —
+  `setup.mjs` directly, and `install.rs` through a scratch binary compiling the real file
+  (byte-identical but for the `include_str!` path, since the module is release-gated inside
+  the Tauri crate). Same result from each: our Codex and Antigravity entries removed, a
+  foreign hook in the same `~/.codex/hooks.json`, a sibling `otherSetting` key, and an
+  unrelated `otherplugin` key in the Antigravity config all preserved, emptied event keys
+  dropped, a second run a no-op, and a run with neither legacy file present creating
+  nothing.

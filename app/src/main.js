@@ -705,7 +705,7 @@ function render(sessions) {
     if (!emptyEl) {
       emptyEl = document.createElement("div");
       emptyEl.className = "dot empty";
-      emptyEl.title = "No active Claude Code, Codex, or Cursor sessions";
+      emptyEl.title = "No active Claude Code or Cursor sessions";
       emptyEl.setAttribute("data-tauri-drag-region", "");
       lights.appendChild(emptyEl);
       sizeChanged = true;

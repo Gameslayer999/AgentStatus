@@ -3,7 +3,6 @@
 // exposes them to the frontend via the `list_sessions` command.
 
 use serde::Serialize;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use tauri::Manager;
 #[cfg(target_os = "macos")]
@@ -30,7 +29,7 @@ struct SessionStatus {
     updated_at: i64,
     task: String,
     detail: String,
-    /// Host surface ("cursor", "vscode", or "codex"), from the hook — drives click-to-focus.
+    /// Host surface ("cursor" or "vscode"), from the hook — drives click-to-focus.
     ide: String,
     /// agent_type of each currently-running subagent under this session.
     subagents: Vec<String>,
@@ -41,19 +40,6 @@ struct SessionStatus {
 /// long enough that a session you're actively dealing with (even blocked/errored,
 /// which emit no further events while waiting) won't vanish out from under you.
 const MAX_IDLE_SECS: i64 = 2 * 60 * 60;
-
-/// Codex state updates frequently while a turn is active. When lifecycle hooks
-/// are not yet trusted/loaded for an already-running thread, this window keeps the
-/// synthesized Codex light green during live work and lets it settle back to idle
-/// shortly after updates stop.
-const CODEX_ACTIVE_SECS: i64 = 20;
-
-/// Codex emits no signal at all when a conversation is opened or closed (its hook
-/// set has no SessionEnd, and both `updated_at` and `recency_at` in its state DB
-/// advance only on turn starts — verified against Codex source, decision 032). A
-/// closed conversation can therefore only expire by timeout: a Codex light with no
-/// turn activity for this long is dropped. It reappears on the thread's next turn.
-const CODEX_IDLE_SECS: i64 = 10 * 60;
 
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
@@ -191,99 +177,22 @@ fn read_subagents(dir: &std::path::Path, id: &str) -> Vec<String> {
     out
 }
 
-fn codex_state_db() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".codex").join("state_5.sqlite")
-}
-
-/// Whether any Codex process is alive (the IDE extension's `codex app-server` and
-/// the terminal TUI share the process name `codex`). No process ⇒ every Codex
-/// light is stale and dropped immediately. Fails open: if pgrep itself can't run,
-/// we keep the lights rather than nuke them on a bad read.
-fn codex_running() -> bool {
+/// Whether the Cursor app is alive. Cursor sessions are NOT tracked by the
+/// `~/.claude/ide/*.lock` files (only Claude Code's VS Code extension writes those),
+/// so lock-pruning would nuke every Cursor light the moment any VS Code window is
+/// open. Instead, Cursor lights are dropped when Cursor itself has quit (no process).
+/// Fails open (keep the lights) if pgrep can't run.
+fn cursor_running() -> bool {
     std::process::Command::new("pgrep")
-        .args(["-x", "codex"])
+        .args(["-x", "Cursor"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(true)
 }
 
-fn label_from_cwd_or_title(cwd: &str, title: &str) -> String {
-    std::path::Path::new(cwd)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| if s == "ClaudeStatus" { "AgentStatus" } else { s }.to_string())
-        .or_else(|| {
-            let t = title.trim();
-            if t.is_empty() { None } else { Some(t.to_string()) }
-        })
-        .unwrap_or_else(|| "Codex".to_string())
-}
-
-/// Best-effort Codex fallback. Hooks are the preferred signal, but Codex may not
-/// run newly-installed hooks until the user reviews/trusts them or starts a fresh
-/// thread. The local state DB still exposes recent thread activity, so synthesize a
-/// coarse Codex light from it when no hook status file exists for that thread.
-fn read_codex_threads(now: i64, seen: &HashSet<String>, codex_alive: bool) -> Vec<SessionStatus> {
-    if !codex_alive {
-        return Vec::new();
-    }
-    let db = codex_state_db();
-    if !db.exists() {
-        return Vec::new();
-    }
-    let Some(db_str) = db.to_str() else {
-        return Vec::new();
-    };
-    let cutoff = now - CODEX_IDLE_SECS;
-    let query = format!(
-        "select id, updated_at, cwd, title from threads where updated_at > {cutoff} and archived = 0 order by updated_at desc limit 20;"
-    );
-    let Ok(output) = std::process::Command::new("/usr/bin/sqlite3")
-        .args(["-readonly", "-separator", "\t", db_str, &query])
-        .output()
-    else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let mut parts = line.splitn(4, '\t');
-        let id = parts.next().unwrap_or("").to_string();
-        if id.is_empty() || seen.contains(&id) {
-            continue;
-        }
-        let updated_at = parts.next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-        let cwd = parts.next().unwrap_or("").to_string();
-        let title = parts.next().unwrap_or("").to_string();
-        let state = if now - updated_at <= CODEX_ACTIVE_SECS {
-            "running"
-        } else {
-            "idle"
-        };
-        out.push(SessionStatus {
-            id,
-            state: state.to_string(),
-            cwd: cwd.clone(),
-            label: label_from_cwd_or_title(&cwd, &title),
-            updated_at,
-            task: title,
-            detail: if state == "running" { "Codex activity".to_string() } else { String::new() },
-            ide: "codex".to_string(),
-            subagents: Vec::new(),
-        });
-    }
-    out
-}
-
 #[tauri::command]
 fn list_sessions() -> Vec<SessionStatus> {
     let mut out = Vec::new();
-    let mut seen = HashSet::new();
     let now = now_unix();
     let dir = sessions_dir();
     // Workspace folders of the currently-open IDE windows. A session whose folder
@@ -291,7 +200,7 @@ fn list_sessions() -> Vec<SessionStatus> {
     // ghost), so its light is stale (decision 027). Empty ⇒ no liveness signal, so
     // lock-pruning is skipped below and only the idle timeout applies.
     let live_folders = live_workspace_folders();
-    let codex_alive = codex_running();
+    let cursor_alive = cursor_running();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -319,22 +228,21 @@ fn list_sessions() -> Vec<SessionStatus> {
             //   (b) cwd path gone — covers renamed/deleted project folders.
             //   (c) unclean death with the window still open, or a superseded session
             //       sharing a live window's lock: silent past MAX_IDLE_SECS (decision 004).
-            //   (d) Codex-specific (decision 032): Codex signals neither conversation
-            //       close nor app quit, so its lights expire on the short CODEX_IDLE_SECS
-            //       timeout and drop instantly when no codex process is alive.
+            //   (d) Cursor-specific (decision 038): Cursor writes NO ~/.claude/ide/*.lock,
+            //       so it must NOT be lock-pruned (that deleted every Cursor light the
+            //       moment any VS Code window was open). Its clean-close is covered by the
+            //       bridged SessionEnd; unclean death by dropping all Cursor lights when
+            //       Cursor has quit, plus the MAX_IDLE_SECS backstop.
             let ide = v.get("ide").and_then(|x| x.as_str()).unwrap_or("vscode");
-            let uses_ide_locks = ide == "vscode" || ide == "cursor" || ide == "antigravity";
-            let window_gone = uses_ide_locks && !live_folders.is_empty() && !cwd_is_live(cwd, &live_folders);
+            let window_gone = ide == "vscode" && !live_folders.is_empty() && !cwd_is_live(cwd, &live_folders);
             let cwd_gone = !cwd.is_empty() && !std::path::Path::new(cwd).exists();
-            let idle_limit = if ide == "codex" { CODEX_IDLE_SECS } else { MAX_IDLE_SECS };
-            let codex_gone = ide == "codex" && !codex_alive;
-            if window_gone || cwd_gone || codex_gone || now - updated_at > idle_limit {
+            let cursor_gone = ide == "cursor" && !cursor_alive;
+            if window_gone || cwd_gone || cursor_gone || now - updated_at > MAX_IDLE_SECS {
                 let _ = std::fs::remove_file(&path);
                 let _ = std::fs::remove_dir_all(dir.join(format!("{id}.subagents")));
                 continue;
             }
             let subagents = read_subagents(&dir, &id);
-            seen.insert(id.clone());
             out.push(SessionStatus {
                 id,
                 state: v.get("state").and_then(|x| x.as_str()).unwrap_or("idle").to_string(),
@@ -348,7 +256,6 @@ fn list_sessions() -> Vec<SessionStatus> {
             });
         }
     }
-    out.extend(read_codex_threads(now, &seen, codex_alive));
     // Stable order: by folder label, then id, so lights don't reshuffle each poll.
     out.sort_by(|a, b| a.label.cmp(&b.label).then_with(|| a.id.cmp(&b.id)));
     out
@@ -443,15 +350,7 @@ fn raise_window_fast(root: &str, ide: &str) {
     if name.is_empty() {
         return;
     }
-    // Codex runs as the openai.chatgpt extension inside VS Code — there is no
-    // standalone Codex app to raise, so its lights target VS Code windows too.
-    let proc = if ide == "cursor" {
-        "Cursor"
-    } else if ide == "antigravity" {
-        "Antigravity IDE"
-    } else {
-        "Code"
-    };
+    let proc = if ide == "cursor" { "Cursor" } else { "Code" };
     // Escape for an AppleScript double-quoted string literal.
     let esc = name.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!(
@@ -485,15 +384,19 @@ fn raise_window_fast(root: &str, ide: &str) {
 fn focus_session(cwd: String, ide: String, session_id: String) {
     // Focus the exact session tab via the extension relay (decision 015); the window
     // raise below only gets us to the right *window*. Written first so the extension
-    // can pick it up while / right after the window comes forward. Codex sessions
-    // are not Claude sessions, so the relay can't focus them — skip the request and
-    // land on the VS Code window holding the thread's workspace (decision 032).
-    if ide != "codex" {
-        write_focus_request(&session_id);
-    }
+    // can pick it up while / right after the window comes forward.
+    write_focus_request(&session_id);
     #[cfg(target_os = "macos")]
     {
         if cwd.is_empty() {
+            // The aggregate Cursor menu-bar pip (decision 038) has no specific window
+            // to focus — just bring Cursor forward so the user can open the composer
+            // that's awaiting them.
+            if ide == "cursor" {
+                let _ = std::process::Command::new("open")
+                    .args(["-a", "Cursor"])
+                    .spawn();
+            }
             return;
         }
         let root = workspace_root(&cwd);
@@ -505,11 +408,6 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
             (
                 "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
                 "Cursor",
-            )
-        } else if ide == "antigravity" {
-            (
-                "/Applications/Antigravity IDE.app/Contents/Resources/app/bin/antigravity-ide",
-                "Antigravity IDE",
             )
         } else {
             (
@@ -535,6 +433,172 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+/// The PID of the running Cursor app (its main process is `Cursor`), or None. Used to
+/// root the Accessibility query at Cursor's app element.
+#[cfg(target_os = "macos")]
+fn cursor_pid() -> Option<i32> {
+    let out = std::process::Command::new("pgrep")
+        .args(["-x", "Cursor"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse::<i32>().ok())
+}
+
+/// Copy an AX attribute off an element and return it as a CoreFoundation type
+/// (auto-released on drop). None if the attribute is missing or the call errors.
+#[cfg(target_os = "macos")]
+fn ax_attr(
+    element: accessibility_sys::AXUIElementRef,
+    name: &str,
+) -> Option<core_foundation::base::CFType> {
+    use accessibility_sys::{kAXErrorSuccess, AXUIElementCopyAttributeValue};
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::string::CFString;
+    let attr = CFString::new(name);
+    let mut value: core_foundation::base::CFTypeRef = std::ptr::null();
+    let err = unsafe {
+        AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value)
+    };
+    if err != kAXErrorSuccess || value.is_null() {
+        return None;
+    }
+    // CopyAttributeValue follows the CF "create" rule (+1 retain) → wrap so Drop releases it.
+    Some(unsafe { CFType::wrap_under_create_rule(value) })
+}
+
+/// The count of digits found in an AX element's `AXTitle` (`" 1"` → 1), or None if the
+/// title is absent or has no digits.
+#[cfg(target_os = "macos")]
+fn ax_title_count(element: accessibility_sys::AXUIElementRef) -> Option<i64> {
+    use core_foundation::string::CFString;
+    let title = ax_attr(element, "AXTitle")?.downcast::<CFString>()?.to_string();
+    let digits: String = title
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<i64>().ok()
+}
+
+/// Ask macOS for Accessibility trust, showing the system prompt if not already granted
+/// (and opening the Accessibility settings pane). Needed for the Cursor menu-bar read
+/// (decision 038) and the fast window-raise (decision 021). Because the app is unsigned
+/// (ad-hoc), every rebuild changes its code hash and invalidates a prior grant — so a
+/// stale "AgentStatus" entry can read as checked while `AXIsProcessTrusted()` is false;
+/// prompting re-registers the current bundle. Safe to call once at startup: the prompt
+/// only appears while untrusted, never after the grant.
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+fn prompt_accessibility() {
+    use accessibility_sys::{kAXTrustedCheckOptionPrompt, AXIsProcessTrustedWithOptions};
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+    let key = unsafe { CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt) };
+    let opts =
+        CFDictionary::from_CFType_pairs(&[(key.as_CFType(), CFBoolean::true_value().as_CFType())]);
+    unsafe { AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef()) };
+}
+
+/// Read Cursor's macOS menu-bar status item and return how many Cursor composers are
+/// awaiting the user's attention (decision 038). Cursor's live running/idle status is
+/// renderer-memory-only, but its menu-bar item surfaces an aggregate **unread
+/// notification count** — its AX title is `" N"` (icon glyph + count), which flips on
+/// when a composer finishes / awaits you. That's the one attention bit Cursor's hooks
+/// don't provide (the bridged `Stop` carries no wrap-up message, so Cursor sessions
+/// otherwise render as plain dim idle, never "done").
+///
+/// Read via the **Accessibility API directly** (not osascript → System Events): the AX
+/// call only needs the Accessibility grant the app already uses for the fast
+/// window-raise (decision 021), whereas the System Events route would additionally need
+/// the separate Automation permission. Path: Cursor's app element → `AXExtrasMenuBar`
+/// (the right-hand status-item bar) → its children → the first child whose `AXTitle`
+/// carries a digit. (The status item exposes a nil `AXDescription`, so we match on the
+/// numeric title, not a description — Cursor's extras bar holds only this one item.)
+/// Best-effort, fail-*closed* to 0 (no cue) on any error: Cursor not running, AX not
+/// granted, item absent, or a non-numeric title.
+/// Marker-gated debug log: writes only when `~/.claude/status/cursor-debug` exists, so
+/// it's silent in normal use but can be switched on (touch the marker) to trace the AX
+/// read without a rebuild. Used to diagnose the decision-038/039 trust chain.
+#[cfg(target_os = "macos")]
+fn cdbg(msg: &str) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let dir = std::path::PathBuf::from(home).join(".claude").join("status");
+    if !dir.join("cursor-debug").exists() {
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("cursor-debug.log"))
+    {
+        let _ = writeln!(f, "{} {}", now_unix(), msg);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn cursor_attention_count() -> i64 {
+    let n = cursor_attention_count_inner();
+    cdbg(&format!(
+        "trusted={} count={n}",
+        unsafe { accessibility_sys::AXIsProcessTrusted() }
+    ));
+    n
+}
+
+#[cfg(target_os = "macos")]
+fn cursor_attention_count_inner() -> i64 {
+    use accessibility_sys::{AXUIElementCreateApplication, AXUIElementRef};
+    use core_foundation::array::CFArray;
+    use core_foundation::base::{CFType, TCFType};
+
+    let Some(pid) = cursor_pid() else {
+        return 0;
+    };
+    // Root the query at Cursor's app element (create rule → wrap for auto-release).
+    let app_ref = unsafe { AXUIElementCreateApplication(pid) };
+    if app_ref.is_null() {
+        return 0;
+    }
+    let app = unsafe { CFType::wrap_under_create_rule(app_ref as _) };
+    let app_ref = app.as_CFTypeRef() as AXUIElementRef;
+
+    // The status items live under the app's "extras" menu bar (AppleScript's "menu bar 2").
+    let Some(extras) = ax_attr(app_ref, "AXExtrasMenuBar") else {
+        return 0;
+    };
+    let extras_ref = extras.as_CFTypeRef() as AXUIElementRef;
+    let Some(children) = ax_attr(extras_ref, "AXChildren") else {
+        return 0;
+    };
+    let Some(items) = children.downcast::<CFArray>() else {
+        return 0;
+    };
+    // Return the count from the first status item whose title carries a digit.
+    for item in items.iter() {
+        if let Some(n) = ax_title_count(*item as AXUIElementRef) {
+            return n;
+        }
+    }
+    0
+}
+
+// Non-macOS stub so the command is always registered and the frontend can call it
+// unconditionally; there is no Cursor menu-bar item to read off macOS.
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn cursor_attention_count() -> i64 {
+    0
 }
 
 /// Switch the bar between its two presentations (decision 024). Floating = the
@@ -652,12 +716,20 @@ pub fn run() {
             focus_session,
             set_mode,
             set_tray_image,
+            cursor_attention_count,
             quit_app
         ])
         .setup(|app| {
             // Accessory (agent) app: no Dock icon, not space-managed.
             #[cfg(target_os = "macos")]
             let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            // Request Accessibility trust (shows the system prompt only while untrusted).
+            // Needed for the Cursor menu-bar read (decision 038) and the fast window-raise
+            // (decision 021); an unsigned rebuild invalidates the prior grant, so prompting
+            // re-registers the current bundle. Release only — dev builds aren't the copy the
+            // user grants, and prompting from `tauri dev` would nag on every run.
+            #[cfg(all(target_os = "macos", not(debug_assertions)))]
+            prompt_accessibility();
             // Menu-bar tray item (decision 024). Built once here (on the main thread)
             // but hidden until the frontend switches to menu-bar mode via `set_mode`.
             // Colored (not template) so the status dots show in color; left-click is

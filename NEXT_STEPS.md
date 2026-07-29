@@ -7,42 +7,56 @@
 
 ## Current state
 
-- **Antigravity IDE support shipped, but UNVERIFIED (decision 033).** The bar now installs
-  hooks into `~/.gemini/config/hooks.json` and renders `ide:"antigravity"` lights. This
-  landed in `3195f11` without a decision entry or an observed event log; 033 documents it
-  retroactively. **Its event names, payload fields, hook-config schema, and transcript path
-  are all guesses until confirmed against a live Antigravity session (Guideline #4)** — see
-  "Now" below. Known gaps: no permission/failure event is registered, so Antigravity lights
-  can only be green/gray (never orange/red), and the `PostInvocation` mapping is dead code.
-  Fixed on the way in: the transcript read is now gated on the antigravity host — ungated it
-  was spawning `python3` over the real Claude transcript on **every Claude prompt submit**
-  (137 ms → 39 ms per turn, ~98 ms saved; the result was always discarded).
-- **Codex open/close lifecycle fixed (decision 032).** Verified against the installed
-  `openai.chatgpt` extension binary and the `openai/codex` source: Codex emits **no signal**
-  on conversation open or close (no `SessionEnd` hook; `SessionStart` deferred to the first
-  turn; DB timestamps advance only on turn starts) — a dot at first prompt is the earliest
-  Codex allows. Fixes shipped: installers pass an explicit `codex` arg to `report.sh`
-  (payloads are Claude-shaped, the #029 sniffing heuristics never fired — live sessions were
-  mislabeled `ide:"vscode"`); Codex lights expire after **10 min** idle instead of 2h, drop
-  instantly when no `codex` process is alive, and skip archived threads; click-to-focus now
-  targets the VS Code window (`open -a Codex` was a no-op — no such app). Rebuilt + reinstalled
-  via `./install.sh`; `~/.codex/hooks.json` rewritten with the arg. **Watch for:** an
-  open-but-idle Codex conversation's dot also fades at 10 min (reappears on its next turn) —
-  revisit the window if that annoys in practice.
-- **Cursor support added (decision 018) — in verification.** Cursor's native agent is now
-  tracked on the same bar: Cursor bridges Claude Code hooks (runs `~/.claude/status/report.sh`
-  from `~/.claude/settings.json`), so running/idle/error/remove work for free; native
-  `~/.cursor/hooks.json` entries ([hooks/cursor-setup.mjs](hooks/cursor-setup.mjs)) add
-  `subagentStart/Stop` + `postToolUseFailure` (the events the bridge drops). `report.sh` now
-  handles Cursor payloads (`workspace_roots` cwd, camelCase events, `Stop.status` error,
-  `empty-state-draft` skip) and writes an `ide` field driving per-IDE click-to-focus. **Two
-  things left:** (1) a live **folder-open** Cursor run to confirm end-to-end — Cursor runs
-  **no** hooks in a folder-less window (`MainThreadShellExec not initialized`); (2) rebuild the
-  app + port `cursor-setup.mjs` into `install.rs` so the packaged app self-installs the Cursor
-  hooks and the running bar reads `ide`. Verification tooling
+- **Codex and Antigravity support removed (decision 040).** Supported hosts are now **Claude
+  Code (VS Code)** and **Cursor** — the two ever verified against a live install. Neither
+  removed host was: #033 shipped explicitly "Accepted, unverified", and the Codex path
+  compensated for unconfirmed lifecycle events with a `state_5.sqlite` read, a `pgrep codex`
+  probe, and a bespoke 10-min idle timeout. Removed from both installers, `report.sh` (the
+  declared-host `$2` arg and every Codex/Antigravity payload shape — **the hook now reads no
+  transcript at all**, so its `python3` spawn is gone too), and `lib.rs` (`read_codex_threads`,
+  `codex_running`, `CODEX_*` timeouts, both click-to-focus targets). Both installers now
+  **clean up** the entries earlier versions wrote to `~/.codex/hooks.json` and
+  `~/.gemini/config/hooks.json`, leaving any other hooks in those files intact. Re-adding
+  either host means observing real events first (Guideline #4), not restoring code.
+- **Cursor stale-pruning fixed + menu-bar pip added (decision 038).** The Cursor integration
+  had gone dark: decision-027 pruning treated Cursor as writing `~/.claude/ide/*.lock` files
+  (it writes none — only Claude Code's VS Code extension does), so every Cursor light was
+  deleted the moment any VS Code window was open. Fixed: Cursor is no longer lock-pruned; it
+  is dropped when no `Cursor` process is alive, plus the 2h idle backstop.
+  Also added a **Cursor menu-bar pip** — Cursor's live status is renderer-memory-only, but its
+  macOS menu-bar item exposes an aggregate count of composers awaiting the user; a new Rust
+  command (`cursor_attention_count`) reads it via the **Accessibility API directly** (not
+  osascript — that needs Automation an unsigned rebuild lacks) and the frontend renders one
+  hollow-ring pip with the count, covering the "done"/attention cue Cursor's hooks can't (its
+  bridged `Stop` carries no wrap-up message). Clicking the pip activates Cursor. **Verified
+  live with the user** (`trusted=true count=1`, pip visible, click works). Getting the
+  Accessibility grant to *stick* required **stable self-signing (decision 039)** — `install.sh`
+  now re-signs each build with a per-machine self-signed cert, so trust persists across
+  rebuilds instead of resetting every time.
+- **Known Cursor 3.12 issue — hooks don't execute (`MainThreadShellExec not initialized`).**
+  Observed live 2026-07-28 on Cursor 3.12.10: a **folder-open** local agent (NinthWave,
+  `is_background_agent:false`) fired `sessionStart`/`beforeSubmitPrompt`/`stop` but every hook
+  failed with `Error: MainThreadShellExec not initialized` (or didn't fire at all), so
+  `report.sh` never ran → no `ide:"cursor"` session file → no green light. Proven NOT our bug:
+  `report.sh` ran fine dozens of times for Claude Code in the same window and wrote correct
+  `state=running ide=cursor` files in isolation; the app renders a green light the instant a
+  cursor file exists. This is a Cursor-side shell-exec defect (a window `Reload` did not clear
+  it; a full ⌘Q restart of Cursor is the usual fix). Nothing to change in AgentStatus — green
+  appears automatically once Cursor executes the hook. (Also confirmed: **cloud/background**
+  Cursor agents run remotely (`/home/ubuntu`, `background-composer+bc-…`) and fire no local
+  hooks at all — the menu-bar pip is their only possible signal.)
+- **Cursor support (decision 018) — the signal layer.** Cursor bridges Claude Code hooks (runs
+  `~/.claude/status/report.sh` from `~/.claude/settings.json`), so running/idle/remove work for
+  free; native `~/.cursor/hooks.json` entries ([hooks/cursor-setup.mjs](hooks/cursor-setup.mjs))
+  add `subagentStart/Stop` + `postToolUseFailure` (the events the bridge drops). `report.sh`
+  handles Cursor payloads (`workspace_roots` cwd, camelCase events, `empty-state-draft` skip)
+  and writes an `ide` field driving per-IDE click-to-focus. Verification tooling
   ([hooks/cursor-log-events.sh](hooks/cursor-log-events.sh),
   [hooks/cursor-logger-setup.mjs](hooks/cursor-logger-setup.mjs)) kept for future Cursor
-  versions. Blocked (orange) is unavailable on Cursor (no event).
+  versions. Blocked (orange) is unavailable on Cursor (no event); the menu-bar pip (038) now
+  supplies the attention/"done" signal instead. **Still open:** port `cursor-setup.mjs` into
+  `install.rs` so the packaged app self-installs the native Cursor hooks (today they're
+  installed via `node hooks/cursor-setup.mjs install`).
 - **Milestones 1–6 done — v1 complete.** Two shipping surfaces off one signal layer:
   (1) `/Applications/AgentStatus.app` — floating always-on-top bar of all sessions; self-
   installs its hooks on launch. (2) The **VS Code extension** — per-window status-bar items.
@@ -179,15 +193,12 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
    (UI Design Principle #3).
 8. **Stretch — polish.** Position persistence across reboots, per-session titles in labels,
    configurable colors/size, optional pulse animation on blocked.
-10. **Verify Antigravity against a live session (decision 033) — Guideline #4.** The whole
-    integration is built on unobserved assumptions. Run a real Antigravity session with the
-    hooks installed and confirm, in order: (a) the hooks actually fire from the `agentstatus`
-    key in `~/.gemini/config/hooks.json`; (b) the event names (`PreInvocation`, `Stop`, …);
-    (c) the payload fields (`workspacePaths[]`, `toolCall.name`, `toolCall.args.*`); (d) the
-    transcript path and its `USER_INPUT` / `<USER_REQUEST>` shape — the
-    `_full.jsonl`-then-`.jsonl` fallback is a guess. Then decide whether Antigravity exposes
-    a permission-request or turn-failure event; without one its lights can never go
-    orange/red, which quietly breaks UI Principle #2 for that host.
+10. **If Codex or Antigravity is wanted back, verify it first (decision 040, Guideline #4).**
+    Both were removed as unverified. Re-adding one starts with a real session and a logged
+    event stream — confirm which events fire, their payload shapes, and where the host writes
+    its hook config — *then* write code against what was observed. Also settle up front
+    whether the host emits a permission-request or turn-failure event: without one its lights
+    can never go orange/red, which quietly breaks UI Principle #2 for that host.
 9. ✅ **Extension parity — "done" light (decision 014).** *Done 2026-07-06.* The VS Code
    extension now mirrors the bar: a finished-but-unreviewed turn (`idle && detail`) renders at
    full brightness, acknowledged idle is dimmed (`disabledForeground`); click-to-focus also
@@ -207,6 +218,44 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 ---
 
 ## Recently completed
+
+- **2026-07-29** — **Removed Codex and Antigravity support (decision 040).** Both hosts were
+  built on unverified event contracts — #033 shipped as "Accepted, unverified", and the Codex
+  path substituted a `state_5.sqlite` read, a `pgrep codex` liveness probe, and a bespoke
+  10-min idle timeout for lifecycle events that were never confirmed to fire. An unverified
+  host can only produce lying lights (UI Principle #4). Stripped from `report.sh` (the
+  declared-host `$2` arg, Codex id/`env.PWD` fallbacks, `PreInvocation`/`PostInvocation`,
+  Antigravity's `workspacePaths[]`/`toolCall.*` shapes and aliased tool names, the
+  `<USER_REQUEST>` unwrap **and the whole transcript read + `python3` spawn**), from
+  `setup.mjs`/`install.rs` (Claude-only install now), and from `lib.rs`
+  (`read_codex_threads`, `codex_running`, `label_from_cwd_or_title`, `CODEX_ACTIVE_SECS`/
+  `CODEX_IDLE_SECS`, both hosts' pruning and click-to-focus branches). Both installers now
+  clean up the entries earlier versions wrote to `~/.codex/hooks.json` and
+  `~/.gemini/config/hooks.json`, preserving other hooks in those files and never creating a
+  file that isn't there. Verified: `cargo check` clean in debug **and** release; `report.sh`
+  smoke-tested running→blocked→idle→SessionEnd for Claude plus a Cursor
+  `beforeSubmitPrompt` (`ide:"cursor"`, cwd from `workspace_roots[]`); installer exercised
+  against a throwaway `$HOME` seeded with an old install (our entries removed, a foreign
+  `~/.codex/hooks.json` hook and an unrelated `otherplugin` key both survived, nothing
+  created when the files were absent). README and DECISIONS updated.
+
+- **2026-07-28** — **Fixed the dead Cursor integration + added a menu-bar pip (decision 038).**
+  Root cause the old integration produced no lights: the bar's decision-027 pruning treated
+  Cursor as writing `~/.claude/ide/*.lock` files, but only Claude Code's VS Code extension does
+  — so a Cursor session's `cwd` matched no live lock and was deleted every poll whenever any VS
+  Code window was open (confirmed: all locks on the machine were `ideName: Visual Studio Code`).
+  Fixed in `app/src-tauri/src/lib.rs`: removed `cursor` from `uses_ide_locks`, added
+  `cursor_running()` (`pgrep -x Cursor`) so Cursor lights drop when Cursor quits, keeping the 2h
+  idle backstop. Investigated the actual menu-bar item (Cursor 3.12.10 bundle): it's a
+  notification/unread-count indicator, **not** a live spinner (two icon states + a count from a
+  composer snapshot; live status is renderer-memory-only). So added `cursor_attention_count`
+  (reads the item's AX title via `osascript`, fails closed to 0) and a frontend hollow-ring pip
+  (`.cursor-pip`) showing the count of composers awaiting the user — the "done"/attention cue
+  Cursor's hooks can't give (bridged `Stop` has no wrap-up, verified). Pip click activates
+  `Cursor.app`. Verified: synthetic non-lock Cursor session now survives pruning in the running
+  app; `report.sh` tags `ide:"cursor"` correctly; the exact `osascript` returns the count.
+  Rebuilt + reinstalled via `install.sh`. `README.md`/`DECISIONS.md` updated. **Left to verify
+  live:** a real Cursor agent run + the pip after re-granting Accessibility.
 
 - **2026-07-28** — **Cleared build warnings (decision 037).** `cargo build` / `tauri dev`
   emitted a batch of warnings; all are gone from the `app` crate now. (1) Gated

@@ -1,7 +1,7 @@
 [package]
 name = "app"
 version = "0.4.2"
-description = "AgentStatus — a floating light bar for Claude Code, Codex, and Cursor session status"
+description = "AgentStatus — a floating light bar for Claude Code and Cursor session status"
 authors = ["you"]
 edition = "2021"
 
@@ -34,3 +34,9 @@ libc = "0.2"
 # objc2-app-kit API instead of tauri-nspanel's deprecated `cocoa`-typed setter.
 # Pinned to the version Tauri already pulls in transitively (no extra copy).
 objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder"] }
+# Read Cursor's menu-bar status item via the Accessibility API directly (decision
+# 038) — needs only the Accessibility grant the app already uses, not the separate
+# Automation permission that osascript → System Events would require. Versions pinned
+# to what's already resolved so no duplicate CoreFoundation copy is pulled in.
+accessibility-sys = "0.2"
+core-foundation = "0.10"
