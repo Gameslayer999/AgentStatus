@@ -189,6 +189,17 @@ body {
   box-shadow: none;
   animation: none;
 }
+/* Aggregate Cursor menu-bar mirror (decision 038): a hollow ring, not a solid dot,
+   so it reads as an indicator rather than a per-session light. Always carries its
+   count badge; bright like `done` since it means "a Cursor composer awaits you". */
+.dot.cursor-pip {
+  box-sizing: border-box;
+  background: transparent;
+  border: 2px solid var(--c-done);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--c-done) 45%, transparent);
+  animation: none;
+  opacity: 1;
+}
 
 @keyframes pulse {
   0%,

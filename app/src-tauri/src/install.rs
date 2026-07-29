@@ -2,9 +2,8 @@
 //
 // On launch the bundled app makes itself work with zero external steps: it writes
 // an embedded copy of the status hook to a stable location and registers it in the
-// user's Claude and Codex hook configs. Idempotent (safe every launch),
-// reversible (a one-time backup), and non-clobbering (only touches its own hook
-// entries).
+// user's Claude hook config. Idempotent (safe every launch), reversible (a one-time
+// backup), and non-clobbering (only touches its own hook entries).
 //
 // The hook script is embedded at compile time, so the .app is self-contained and
 // the installed hook always matches the shipped app version. Gated to release
@@ -20,14 +19,6 @@ const SIMPLE_EVENTS: &[&str] = &[
     "SubagentStart", "SubagentStop",
 ];
 const TOOL_EVENTS: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"];
-const CODEX_SIMPLE_EVENTS: &[&str] = &[
-    "SessionStart",
-    "UserPromptSubmit",
-    "Stop",
-    "SubagentStart",
-    "SubagentStop",
-];
-const CODEX_TOOL_EVENTS: &[&str] = &["PreToolUse", "PostToolUse", "PermissionRequest"];
 
 fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
@@ -35,10 +26,6 @@ fn home() -> PathBuf {
 
 fn claude_dir() -> PathBuf {
     home().join(".claude")
-}
-
-fn codex_dir() -> PathBuf {
-    home().join(".codex")
 }
 
 fn status_dir() -> PathBuf {
@@ -69,108 +56,68 @@ fn try_install() -> std::io::Result<()> {
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
     let script_str = script.to_string_lossy().to_string();
 
-    // 2. Merge our hooks into Claude and Codex user-level hook config.
+    // 2. Merge our hooks into the Claude user-level hook config.
     merge_hooks(
         claude_dir().join("settings.json"),
         claude_dir().join("settings.json.agentstatus-bak"),
         &script_str,
         SIMPLE_EVENTS,
         TOOL_EVENTS,
-        "",
-    )?;
-    // "codex" arg: report.sh can't sniff Codex from its Claude-shaped payloads,
-    // so the installer declares the host explicitly (decision 032).
-    merge_hooks(
-        codex_dir().join("hooks.json"),
-        codex_dir().join("hooks.json.agentstatus-bak"),
-        &script_str,
-        CODEX_SIMPLE_EVENTS,
-        CODEX_TOOL_EVENTS,
-        "codex",
     )?;
 
-    merge_antigravity_hooks(
-        home().join(".gemini").join("config").join("hooks.json"),
-        home().join(".gemini").join("config").join("hooks.json.agentstatus-bak"),
-        &script_str,
-    )?;
+    // 3. Strip hooks a past version registered into Codex and Antigravity
+    //    (decision 040). Without this, upgrading leaves orphaned entries that keep
+    //    invoking report.sh from an unsupported host.
+    cleanup_legacy_hosts();
 
     Ok(())
 }
 
-fn merge_antigravity_hooks(
-    hooks_path: PathBuf,
-    backup_path: PathBuf,
-    script_str: &str,
-) -> std::io::Result<()> {
-    if let Some(parent) = hooks_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut hooks_config = if hooks_path.exists() {
-        let txt = std::fs::read_to_string(&hooks_path)?;
-        if !backup_path.exists() {
-            let _ = std::fs::write(&backup_path, &txt);
+/// Remove the Codex and Antigravity hook entries earlier versions installed. Runs on
+/// every launch (cheap: two `exists` checks when there's nothing to clean) and never
+/// creates a file that isn't already there. Best-effort throughout — a failure here
+/// must not stop the app from starting.
+fn cleanup_legacy_hosts() {
+    // Codex: Claude-shaped `hooks` map — drop our entries, keep everyone else's.
+    let codex = home().join(".codex").join("hooks.json");
+    if codex.exists() {
+        if let Ok(txt) = std::fs::read_to_string(&codex) {
+            if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&txt) {
+                let mut changed = false;
+                if let Some(hooks) = v.get_mut("hooks").and_then(|h| h.as_object_mut()) {
+                    for list in hooks.values_mut() {
+                        if let Some(arr) = list.as_array_mut() {
+                            let before = arr.len();
+                            arr.retain(|e| !e.to_string().contains("report.sh"));
+                            changed |= arr.len() != before;
+                        }
+                    }
+                    hooks.retain(|_, list| list.as_array().is_none_or(|a| !a.is_empty()));
+                }
+                if changed {
+                    if let Ok(out) = serde_json::to_string_pretty(&v) {
+                        let _ = std::fs::write(&codex, out + "\n");
+                    }
+                }
+            }
         }
-        serde_json::from_str::<serde_json::Value>(&txt).unwrap_or_else(|_| serde_json::json!({}))
-    } else {
-        serde_json::json!({})
-    };
-
-    if !hooks_config.is_object() {
-        hooks_config = serde_json::json!({});
     }
-    let obj = hooks_config.as_object_mut().unwrap();
-    let agentstatus = obj.entry("agentstatus").or_insert_with(|| serde_json::json!({}));
-    if !agentstatus.is_object() {
-        *agentstatus = serde_json::json!({});
+
+    // Antigravity: everything of ours lives under the top-level `agentstatus` key.
+    let antigravity = home().join(".gemini").join("config").join("hooks.json");
+    if antigravity.exists() {
+        if let Ok(txt) = std::fs::read_to_string(&antigravity) {
+            if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&txt) {
+                if let Some(obj) = v.as_object_mut() {
+                    if obj.remove("agentstatus").is_some() {
+                        if let Ok(out) = serde_json::to_string_pretty(&v) {
+                            let _ = std::fs::write(&antigravity, out + "\n");
+                        }
+                    }
+                }
+            }
+        }
     }
-    let entry = agentstatus.as_object_mut().unwrap();
-    entry.insert("enabled".to_string(), serde_json::json!(true));
-
-    // PreInvocation
-    entry.insert(
-        "PreInvocation".to_string(),
-        serde_json::json!([
-            { "type": "command", "command": format!("{script_str} PreInvocation antigravity") }
-        ]),
-    );
-
-    // PreToolUse
-    entry.insert(
-        "PreToolUse".to_string(),
-        serde_json::json!([
-            {
-                "matcher": ".*",
-                "hooks": [
-                    { "type": "command", "command": format!("{script_str} PreToolUse antigravity") }
-                ]
-            }
-        ]),
-    );
-
-    // PostToolUse
-    entry.insert(
-        "PostToolUse".to_string(),
-        serde_json::json!([
-            {
-                "matcher": ".*",
-                "hooks": [
-                    { "type": "command", "command": format!("{script_str} PostToolUse antigravity") }
-                ]
-            }
-        ]),
-    );
-
-    // Stop
-    entry.insert(
-        "Stop".to_string(),
-        serde_json::json!([
-            { "type": "command", "command": format!("{script_str} Stop antigravity") }
-        ]),
-    );
-
-    std::fs::write(&hooks_path, serde_json::to_string_pretty(&hooks_config)? + "\n")?;
-    Ok(())
 }
 
 fn merge_hooks(
@@ -179,7 +126,6 @@ fn merge_hooks(
     script_str: &str,
     simple_events: &[&str],
     tool_events: &[&str],
-    ide_arg: &str,
 ) -> std::io::Result<()> {
     if let Some(parent) = settings_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -216,12 +162,10 @@ fn merge_hooks(
             .unwrap();
         // Drop any prior AgentStatus entries so re-running never duplicates.
         list.retain(|entry| !entry.to_string().contains("report.sh"));
-        let command = if ide_arg.is_empty() {
-            format!("{script_str} {event}")
-        } else {
-            format!("{script_str} {event} {ide_arg}")
-        };
-        let hook = serde_json::json!({ "type": "command", "command": command });
+        let hook = serde_json::json!({
+            "type": "command",
+            "command": format!("{script_str} {event}"),
+        });
         let registered = if with_matcher {
             serde_json::json!({ "matcher": "*", "hooks": [hook] })
         } else {

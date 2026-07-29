@@ -38,6 +38,15 @@ rm -rf "/Applications/AgentStatus.app"
 rm -rf "/Applications/ClaudeStatus.app"
 cp -R "$APP" "/Applications/AgentStatus.app"
 
+# Re-sign with a stable, self-signed identity so macOS Accessibility trust survives
+# rebuilds (decision 039). Without this, tauri's per-build ad-hoc signature gives the
+# app a new code hash each time, invalidating the Accessibility grant the Cursor
+# menu-bar pip (decision 038) and the fast window-raise (decision 021) depend on.
+cd ..
+./hooks/sign-app.sh "/Applications/AgentStatus.app" || \
+  echo "WARNING: signing failed — Accessibility trust will reset on each rebuild until fixed."
+cd app
+
 # If an instance was already running, it's been Gatekeeper-approved before — quit
 # and relaunch it so the rebuild takes effect. (The single-instance guard would
 # otherwise make the new launch exit against the still-running old build, leaving
