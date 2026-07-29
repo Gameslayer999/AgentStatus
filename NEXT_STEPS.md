@@ -7,6 +7,12 @@
 
 ## Current state
 
+- **Releases are automated (decision 041).** `.github/workflows/release.yml` builds the
+  arm64 DMG on `macos-15` and publishes it whenever a `v*` tag is pushed; merging to `main`
+  publishes nothing on its own. The job fails fast if the tag disagrees with
+  `app/src-tauri/tauri.conf.json`. **Unproven on a real runner** — the YAML and the version
+  guard were checked locally, but no tag has been pushed yet, so treat the first tagged
+  release as the verification and watch that run.
 - **Codex and Antigravity support removed (decision 040).** Supported hosts are now **Claude
   Code (VS Code)** and **Cursor** — the two ever verified against a live install. Neither
   removed host was: #033 shipped explicitly "Accepted, unverified", and the Codex path
@@ -218,6 +224,16 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 ---
 
 ## Recently completed
+
+- **2026-07-29** — **Automated releases (decision 041) and cut v0.5.0.** Added
+  `.github/workflows/release.yml` — the repo's first CI. Tag-triggered rather than
+  main-triggered, so releasing stays a deliberate act instead of a side effect of merging;
+  a version guard fails the run before building if the tag and `tauri.conf.json` disagree.
+  Version bumped 0.4.2 → 0.5.0 across `tauri.conf.json`, `package.json`,
+  `package-lock.json`, `Cargo.toml`/`Cargo.lock`, and the README download link (minor, not
+  patch: two supported hosts were removed). Workflow YAML parsed and the guard's shell logic
+  tested against both a matching and a mismatched tag; the build-and-publish path itself is
+  unverified until the first tag is pushed.
 
 - **2026-07-29** — **Removed Codex and Antigravity support (decision 040).** Both hosts were
   built on unverified event contracts — #033 shipped as "Accepted, unverified", and the Codex

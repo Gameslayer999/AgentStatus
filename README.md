@@ -42,7 +42,7 @@ itself on first launch.
 > launch. Step 3 below clears the download quarantine so it opens — nothing is code-signed
 > yet.
 
-1. Download **`AgentStatus_0.4.2_aarch64.dmg`** from the
+1. Download **`AgentStatus_0.5.0_aarch64.dmg`** from the
    [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest).
 2. Open the DMG and drag **AgentStatus** into **Applications**.
 3. The app is **unsigned**, so macOS Gatekeeper blocks it on first launch. Clear the
@@ -189,6 +189,20 @@ npm run tauri dev
 In dev the app does **not** self-install (so edits to `hooks/report.sh` are live without a
 rebuild); the release build does. `node hooks/setup.mjs status|uninstall` manages the dev
 hooks.
+
+### Cutting a release
+
+Releases are built and published by GitHub Actions. Bump the version in
+`app/src-tauri/tauri.conf.json`, `app/package.json`, and `app/src-tauri/Cargo.toml`, merge
+to `main`, then push a matching tag:
+
+```bash
+git tag v0.5.0 && git push origin v0.5.0
+```
+
+The workflow builds the arm64 DMG on a macOS runner and publishes it with generated notes.
+It fails fast if the tag doesn't match the version in `tauri.conf.json`. Merging to `main`
+alone publishes nothing — the tag is the trigger.
 
 ## Notes & limits
 

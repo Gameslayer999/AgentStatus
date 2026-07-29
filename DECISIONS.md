@@ -51,6 +51,7 @@
 | 038 | 2026-07-28 | Cursor fix + menu-bar mirror: (1) stop lock-pruning Cursor sessions — Cursor writes no `~/.claude/ide/*.lock`, so decision-027 pruning deleted every Cursor light the moment any VS Code window was open; Cursor now prunes like Codex (drop when no `Cursor` process, plus the idle backstop). (2) Add a supplementary **Cursor menu-bar pip**: Cursor's live status is renderer-memory-only, but its macOS menu-bar item exposes an aggregate count of composers awaiting the user (its only externally observable attention signal), read via the **Accessibility API directly** (AXExtrasMenuBar → child title, needs only Accessibility not Automation) and rendered as one hollow-ring pip that clicks to activate Cursor — the "done"/attention bit Cursor's hooks don't provide | Accepted |
 | 039 | 2026-07-28 | Sign the app with a stable **self-signed** code-signing identity (`hooks/sign-app.sh`, run by `install.sh`) so macOS Accessibility (TCC) trust survives rebuilds. Ad-hoc signing keys trust to the code hash, which changes every build — invalidating the grant the Cursor pip (038) and fast window-raise (021) need, so trust never stuck during iteration. A stable Designated Requirement (`identifier "com.agentstatus.app" and certificate leaf = H"…"`) makes the grant persist. Revises the "unsigned" decisions 011/024 for local builds; downloaded DMGs are unaffected (self-signed anchor is per-machine) | Accepted |
 | 040 | 2026-07-29 | **Remove Codex and Antigravity support** (reverses #029/#031/#032 for Codex and #033 for Antigravity). Neither host was ever verified against a live install per Guideline #4 — #033 shipped explicitly "Accepted, unverified", and the Codex path leaned on unverifiable inference (a `state_5.sqlite` read, a `pgrep codex` liveness probe, a 10-min bespoke idle timeout) to paper over lifecycle events that may not fire. Unverified hosts can only produce lying lights (UI Principle #4). Removed: both installers' host registrations, `report.sh`'s declared-host `$2` arg and every Codex/Antigravity payload shape, the sqlite fallback and `CODEX_*` timeouts, and their click-to-focus targets. `install.rs` and `setup.mjs` now **clean up** the entries earlier versions wrote to `~/.codex/hooks.json` and `~/.gemini/config/hooks.json`, preserving any other hooks in those files. Supported hosts are Claude Code (VS Code) and Cursor | Accepted |
+| 041 | 2026-07-29 | **Automate releases via GitHub Actions on a `v*` tag push** (`.github/workflows/release.yml`). Releases were manual through v0.4.2. Trigger is the tag, not a push to `main`: merging is routine and frequent, so main-triggered publishing either fires on every docs commit or needs a version-diff guard that silently does nothing most of the time — a tag makes releasing an explicit act with an obvious audit trail. The job builds the arm64 DMG on `macos-15`, then `gh release create --generate-notes`. It **fails fast if the tag and `app/src-tauri/tauri.conf.json` disagree**, the one way a tag-driven release can ship a wrong version number. Output stays unsigned/un-notarized (runners hold no Developer ID cert), unchanged from the manual releases; the self-signing of #039 is build-from-source-only and plays no part | Accepted |
 
 ---
 
@@ -1884,3 +1885,49 @@ isn't already present, and hooks belonging to anything else in those files are p
   unrelated `otherplugin` key in the Antigravity config all preserved, emptied event keys
   dropped, a second run a no-op, and a run with neither legacy file present creating
   nothing.
+
+
+---
+
+## 041 — Automate releases with a tag-triggered GitHub Actions workflow
+
+**Date:** 2026-07-29
+**Status:** Accepted
+
+**Context.** Every release through v0.4.2 was cut by hand: build locally, find the DMG in
+`app/src-tauri/target/release/bundle/dmg/`, create the GitHub release, upload, write notes.
+That is a manual, unreplicable step of exactly the kind Guideline #8 says to script away,
+and it makes the published artifact depend on whatever state one machine happened to be in.
+The repo had no CI at all.
+
+**Options considered.**
+
+| Option | Pros | Cons |
+|---|---|---|
+| Publish on every push to `main` | Zero ceremony — merge and it ships | A README typo cuts a release; duplicate-version releases have to be hand-deleted. Merging is routine, releasing is not — conflating them removes the moment where you decide the build is worth shipping |
+| Push to `main`, gated on the version changing | Still ceremony-free, and doc pushes are free | The trigger fires constantly and no-ops nearly every time, so a genuine failure is easy to miss in a sea of skipped runs. The real intent (release now) is inferred from a file diff rather than stated |
+| **Push a `v*` tag** (chosen) | Releasing is explicit and deliberate; the tag is a permanent audit trail; the workflow runs only when a release is actually wanted, so a red run always means something | Releasing is a second command after merging (`git tag v0.5.0 && git push origin v0.5.0`) |
+
+**Decision.** Trigger on `push: tags: ["v*"]`. `macos-15` (Apple Silicon) runs
+`npm ci && npm run tauri build`, and `gh release create` publishes the DMG with
+`--generate-notes`. `contents: write` is the only permission granted.
+
+**The version guard.** A tag-driven release has one distinctive failure mode: the tag and
+the version baked into the bundle can disagree, producing `v0.5.0` release that contains
+`AgentStatus_0.4.9_aarch64.dmg`. So the first step compares `${GITHUB_REF_NAME#v}` against
+`app/src-tauri/tauri.conf.json` and fails the run with an actionable message if they differ
+— before spending runner minutes on a build that would have to be deleted anyway.
+
+**Trade-offs / notes.**
+- **Artifacts stay unsigned and un-notarized.** GitHub's runners hold no Developer ID
+  certificate, so the DMG is exactly what the manual process produced and the README's
+  Gatekeeper step still applies (decisions 011/024). The stable self-signing of #039 is for
+  build-from-source installs and is deliberately absent here — a per-machine self-signed
+  anchor would mean nothing to a downloader.
+- **`Cargo.lock` is committed**, so `Swatinem/rust-cache` restores an exact-match cache and
+  the release build resolves the same dependency versions as a local one.
+- **Not verified against a real run yet.** The workflow's YAML, its trigger, and the version
+  guard's shell logic were checked locally (guard tested against both a matching and a
+  mismatched tag), but no tag has been pushed, so the build-and-publish path is unproven on
+  a runner. Guideline #4's habit applies to CI too: treat the first tagged release as the
+  verification, and watch that run rather than assuming it.

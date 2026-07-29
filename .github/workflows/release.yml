@@ -1,0 +1,70 @@
+# Build and publish a release when a v* tag is pushed (decision 041).
+#
+#   git tag v0.5.0 && git push origin v0.5.0
+#
+# The tag is the trigger, so merging to main never publishes on its own — a release is
+# always a deliberate act. The job refuses to build if the tag and the version in
+# tauri.conf.json disagree, which is the one way a tag-driven release can silently ship
+# the wrong number.
+#
+# Output is the same unsigned, un-notarized arm64 DMG the manual releases produced;
+# GitHub's runners hold no Developer ID cert, so the README's Gatekeeper step still
+# applies. The local self-signing in hooks/sign-app.sh (decision 039) is for build-from-
+# source installs only and plays no part here.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release and upload the DMG
+
+jobs:
+  release:
+    # macos-15 is Apple Silicon — the arm64 DMG the README advertises.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches tauri.conf.json
+        id: version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          conf="$(python3 -c "import json;print(json.load(open('app/src-tauri/tauri.conf.json'))['version'])")"
+          if [ "$tag" != "$conf" ]; then
+            echo "::error::tag v$tag does not match tauri.conf.json version $conf — bump the version and re-tag"
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Cargo.lock is committed, so this restores an exact-match build cache.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Build
+        working-directory: app
+        run: |
+          npm ci
+          npm run tauri build
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dmg="$(ls app/src-tauri/target/release/bundle/dmg/*.dmg)"
+          gh release create "$GITHUB_REF_NAME" "$dmg" \
+            --title "AgentStatus ${GITHUB_REF_NAME}" \
+            --generate-notes
