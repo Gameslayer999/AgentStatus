@@ -181,6 +181,19 @@ body {
   box-shadow: 0 0 9px color-mix(in srgb, var(--c-error) 85%, transparent);
   animation: pulse 1.2s ease-in-out infinite;
 }
+/* No signal available (decision 042): a folder-less Cursor window runs no hooks after
+   its first event, so we genuinely cannot tell whether that composer is working. A
+   hollow ring says "a session is here, its state is unreadable" instead of a solid dot
+   asserting a state we don't have (UI Principle #4). Deliberately quiet — it's not an
+   attention state, so it must not compete with blocked/error/done. */
+.dot.unknown {
+  box-sizing: border-box;
+  background: transparent;
+  border: 2px solid var(--c-idle);
+  box-shadow: none;
+  animation: none;
+  opacity: 0.75;
+}
 .dot.empty {
   background: rgba(255, 255, 255, 0.18);
 }

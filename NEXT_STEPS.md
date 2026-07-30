@@ -7,6 +7,15 @@
 
 ## Current state
 
+- **Unobservable sessions render hollow (decision 042).** A folder-less Cursor window fires one
+  bridged `sessionStart` and then nothing (Cursor runs command hooks only with a folder open), so
+  its light used to sit at a permanent, untrue `idle`. It now renders as a **hollow gray ring**
+  (`unknown`) — frontend-derived from `ide == "cursor" && cwd == ""`, no hook or schema change.
+  Scoped to that one verified case: `.dot.stale` is still unused, and no heartbeat-timeout
+  `unknown` exists (rejected — it would eventually make healthy long-idle sessions hollow).
+  Whether those rings appear at all is now a setting — **Unknown: Show | Hide** (decision 044),
+  default Show.
+
 - **Releases are automated (decision 041).** `.github/workflows/release.yml` builds the
   arm64 DMG on `macos-15` and publishes it whenever a `v*` tag is pushed; merging to `main`
   publishes nothing on its own. The job fails fast if the tag disagrees with
@@ -34,8 +43,13 @@
   command (`cursor_attention_count`) reads it via the **Accessibility API directly** (not
   osascript — that needs Automation an unsigned rebuild lacks) and the frontend renders one
   hollow-ring pip with the count, covering the "done"/attention cue Cursor's hooks can't (its
-  bridged `Stop` carries no wrap-up message). Clicking the pip activates Cursor. **Verified
-  live with the user** (`trusted=true count=1`, pip visible, click works). Getting the
+  bridged `Stop` carries no wrap-up message). **Clicking the pip now opens the next composer
+  that's waiting and clears its notification (decision 045)** — Cursor's tray menu is a native
+  `NSMenu`, so `cursor_open_next_attention` presses the top `"• …"` row straight off the AX
+  tree (no menu ever opens on screen); Cursor focuses that composer and marks it read, so the
+  count ticks down and repeated clicks walk the queue. Falls back to just activating Cursor if
+  nothing is pressable. **Verified live with the user** (`trusted=true count=1`, pip visible,
+  click works; the press path confirmed ` 2` → ` 1` on Cursor 3.12.10). Getting the
   Accessibility grant to *stick* required **stable self-signing (decision 039)** — `install.sh`
   now re-signs each build with a per-machine self-signed cert, so trust persists across
   rebuilds instead of resetting every time.
@@ -224,6 +238,49 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 ---
 
 ## Recently completed
+
+- **2026-07-30** — **Cursor pip clicks through the waiting composers (decision 045).** The pip
+  used to only activate Cursor; it now resolves what it reports. Cursor's tray menu is a native
+  Electron `Menu` (`TrayMainService.createContextMenu`), so each row is an `AXMenuItem` readable
+  **and pressable without opening the menu**; rows for composers with an unread notification are
+  titled `"• <name>"`. New `cursor_open_next_attention` command presses the first such row —
+  Cursor sends `vscode:openComposer`, focuses that window, and marks it read, so its own count
+  drops by one and the next click goes to the next waiting composer. Verified live on Cursor
+  3.12.10 with a standalone Swift AX probe before wiring anything (` 2` → ` 1`, correct composer
+  opened, bullet cleared), then rebuilt/reinstalled. Frontend decrements the badge immediately
+  and re-reads the true count 1.5s later; falls back to activating Cursor when no row is
+  pressable, so the click is never dead. README updated.
+  **First build crashed the bar on every pip click** — it read a menu element out of a
+  temporary `AXChildren` `CFArray`, which released it on drop, so the next AX call took a
+  dangling ref (`EXC_BREAKPOINT` in `_AXUIElementValidate`). Every `CFArray` is now bound for
+  as long as its elements are used. The check is a re-runnable ignored test rather than a
+  hand-probe: `cargo test --release -- --ignored --nocapture cursor_press`.
+
+- **2026-07-30** — **Settings: `Unknown` Show/Hide toggle (decision 044).** Follow-on to #042 —
+  the hollow no-signal rings are now optional. New `.seg` row after `Sort`, backed by
+  `localStorage` (`agentstatus.showunknown`), defaulting to **Show** so nothing changes for
+  existing users (a cleared pref and **Reset to defaults** also mean Show). `latestSessions` stays
+  the complete poll and a new `visibleSessions()` filters at draw time, so the bar and the
+  menu-bar tray agree and toggling repaints instantly instead of waiting for the next 1s poll.
+  Rejected filtering in Rust `list_sessions` — a display pref doesn't belong in the backend.
+  Rebuilt/reinstalled and confirmed the default path live; README + settings-panel art updated.
+  **The Show/Hide click itself is user-confirmed** (opening the panel needs a right-click on the
+  bar).
+
+- **2026-07-30** — **Hollow "unknown" light for unobservable sessions (decision 042).** A
+  running Cursor session showed a blank colorless light; diagnosed from Cursor 3.12.10's own
+  hook logs as a **folder-less window** — its only event ever was one bridged `sessionStart`
+  with `workspace_roots: []`, and Cursor requests no further hook steps without a folder open
+  (zero `beforeSubmitPrompt`/`preToolUse`/`stop` all day, vs. 1190 `preToolUse` in the
+  folder-open log generation). Its recorded `idle` was therefore one stale event, rendered as a
+  confident dim gray dot — a lying light (UI Principle #4). Fixed frontend-only: `displayState()`
+  returns `unknown` when `ide == "cursor" && cwd == ""`, and `.dot.unknown` draws a **hollow gray
+  ring** (no glow, no pulse, borrowed `--c-idle`) that says "a session is here, its state is
+  unreadable". Tooltip names the cause; `URGENCY_RANK`/`TRAY_PRIORITY`/`drawTray()` handle the new
+  state (the tray strokes a matching ring); no chime, no new color setting. **No hook or
+  status-file schema change** — both fields were already there. Verified live: rebuilt via
+  `./install.sh` and screenshotted the running bar with the real Cursor session showing a ring.
+  README art regenerated to six states.
 
 - **2026-07-29** — **Automated releases (decision 041) and cut v0.5.0.** Added
   `.github/workflows/release.yml` — the repo's first CI. Tag-triggered rather than

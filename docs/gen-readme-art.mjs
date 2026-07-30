@@ -34,6 +34,7 @@ const STATES = {
   done: { color: "#ecf0f1", glow: 0.6, label: "done", desc: "the turn just finished and you haven't looked yet" },
   idle: { color: "#7f8c8d", glow: 0, dim: 0.55, label: "idle", desc: "finished and acknowledged (you've focused it)" },
   error: { color: "#e74c3c", glow: 0.85, pulse: true, label: "error (pulsing)", desc: "a turn failed" },
+  unknown: { color: "#7f8c8d", glow: 0, dim: 0.75, ring: true, label: "unknown (hollow)", desc: "a session we get no signal from — a Cursor window with no folder open" },
 };
 
 // Frosted pill: rgba(20,22,26,.82) fill, rgba(255,255,255,.09) hairline border.
@@ -71,7 +72,14 @@ function dot(cx, cy, state, gradId, badge) {
     out += `<circle cx="${cx}" cy="${cy}" r="${D}" fill="url(#${gradId})"/>`;
   }
   const op = s.dim ? ` opacity="${s.dim}"` : "";
-  out += `<circle cx="${cx}" cy="${cy}" r="${R}" fill="${s.color}"${op}/>`;
+  // `ring` states are hollow (`.dot.unknown`: transparent fill, 2px border scaled
+  // to this art's larger dot).
+  if (s.ring) {
+    const lw = (2 / 13) * D;
+    out += `<circle cx="${cx}" cy="${cy}" r="${(R - lw / 2).toFixed(2)}" fill="none" stroke="${s.color}" stroke-width="${lw.toFixed(2)}"${op}/>`;
+  } else {
+    out += `<circle cx="${cx}" cy="${cy}" r="${R}" fill="${s.color}"${op}/>`;
+  }
   if (badge != null) {
     const bx = cx + R - 2;
     const by = cy - R + 2;
@@ -151,7 +159,7 @@ function hero() {
 
 // ── 2. States: every state labeled ───────────────────────────────────────────
 function states() {
-  const keys = ["running", "blocked", "done", "idle", "error"];
+  const keys = ["running", "blocked", "done", "idle", "error", "unknown"];
   const rowH = 46;
   const topPad = 26;
   const W = 620;
@@ -169,7 +177,7 @@ function states() {
     rows += `<text x="${labelX}" y="${cy - 6}" fill="#eef2f6" font-family="-apple-system, system-ui, sans-serif" font-size="16" font-weight="600">${s.label}</text>`;
     rows += `<text x="${labelX}" y="${cy + 13}" fill="#9fb0c0" font-family="-apple-system, system-ui, sans-serif" font-size="13">${s.desc}</text>`;
   });
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The five light states and what each means">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The six light states and what each means">
     ${backdrop(W, H)}
     <defs>${grads}</defs>
     ${rows}
@@ -319,6 +327,7 @@ function settings() {
   const sliderRow = (t, frac) => { const r = label(t) + slider(cx, y, ctrlW, frac); y += 34; return r; };
   body += segRow("Orientation", ["Horizontal", "Vertical"], 0);
   body += segRow("Sort", ["Window", "Urgency"], 0);
+  body += segRow("Unknown", ["Show", "Hide"], 0);
   body += sliderRow("Size", 0.4);
   body += sliderRow("Padding", 0.55);
   body += sliderRow("Opacity", 0.82);
@@ -353,7 +362,7 @@ function settings() {
   const W = 620;
   const H = PH + 48;
   const px = (W - PW) / 2;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The AgentStatus settings panel, opened by right-clicking the bar: orientation and sort toggles, size/padding/opacity sliders, per-state color swatches, an Audio On/Off toggle with per-state chime checkboxes (Blocked, Error, Done) and a volume slider, and reload/reset/quit links.">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The AgentStatus settings panel, opened by right-clicking the bar: orientation and sort toggles, an Unknown Show/Hide toggle, size/padding/opacity sliders, per-state color swatches, an Audio On/Off toggle with per-state chime checkboxes (Blocked, Error, Done) and a volume slider, and reload/reset/quit links.">
     ${backdrop(W, H)}
     <defs>${grads}</defs>
     <g transform="translate(${px}, 24)">

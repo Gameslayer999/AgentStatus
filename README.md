@@ -87,10 +87,14 @@ same as the DMG. (On a fresh install you still need the Gatekeeper step above.)
 
 Each light is one Claude Code or Cursor session:
 
-![The five light states: green running, orange blocked (pulsing), white done, dim gray idle, and red error (pulsing), each labeled with its meaning.](docs/lightbar-states.svg)
+![The six light states: green running, orange blocked (pulsing), white done, dim gray idle, red error (pulsing), and a hollow gray ring for unknown, each labeled with its meaning.](docs/lightbar-states.svg)
 
 ![A running light with a blue "2" subagent badge and its hover tooltip, showing the project name and state, the task, and the running subagents.](docs/lightbar-hover.svg)
 
+- **A hollow ring** means a session whose state can't be read at all — a Cursor window with
+  no folder open never reports progress, so the bar says "unknown" instead of showing a color
+  it would only be guessing at. Clicking it brings Cursor forward, and **Unknown → Hide** in
+  settings keeps these rings off the bar entirely.
 - **Hover** a light to see the session's project, its task, and what it's doing right now.
 - **A blue count badge** on a light means that session has that many subagents running
   (hover lists their types).
@@ -106,7 +110,7 @@ Each light is one Claude Code or Cursor session:
 **Right-click** the bar to open the settings panel — everything is adjustable and persists
 across restarts:
 
-![The AgentStatus settings panel: Orientation and Sort toggles, Size, Padding, and Opacity sliders, per-state color swatches (Running, Blocked, Done, Idle, Error), and Reload / Reset to defaults / Quit links.](docs/lightbar-settings.svg)
+![The AgentStatus settings panel: Orientation, Sort, and Unknown (Show/Hide) toggles, Size, Padding, and Opacity sliders, per-state color swatches (Running, Blocked, Done, Idle, Error), and Reload / Reset to defaults / Quit links.](docs/lightbar-settings.svg)
 
 - **Mode** — run the lights as the floating bar (default) or up in the **macOS menu bar** (see
   [below](#run-it-in-the-menu-bar-instead)).
@@ -116,6 +120,8 @@ across restarts:
 ![The same light bar shown as a horizontal row on the left and a vertical column on the right.](docs/lightbar-orientation.svg)
 
 - **Sort** — group lights by window, or push the attention states (blocked/error) to the front.
+- **Unknown** — **Show** (default) or **Hide** the hollow no-signal rings, if you'd rather see
+  only lights whose state actually means something.
 - **Size, padding, and opacity** — scale the lights, tighten or loosen the bar, and fade the
   pill (the lights themselves always stay fully opaque so the signal never dims).
 - **Per-state colors** — recolor any of the five states with a native color picker.
@@ -217,12 +223,16 @@ alone publishes nothing — the tag is the trigger.
 - On **Cursor**, per-session lights show running (green) and idle — blocked (orange) is
   unavailable (Cursor emits no permission event), and its turn-finished event carries no
   wrap-up, so a Cursor session never lights as "done". Per-session lights also require a
-  **folder-open** Cursor window (Cursor runs no hooks in a folder-less window). To cover the
+  **folder-open** Cursor window (Cursor runs no hooks in a folder-less window) — a folder-less
+  one still fires a single opening event, so it appears as a **hollow "unknown" ring**: a
+  session is there, but nothing about its state can be read. To cover the
   "done"/attention gap, AgentStatus **mirrors Cursor's own menu-bar item**: a hollow-ring pip
   with a count appears on the bar when Cursor has composers awaiting you (even for
-  folder-less/background agents), and clicking it brings Cursor forward. Reading Cursor's menu
-  bar needs AgentStatus to have **Accessibility** permission (the same grant the fast
-  window-switch uses) — the app prompts for it on launch; without it the pip just doesn't
+  folder-less/background agents). **Clicking the pip opens the next composer that's waiting**
+  — Cursor jumps to that agent and clears its notification, so the count ticks down by one and
+  the next click takes you to the one after it, until the pip disappears. Reading and clicking
+  Cursor's menu bar needs AgentStatus to have **Accessibility** permission (the same grant the
+  fast window-switch uses) — the app prompts for it on launch; without it the pip just doesn't
   appear.
 - Earlier versions (≤ 0.4.2) also registered hooks for **Codex** (`~/.codex/hooks.json`)
   and **Antigravity** (`~/.gemini/config/hooks.json`). Neither host was ever verified

@@ -52,6 +52,9 @@
 | 039 | 2026-07-28 | Sign the app with a stable **self-signed** code-signing identity (`hooks/sign-app.sh`, run by `install.sh`) so macOS Accessibility (TCC) trust survives rebuilds. Ad-hoc signing keys trust to the code hash, which changes every build — invalidating the grant the Cursor pip (038) and fast window-raise (021) need, so trust never stuck during iteration. A stable Designated Requirement (`identifier "com.agentstatus.app" and certificate leaf = H"…"`) makes the grant persist. Revises the "unsigned" decisions 011/024 for local builds; downloaded DMGs are unaffected (self-signed anchor is per-machine) | Accepted |
 | 040 | 2026-07-29 | **Remove Codex and Antigravity support** (reverses #029/#031/#032 for Codex and #033 for Antigravity). Neither host was ever verified against a live install per Guideline #4 — #033 shipped explicitly "Accepted, unverified", and the Codex path leaned on unverifiable inference (a `state_5.sqlite` read, a `pgrep codex` liveness probe, a 10-min bespoke idle timeout) to paper over lifecycle events that may not fire. Unverified hosts can only produce lying lights (UI Principle #4). Removed: both installers' host registrations, `report.sh`'s declared-host `$2` arg and every Codex/Antigravity payload shape, the sqlite fallback and `CODEX_*` timeouts, and their click-to-focus targets. `install.rs` and `setup.mjs` now **clean up** the entries earlier versions wrote to `~/.codex/hooks.json` and `~/.gemini/config/hooks.json`, preserving any other hooks in those files. Supported hosts are Claude Code (VS Code) and Cursor | Accepted |
 | 041 | 2026-07-29 | **Automate releases via GitHub Actions on a `v*` tag push** (`.github/workflows/release.yml`). Releases were manual through v0.4.2. Trigger is the tag, not a push to `main`: merging is routine and frequent, so main-triggered publishing either fires on every docs commit or needs a version-diff guard that silently does nothing most of the time — a tag makes releasing an explicit act with an obvious audit trail. The job builds the arm64 DMG on `macos-15`, then `gh release create --generate-notes`. It **fails fast if the tag and `app/src-tauri/tauri.conf.json` disagree**, the one way a tag-driven release can ship a wrong version number. Output stays unsigned/un-notarized (runners hold no Developer ID cert), unchanged from the manual releases; the self-signing of #039 is build-from-source-only and plays no part | Accepted |
+| 042 | 2026-07-30 | **Hollow "unknown" light for sessions we get no signal from** — display-only, derived in the frontend from `ide == "cursor" && cwd == ""`. A folder-less Cursor window fires the bridged `sessionStart` (so a light exists) and then nothing at all — no prompt/tool/stop events, since Cursor runs command hooks only with a folder open (#018) — so its recorded `idle` is one stale event, not a state. `displayState()` returns `unknown` and the dot renders as a hollow gray ring (`.dot.unknown`), quiet and non-attention, saying "a session is here, its state is unreadable" instead of a solid dot asserting idle (UI Principle #4). No hook change and no status-file schema change (the app can derive it); scoped to this one verified case, not a generic heartbeat timeout | Accepted |
+| 044 | 2026-07-30 | **Settings: `Unknown` Show/Hide toggle** — whether the hollow no-signal lights of #042 appear on the bar at all. Defaults to **Show** (preserves the behavior #042 shipped hours earlier); **Hide** filters them from both the bar and the menu-bar tray image. Frontend-only `localStorage` (`agentstatus.showunknown`), same pattern as orientation/sort/opacity. `latestSessions` stays complete and a new `visibleSessions()` applies the filter at draw time, so toggling repaints instantly from memory instead of waiting for the next poll, and re-enabling brings the lights straight back. Chosen over dropping the sessions in `list_sessions` (a display pref does not belong in the backend, and the data would be gone from the tray/chime paths too) | Accepted |
+| 045 | 2026-07-30 | **Cursor pip clicks through the waiting composers** — a click now presses the top notification entry in Cursor's own tray menu (a native `NSMenu`, so every row is an `AXMenuItem` readable/pressable without opening it; notified rows are titled `"• <name>"`). Cursor opens that composer, focuses its window, and marks it read, so its count drops by one and the next click lands on the next one waiting — verified live on Cursor 3.12.10 (` 2` → ` 1`). New `cursor_open_next_attention` command; falls back to the old "just activate Cursor" behavior when nothing is pressable. Extends #038; same Accessibility grant (#039), no hook/schema/installer change | Accepted |
 
 ---
 
@@ -1931,3 +1934,223 @@ the version baked into the bundle can disagree, producing `v0.5.0` release that 
   mismatched tag), but no tag has been pushed, so the build-and-publish path is unproven on
   a runner. Guideline #4's habit applies to CI too: treat the first tagged release as the
   verification, and watch that run rather than assuming it.
+
+---
+
+## 042 — Hollow "unknown" light for sessions we get no signal from
+
+**Date:** 2026-07-30
+**Status:** Accepted
+**Evidence:** Cursor **3.12.10**, live — session `3c8f4449…` and Cursor's own hook logs under
+`~/Library/Application Support/Cursor/logs/**/cursor.hooks.*.log`.
+
+**Context.** The user reported a Cursor session that was actively running but showed a blank,
+colorless light on the bar. Its status file was:
+
+```json
+{"state":"idle","cwd":"","ide":"cursor","label":"","updated_at":1785417092,"task":"","detail":""}
+```
+
+Empty `cwd` → no label; `state:"idle"` → a dim gray dot. Nothing was broken in the write path.
+The hook log shows why: the **only** event that ever fired for that session was one bridged
+`sessionStart`, carrying `"workspace_roots": []` (logged to
+`cursor.hooks.workspaceId-empty-window.log`) — a **folder-less Cursor window**. Decision 018
+recorded that Cursor runs command hooks only when a workspace folder is open; this quantifies
+it. Across every Cursor hook log for the day, the only steps requested were `workspaceOpen`
+(18), `sessionStart` (3), and `sessionEnd` (4) — zero `beforeSubmitPrompt`, `preToolUse`, or
+`stop`. The previous log generation, from folder-open windows, shows the full stream (1190
+`preToolUse`, 59 `beforeSubmitPrompt`, 60 `stop`). So that light was frozen at the state of a
+single opening event and could never update, no matter what the composer did.
+
+That makes it a **lying light**, the one thing UI Principle #4 forbids: not wrong about a color
+it could have known, but asserting `idle` for a session we have no signal for whatsoever.
+
+**Options considered.**
+
+| Option | Pros | Cons |
+|---|---|---|
+| **Derive `unknown` in the frontend** (chosen) | No hook change, no schema change; the app already has both fields it needs (`ide`, `cwd`); hooks stay dumb and fast (Guideline #3) | The condition lives in the display layer, so a future host with the same gap needs its own clause |
+| Write `observable:false` from `report.sh` | Explicit; generalizes to future hosts | A status-file schema change, and it puts judgment in the hook for something the app can derive from data it already receives |
+| Show no light at all (skip the write, like `empty-state-draft`) | No lying light and less clutter | Also no hint the session exists — a running Cursor composer becomes invisible rather than uncertain, which is a worse answer to "which sessions are there?" |
+
+Scope was also a fork: apply the hollow treatment to **any** session gone silent past a
+heartbeat timeout (which would finally use the long-dead `.dot.stale` CSS), or only to this
+verified case. Chose **only the folder-less Cursor case** — a generic timeout would eventually
+render healthy long-idle sessions as hollow, trading one inaccuracy for another.
+
+**Decision.** Frontend-only, in `app/src/main.js`:
+- `isUnobservable(s)` = `s.ide === "cursor" && !s.cwd`; `displayState()` returns `"unknown"`
+  for it, ahead of the `done` check.
+- `.dot.unknown` (`styles.css`) is a **hollow ring**: transparent fill, 2px `--c-idle` border,
+  no glow, no pulse, `opacity: .75`. Deliberately quiet — "unknown" is not an attention state
+  and must not compete with blocked/error/done (UI Principle #2). Precedent: `.dot.cursor-pip`
+  (#038) is already a ring for the same "indicator, not a session light" reason; it stays
+  distinguishable by being bright and always carrying a count badge.
+- Tooltip states the fact and its cause rather than a state:
+  `Cursor <id8> — state unknown` / `↳ no folder open in this Cursor window, so it reports no
+  progress · click to open Cursor` (UI Principle #5).
+- `URGENCY_RANK` places `unknown` between `running` and `idle`; `TRAY_PRIORITY` gains it in the
+  same slot so a bar of only-unknown sessions doesn't condense to the "empty" placeholder; and
+  `drawTray()` strokes a ring for it so the menu-bar image matches the bar.
+- Not in `CHIME_STATES`, so it never makes a sound. Not a new color swatch — it borrows
+  `--c-idle` rather than adding a setting nobody asked for.
+- Clicking it activates `Cursor.app` (unchanged behavior: `focusSession`'s empty-`cwd` guard
+  already exempts `ide == "cursor"`, from #038).
+
+**Reasoning.** The honest signal for "we cannot see this session" is a light that visibly
+withholds a color, and hollow reads that way instantly next to five solid states. Deriving it
+in the app keeps the change to ~20 lines with no new schema, no hook risk, and nothing new to
+uninstall. Restricting it to `cursor && cwd == ""` means it fires exactly where the absence of
+signal is *proven*, so no session that does report its state is ever downgraded to a guess.
+
+**Validation.** Rebuilt and reinstalled via `./install.sh` (which re-signs and relaunches),
+then screenshotted the live bar with the real folder-less Cursor session present: the top light
+renders as a hollow gray ring where it was previously a solid gray dot, with the green (this
+session), white (done), and bright Cursor menu-bar pip lights unchanged beside it. `node
+--check` on the frontend; README art regenerated (`node docs/gen-readme-art.mjs`) so
+`docs/lightbar-states.svg` documents six states, verified by rendering the SVG.
+
+**Related gaps found, deliberately not addressed.** (1) Cursor **background/cloud** agents run
+in a worker extension host with no shell — every hook exits 1 with `Shell execution is not
+available in the worker extension host` (observed on a `sessionEnd` today), so they produce no
+light at all; the #038 menu-bar pip remains their only signal. (2) `.dot.stale` in `styles.css`
+is still dead CSS — no code applies it. A heartbeat-based `unknown` is where it would be used
+if that scope is ever revisited.
+
+---
+
+## 044 — Settings: `Unknown` Show/Hide toggle
+
+**Date:** 2026-07-30
+**Status:** Accepted (extends #042)
+
+**Context.** Decision 042 added the hollow `unknown` ring for sessions we get no signal from
+(today, folder-less Cursor windows). The user asked to make its presence on the bar a choice:
+knowing a session exists but is unreadable is useful to some, clutter to others — a folder-less
+Cursor window can sit open for hours contributing a permanently uninformative light.
+
+**Decision.** A fourth `.seg` row in the settings panel, `Unknown: Show | Hide`, placed directly
+after `Sort` (both control *which* lights appear, as opposed to how they look).
+
+- `localStorage` key `agentstatus.showunknown`, read via `showUnknown()`, which treats anything
+  other than the string `"false"` as Show — so the default, a cleared pref, and **Reset to
+  defaults** all keep the #042 behavior.
+- `visibleSessions()` returns `latestSessions` unchanged when Show, and
+  `latestSessions.filter((s) => displayState(s) !== "unknown")` when Hide. Every draw path —
+  `tick()`, `setSort()`, `resetPrefs()`, and the tray's `pushTrayImage()` — draws from it, so the
+  bar and the menu-bar image agree.
+- `latestSessions` deliberately stays the **complete** poll. Filtering at draw time (not at
+  assignment) means toggling the pref repaints instantly from memory and re-enabling restores the
+  lights immediately, rather than blanking until the next 1s poll.
+- Hiding the last visible session falls through to the existing "no sessions" placeholder dot,
+  which is the honest result: there is nothing left to show.
+
+**Options considered.**
+
+| Option | Pros | Cons |
+|---|---|---|
+| **Frontend `localStorage` pref + draw-time filter** (chosen) | Consistent with every other display pref (#015/#017/#023/#025/#035); ~25 lines; no backend or schema change; instant repaint both ways | One more control in a panel that is getting long |
+| Filter inside Rust `list_sessions` | Bar and any future consumer get the filtered list for free | A pure display preference leaking into the backend; the sessions would vanish from the chime and tray paths too, and the app would have to re-poll to bring them back |
+| No toggle — always show (status quo) | Nothing to build; one less control | The user explicitly asked for the choice, and a permanent uninformative light is a real complaint |
+
+**Reasoning.** This is the same shape as every other display pref, so it adds a control without
+adding a concept. Defaulting to Show keeps #042's honesty as the out-of-box behavior — a session
+you can't read is still a session — while Hide serves the "only show me lights that mean
+something" reading. Neither setting can make a light *lie*; the choice is only whether the
+honest-but-uninformative ring is drawn.
+
+**Validation.** Frontend parses (`node --check`); rebuilt and reinstalled via `./install.sh` and
+confirmed the default path live — the bar renders unchanged with the Cursor ring still present, so
+existing users see no behavior change. Settings-panel art regenerated
+(`node docs/gen-readme-art.mjs`) and rendered to verify the new row sits under `Sort`.
+**Not yet exercised by hand:** clicking Show/Hide needs a right-click on the bar, so the user
+confirms the toggle itself.
+
+---
+
+## 045 — Cursor pip clicks through the waiting composers (and clears each notification)
+
+**Date:** 2026-07-30
+**Status:** Accepted (extends #038)
+**Evidence:** Cursor **3.12.10** — `TrayMainService.createContextMenu` in
+`/Applications/Cursor.app/Contents/Resources/app/out/main.js`, plus a live Swift AX probe
+against the running app (pid 699).
+
+**Context.** The Cursor pip (#038) shows the count off Cursor's menu-bar item but its click
+only activated `Cursor.app`. The user still had to find which composer was waiting, and
+Cursor's count stayed where it was — the pip reported a problem it could not help resolve,
+against UI Principle #3 ("a light leads straight to the session").
+
+**What the tray menu actually is.** `createContextMenu` builds a native Electron `Menu`
+(→ `NSMenu`), so every row is a real `AXMenuItem`. Verified live via the Accessibility API,
+reachable from the status item **without opening the menu**: status item → `AXChildren[0]`
+(its `AXMenu`) → the rows.
+
+```
+AXMenuBarItem title=" 2"
+  AXMenu
+    AXMenuItem "Recent Agents"            (disabled header)
+    AXMenuItem "• <composer name>"        (bullet ⇒ unread notification)
+    AXMenuItem "• <composer name>"
+    AXMenuItem "<composer name>"          (no bullet ⇒ nothing waiting)
+    …  "View More (5)" → submenu, "Clear All Notifications", "New Agent", "Open Cursor", …
+```
+
+Cursor prefixes `"\u{2022} "` onto entries whose composer has an unread notification, and an
+entry's click handler sends `vscode:openComposer` to that composer's window and focuses it,
+which marks it read. So a single `AXPress` on the top bulleted row does exactly what the user
+asked for — verified live: press → the composer opened in its Cursor window, the status item
+went `" 2"` → `" 1"`, and that row's bullet was gone.
+
+**Options considered.**
+
+| Option | Pros | Cons |
+|---|---|---|
+| **AXPress the top bulleted menu row** (chosen) | Uses Cursor's own handler, so opening *and* clearing are Cursor's semantics, not our guess; needs only the Accessibility grant #039 already secures; the menu never visibly opens; ~60 lines | Depends on Cursor's tray menu structure (bullet prefix, one menu under the status item) — a Cursor redesign silently reverts it to the fallback |
+| "Clear All Notifications" row | One press clears everything | Clears without ever *showing* the user the waiting agents — deletes the signal instead of resolving it, exactly the wrong outcome |
+| Synthetic clicks (CGEvent) at the item's screen rect | No AX tree dependency | Actually opens the menu on screen, steals focus, needs coordinates and a second click to hit a row; brittle and visibly intrusive |
+| Deep-link `cursor://…openComposer` | No AX at all | Composer ids are only in renderer memory / the tray menu — we'd have to read the AX tree anyway, and Cursor shows a consent popup on external deep links (same problem #015 hit) |
+
+**Decision.** New Tauri command `cursor_open_next_attention() -> bool`: walk the status item's
+menu, press the **first** row whose `AXTitle` starts with `•`, return whether the press
+succeeded. First is the right one — Cursor sorts its own menu notification-first, then
+in-progress, then most-recently-updated. Fails silently to `false` (Cursor gone, AX not
+granted, no notified entry), and the frontend then falls back to the old behavior of just
+activating Cursor, so the click is never a dead click.
+
+Frontend: the pip's click calls it, decrements the badge locally for instant feedback, and
+re-reads the true count 1.5s later (Cursor rewrites its menu-bar item asynchronously) rather
+than waiting up to 20s for the next scheduled poll. Tooltip now reads "click to open the next
+one (clears its notification)". No hook, schema, or installer change.
+
+**Reasoning.** This is the one place the bar can act on Cursor's behalf without inventing
+state: Cursor already ranks its waiting composers and already owns "open it ⇒ it's read." We
+just press the button the user would have pressed. Repeated clicks walk the queue — count 3 →
+2 → 1 → pip gone — which is the interaction the user described. Nothing here can produce a
+lying light (UI Principle #4): the count still comes from Cursor's own item, and a failed
+press changes nothing.
+
+**Validation.** `cargo build --release` clean; `node --check` on the frontend. A live Swift AX
+probe confirmed the press path end-to-end (` 2` → ` 1`, correct composer opened) before any of
+it was wired into the app.
+
+**The first build crashed the app on every pip click** — a Core Foundation ownership bug in
+this code, not in the AX approach. It pulled the status item's `AXMenu` out of a *temporary*
+`AXChildren` `CFArray`: the array holds the only retain on its children, so it released them
+as it dropped, and the next `AXUIElementCopyAttributeValue` got a dangling `AXUIElementRef` —
+`EXC_BREAKPOINT` in `_AXUIElementValidate` → `CFGetTypeID` → `__CF_IS_OBJC` (crash report
+`app-2026-07-30-093608.ips`), killing the whole bar. Fix: bind every `CFArray` to a local for
+as long as its elements are used, which is what `cursor_attention_count_inner` already did.
+Note the trap is silent in the type system — `ax_attr` hands back raw refs, so nothing in Rust
+tracks that the array owns them.
+
+To stop verifying this by hand (Guideline #8), the check is now a re-runnable, `#[ignore]`d
+test in `lib.rs`:
+
+    cargo test --release -- --ignored --nocapture cursor_press
+
+It calls the shipped command against the live Cursor, so it exercises the exact traversal that
+crashed. Confirmed post-fix: completed without crashing and printed `pressed=true` having
+pressed the one bulleted entry (`err=0`, logged via the `cursor-debug` marker); a second
+run correctly reported `no notified entry` once the queue was empty. Rebuilt and reinstalled
+with the fix; **the click from the bar itself is user-confirmed.**

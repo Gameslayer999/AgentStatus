@@ -601,6 +601,99 @@ fn cursor_attention_count() -> i64 {
     0
 }
 
+/// The AX title prefix Cursor puts on a tray menu entry whose composer has an unread
+/// notification (`"\u{2022} "` — a bullet, then the composer name).
+#[cfg(target_os = "macos")]
+const CURSOR_NOTIFY_PREFIX: &str = "\u{2022}";
+
+/// Open the next Cursor composer that's awaiting the user, clearing that one
+/// notification (decision 045). Returns true if an entry was pressed.
+///
+/// Cursor's tray menu (`TrayMainService.createContextMenu`, verified in the Cursor
+/// 3.12.10 bundle) is a native Electron `Menu`, so every entry is a real `AXMenuItem`
+/// reachable from the status item *without opening the menu* — status item →
+/// `AXChildren[0]` (its `AXMenu`) → the item rows. Entries for composers with an unread
+/// notification are titled `"• <name>"`; pressing one sends `vscode:openComposer` to
+/// that composer's window and focuses it, which marks it read. So one `AXPress` both
+/// jumps the user to the waiting composer and decrements Cursor's own count — verified
+/// live: count `" 2"` → `" 1"` with the pressed entry's bullet gone.
+///
+/// Presses the *first* bulleted entry, which is the one Cursor itself ranks highest:
+/// its menu is sorted notification-first, then in-progress, then most-recently-updated.
+/// Same Accessibility grant as the count read (decision 039); fails silently (false) if
+/// Cursor isn't running, AX isn't granted, or no entry carries a notification.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn cursor_open_next_attention() -> bool {
+    use accessibility_sys::{
+        kAXErrorSuccess, AXUIElementCreateApplication, AXUIElementPerformAction, AXUIElementRef,
+    };
+    use core_foundation::array::CFArray;
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::string::CFString;
+
+    let Some(pid) = cursor_pid() else {
+        cdbg("open_next: no cursor pid");
+        return false;
+    };
+    let app_ref = unsafe { AXUIElementCreateApplication(pid) };
+    if app_ref.is_null() {
+        return false;
+    }
+    let app = unsafe { CFType::wrap_under_create_rule(app_ref as _) };
+    let app_ref = app.as_CFTypeRef() as AXUIElementRef;
+
+    // status item → its menu → the menu's item rows.
+    let Some(extras) = ax_attr(app_ref, "AXExtrasMenuBar") else {
+        return false;
+    };
+    let Some(items) = ax_attr(extras.as_CFTypeRef() as AXUIElementRef, "AXChildren")
+        .and_then(|c| c.downcast::<CFArray>())
+    else {
+        return false;
+    };
+    for item in items.iter() {
+        // Each array must stay *bound* while its elements are used: the CFArray owns the
+        // only retain on the children, so pulling an element out of a temporary and letting
+        // the array drop leaves a dangling AXUIElementRef — which crashed the app inside
+        // AXUIElementCopyAttributeValue (EXC_BREAKPOINT in _AXUIElementValidate).
+        let Some(menus) = ax_attr(*item as AXUIElementRef, "AXChildren")
+            .and_then(|c| c.downcast::<CFArray>())
+        else {
+            continue;
+        };
+        let Some(menu) = menus.iter().next().map(|m| *m as AXUIElementRef) else {
+            continue;
+        };
+        let Some(rows) = ax_attr(menu, "AXChildren").and_then(|c| c.downcast::<CFArray>()) else {
+            continue;
+        };
+        for row in rows.iter() {
+            let row = *row as AXUIElementRef;
+            let title = ax_attr(row, "AXTitle")
+                .and_then(|t| t.downcast::<CFString>())
+                .map(|t| t.to_string())
+                .unwrap_or_default();
+            if !title.starts_with(CURSOR_NOTIFY_PREFIX) {
+                continue;
+            }
+            let action = CFString::new("AXPress");
+            let err = unsafe { AXUIElementPerformAction(row, action.as_concrete_TypeRef()) };
+            cdbg(&format!("open_next: pressed {title:?} err={err}"));
+            return err == kAXErrorSuccess;
+        }
+    }
+    cdbg("open_next: no notified entry");
+    false
+}
+
+// Non-macOS stub (see cursor_attention_count).
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn cursor_open_next_attention() -> bool {
+    false
+}
+
 /// Switch the bar between its two presentations (decision 024). Floating = the
 /// always-visible NSPanel (default); menu-bar = a tray item that shows the lights as
 /// a generated image (`set_tray_image`) and reveals the panel as a popover on click.
@@ -717,6 +810,7 @@ pub fn run() {
             set_mode,
             set_tray_image,
             cursor_attention_count,
+            cursor_open_next_attention,
             quit_app
         ])
         .setup(|app| {
@@ -776,4 +870,25 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Manual AX check for the Cursor pip's click path (decision 045). Ignored by default:
+/// it drives another app's real menu — it presses the top waiting composer, so Cursor
+/// opens it, exactly as a pip click does. Run it, don't hand-probe, whenever this code
+/// or Cursor's tray changes (Guideline #8):
+///
+///   cargo test --release -- --ignored --nocapture cursor_press
+///
+/// Prints `pressed=true` when a notified entry existed and was pressed, `false` when
+/// Cursor isn't running, has nothing waiting, or the terminal lacks Accessibility. The
+/// point is that it completes at all: the first cut walked the AX tree through elements
+/// whose owning CFArray had already been dropped and hard-crashed the app inside
+/// `AXUIElementCopyAttributeValue`.
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    #[test]
+    #[ignore]
+    fn cursor_press_next_attention() {
+        println!("pressed={}", super::cursor_open_next_attention());
+    }
 }

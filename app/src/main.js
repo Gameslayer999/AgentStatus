@@ -37,6 +37,9 @@ let tickCount = 0;
 // lands while the user has it open, and the notification count changes seldom — so a gentle
 // cadence keeps the pip fresh enough without interfering with Cursor's menu bar (decision 038).
 const CURSOR_POLL_EVERY = 20; // every 20th tick (~20s)
+// After a pip click opens a composer (decision 045), Cursor rewrites its menu-bar item
+// asynchronously — wait this long before re-reading the true count.
+const CURSOR_RECHECK_MS = 1500;
 
 // Display preferences (app-local; persisted in the webview's localStorage so they
 // survive restarts without touching the hook-written status files). Right-clicking
@@ -58,7 +61,7 @@ function currentSort() {
 
 // Most-urgent first (UI Principle #2). Uses the rendered displayState so a finished
 // "done" turn clusters correctly, not the raw idle state.
-const URGENCY_RANK = { error: 0, blocked: 1, done: 2, running: 3, idle: 4 };
+const URGENCY_RANK = { error: 0, blocked: 1, done: 2, running: 3, unknown: 4, idle: 5 };
 
 // Group sessions by window: full cwd path (so subfolders sit next to their root),
 // then id as a stable tiebreaker so same-window lights don't reshuffle each poll.
@@ -83,6 +86,41 @@ function sortSessions(sessions) {
   return arr;
 }
 
+// Whether "unknown" lights (sessions we get no signal from — decision 042) appear on
+// the bar at all. Defaults to showing them: a session you can't read is still a session
+// you may want to know exists. Hiding is for users who'd rather see only lights that
+// mean something (decision 044).
+const UNKNOWN_KEY = "agentstatus.showunknown"; // "true" | "false"
+
+function showUnknown() {
+  return localStorage.getItem(UNKNOWN_KEY) !== "false";
+}
+
+// What the bar and the tray actually draw from the latest poll. Kept separate from
+// `latestSessions` (which stays complete) so toggling the pref re-renders instantly
+// from memory instead of waiting for the next poll.
+function visibleSessions() {
+  if (showUnknown()) return latestSessions;
+  return latestSessions.filter((s) => displayState(s) !== "unknown");
+}
+
+function applyUnknownButtons() {
+  const on = showUnknown();
+  for (const btn of document.querySelectorAll("#unknown-seg button")) {
+    btn.classList.toggle("active", (btn.dataset.unknown === "true") === on);
+  }
+}
+
+function setShowUnknown(on) {
+  localStorage.setItem(UNKNOWN_KEY, String(on));
+  applyUnknownButtons();
+  render(visibleSessions());
+  if (currentMode() === "menubar") {
+    lastTraySig = null;
+    pushTrayImage();
+  }
+}
+
 function applySortButtons(mode) {
   for (const btn of document.querySelectorAll("#sort-seg button")) {
     btn.classList.toggle("active", btn.dataset.sort === mode);
@@ -95,7 +133,7 @@ function setSort(mode) {
   localStorage.setItem(SORT_KEY, mode);
   applySortButtons(mode);
   latestSessions = sortSessions(latestSessions);
-  render(latestSessions);
+  render(visibleSessions());
   if (currentMode() === "menubar") {
     lastTraySig = null;
     pushTrayImage();
@@ -210,7 +248,7 @@ let latestSessions = []; // most recent poll, so a pref change can repaint the t
 
 // Condense picks the single most-urgent state to show (UI Principle #2 — surface
 // what needs the user first).
-const TRAY_PRIORITY = ["error", "blocked", "done", "running", "idle"];
+const TRAY_PRIORITY = ["error", "blocked", "done", "running", "unknown", "idle"];
 
 function summaryState(states) {
   for (const p of TRAY_PRIORITY) if (states.includes(p)) return p;
@@ -251,6 +289,15 @@ function drawTray(states, colors, condense) {
     }
     ctx.globalAlpha = alpha;
     ctx.beginPath();
+    // "unknown" draws a hollow ring, matching the bar's `.dot.unknown`.
+    if (st === "unknown") {
+      const LW = 3;
+      ctx.arc(cx, cy, R - LW / 2, 0, Math.PI * 2);
+      ctx.lineWidth = LW;
+      ctx.strokeStyle = fill;
+      ctx.stroke();
+      return;
+    }
     ctx.arc(cx, cy, R, 0, Math.PI * 2);
     ctx.fillStyle = fill;
     ctx.fill();
@@ -265,7 +312,7 @@ async function pushTrayImage() {
   if (currentMode() !== "menubar") return;
   const colors = currentColors();
   const condense = currentCondense();
-  const states = latestSessions.map(displayState);
+  const states = visibleSessions().map(displayState);
   const sig = JSON.stringify([states, colors, condense]);
   if (sig === lastTraySig) return;
   lastTraySig = sig;
@@ -530,6 +577,7 @@ function setVolume(pct) {
 function resetPrefs() {
   localStorage.removeItem(ORIENT_KEY);
   localStorage.removeItem(SORT_KEY);
+  localStorage.removeItem(UNKNOWN_KEY);
   localStorage.removeItem(SIZE_KEY);
   localStorage.removeItem(PAD_KEY);
   localStorage.removeItem(OPACITY_KEY);
@@ -541,11 +589,12 @@ function resetPrefs() {
   localStorage.removeItem(VOL_KEY);
   applyOrientation(effectiveOrientation());
   applySortButtons(currentSort());
+  applyUnknownButtons();
   applyStyle();
   applyCondenseButtons();
   applyAudioButtons();
   latestSessions = sortSessions(latestSessions);
-  render(latestSessions);
+  render(visibleSessions());
   applyMode(currentMode()); // back to floating: shows the panel, hides the tray
 }
 
@@ -576,6 +625,7 @@ async function toggleSettings() {
 function initSettings() {
   applyOrientation(effectiveOrientation());
   applySortButtons(currentSort());
+  applyUnknownButtons();
   applyStyle();
   applyModeButtons(currentMode()); // visual only; backend mode applied after first tick
   applyCondenseButtons();
@@ -593,6 +643,10 @@ function initSettings() {
   document.getElementById("sort-seg").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-sort]");
     if (btn) setSort(btn.dataset.sort);
+  });
+  document.getElementById("unknown-seg").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-unknown]");
+    if (btn) setShowUnknown(btn.dataset.unknown === "true");
   });
   document.getElementById("mode-seg").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-mode]");
@@ -657,9 +711,21 @@ function isFinishedTurn(s) {
   return s.state === "idle" && !!s.detail;
 }
 
-// The state the light actually renders: "done" for an unacknowledged finished turn,
-// otherwise the raw session state (running/blocked/idle/error).
+// A Cursor session with no workspace folder is unobservable (decision 042): Cursor
+// runs command hooks only when a folder is open, so a folder-less window fires the
+// bridged `sessionStart` (which is why the light exists at all) and then nothing —
+// no prompt, tool, or stop events, verified in Cursor 3.12.10's own hook logs. Its
+// recorded "idle" is the single stale event, not a real state, so we must not render
+// it as one (UI Principle #4).
+function isUnobservable(s) {
+  return s.ide === "cursor" && !s.cwd;
+}
+
+// The state the light actually renders: "unknown" for a session we get no signal
+// from, "done" for an unacknowledged finished turn, otherwise the raw session state
+// (running/blocked/idle/error).
 function displayState(s) {
+  if (isUnobservable(s)) return "unknown";
   if (isFinishedTurn(s) && reviewedAt.get(s.id) !== s.updated_at) return "done";
   return s.state;
 }
@@ -679,6 +745,13 @@ function subSummary(subs) {
 
 // The hover tooltip: name — state, the task, active subagents, then the activity.
 function titleFor(s, ds) {
+  // Say plainly that we have no signal, and why — never imply a state we don't know.
+  if (ds === "unknown") {
+    return (
+      `Cursor ${shortId(s.id)} — state unknown\n` +
+      `↳ no folder open in this Cursor window, so it reports no progress · click to open Cursor`
+    );
+  }
   const stateText = ds === "done" ? "finished — click to acknowledge" : ds;
   const lines = [`${s.label || shortId(s.id)} — ${stateText}`];
   if (s.task) lines.push(`↳ ${s.task}`);
@@ -783,9 +856,10 @@ function render(sessions) {
 
 // Render (or remove) the single aggregate Cursor menu-bar pip as the last element in
 // the bar. It shows the count of Cursor composers awaiting the user (decision 038),
-// clicks to bring Cursor forward, and is styled distinctly (.cursor-pip) so it reads
-// as the Cursor menu-bar mirror, not a session light. Returns true if it added or
-// removed the element (so the caller re-measures the bar).
+// clicks through the waiting composers one at a time (decision 045), and is styled
+// distinctly (.cursor-pip) so it reads as the Cursor menu-bar mirror, not a session
+// light. Returns true if it added or removed the element (so the caller re-measures
+// the bar).
 function renderCursorPip(lights) {
   if (cursorAttention > 0) {
     let created = false;
@@ -793,7 +867,7 @@ function renderCursorPip(lights) {
       cursorPipEl = document.createElement("div");
       cursorPipEl.className = "dot done cursor-pip";
       cursorPipEl.addEventListener("click", () => {
-        focusSession("", "cursor", ""); // empty cwd ⇒ just activate Cursor.app
+        openNextCursorAttention();
         suppressHover();
         if (currentMode() === "menubar") hidePopover();
       });
@@ -807,7 +881,7 @@ function renderCursorPip(lights) {
     if (badge.textContent !== txt) badge.textContent = txt;
     const title =
       `Cursor — ${cursorAttention} composer${cursorAttention > 1 ? "s" : ""} awaiting you\n` +
-      `↳ from Cursor's menu bar · click to open Cursor`;
+      `↳ from Cursor's menu bar · click to open the next one (clears its notification)`;
     if (cursorPipEl.title !== title) cursorPipEl.title = title;
     if (lights.lastElementChild !== cursorPipEl) lights.appendChild(cursorPipEl);
     return created;
@@ -1066,22 +1140,47 @@ async function focusSession(cwd, ide, id) {
   }
 }
 
+// Re-read Cursor's menu-bar count. Fail-closed to 0 (no pip) on any error.
+async function refreshCursorAttention() {
+  try {
+    cursorAttention = await invoke("cursor_attention_count");
+  } catch (_) {
+    cursorAttention = 0;
+  }
+}
+
+// Click-through for the Cursor pip (decision 045): press the top entry in Cursor's tray
+// menu that carries a notification. Cursor opens that composer, focuses its window, and
+// marks it read — so its own count drops by one and the next click lands on the next
+// composer waiting. Decrement locally for immediate feedback, then re-read the real
+// count once Cursor has updated its menu-bar item. If nothing was pressable (no notified
+// entry, Cursor gone, AX not granted), fall back to the old behaviour: activate Cursor.
+async function openNextCursorAttention() {
+  let pressed = false;
+  try {
+    pressed = await invoke("cursor_open_next_attention");
+  } catch (_) {
+    /* fail-silent */
+  }
+  if (!pressed) {
+    focusSession("", "cursor", ""); // empty cwd ⇒ just activate Cursor.app
+    return;
+  }
+  cursorAttention = Math.max(0, cursorAttention - 1);
+  render(visibleSessions());
+  setTimeout(refreshCursorAttention, CURSOR_RECHECK_MS);
+}
+
 async function tick() {
   try {
     // Refresh the Cursor menu-bar count on a slower cadence than the session poll —
-    // it shells out to osascript (~150ms), so once every few ticks is plenty and
-    // keeps the AX read off the hot path (decision 038). Fail-closed to 0.
-    if (tickCount++ % CURSOR_POLL_EVERY === 0) {
-      try {
-        cursorAttention = await invoke("cursor_attention_count");
-      } catch (_) {
-        cursorAttention = 0;
-      }
-    }
+    // the AX read is not free, so once every few ticks is plenty and keeps it off the
+    // hot path (decision 038).
+    if (tickCount++ % CURSOR_POLL_EVERY === 0) await refreshCursorAttention();
     const sessions = sortSessions(await invoke("list_sessions"));
     latestSessions = sessions;
     checkChimes(sessions); // edge-triggered audio alerts (seeds silently on first tick)
-    render(sessions);
+    render(visibleSessions());
     if (currentMode() === "menubar") await pushTrayImage();
   } catch (_) {
     /* backend not ready yet; try again next tick */
