@@ -55,6 +55,7 @@
 | 042 | 2026-07-30 | **Hollow "unknown" light for sessions we get no signal from** — display-only, derived in the frontend from `ide == "cursor" && cwd == ""`. A folder-less Cursor window fires the bridged `sessionStart` (so a light exists) and then nothing at all — no prompt/tool/stop events, since Cursor runs command hooks only with a folder open (#018) — so its recorded `idle` is one stale event, not a state. `displayState()` returns `unknown` and the dot renders as a hollow gray ring (`.dot.unknown`), quiet and non-attention, saying "a session is here, its state is unreadable" instead of a solid dot asserting idle (UI Principle #4). No hook change and no status-file schema change (the app can derive it); scoped to this one verified case, not a generic heartbeat timeout | Accepted |
 | 044 | 2026-07-30 | **Settings: `Unknown` Show/Hide toggle** — whether the hollow no-signal lights of #042 appear on the bar at all. Defaults to **Show** (preserves the behavior #042 shipped hours earlier); **Hide** filters them from both the bar and the menu-bar tray image. Frontend-only `localStorage` (`agentstatus.showunknown`), same pattern as orientation/sort/opacity. `latestSessions` stays complete and a new `visibleSessions()` applies the filter at draw time, so toggling repaints instantly from memory instead of waiting for the next poll, and re-enabling brings the lights straight back. Chosen over dropping the sessions in `list_sessions` (a display pref does not belong in the backend, and the data would be gone from the tray/chime paths too) | Accepted |
 | 045 | 2026-07-30 | **Cursor pip clicks through the waiting composers** — a click now presses the top notification entry in Cursor's own tray menu (a native `NSMenu`, so every row is an `AXMenuItem` readable/pressable without opening it; notified rows are titled `"• <name>"`). Cursor opens that composer, focuses its window, and marks it read, so its count drops by one and the next click lands on the next one waiting — verified live on Cursor 3.12.10 (` 2` → ` 1`). New `cursor_open_next_attention` command; falls back to the old "just activate Cursor" behavior when nothing is pressable. Extends #038; same Accessibility grant (#039), no hook/schema/installer change | Accepted |
+| 046 | 2026-07-30 | **Activate Cursor after the pip's press** — #045's press cleared the notification but left the user where they were: macOS focus is per-*application*, and an `AXPress` from a background process never changes the frontmost app, so Cursor raised the composer's window behind everything else. `cursor_open_next_attention` now calls a shared `activate_cursor()` (`open -a Cursor`, the same activation `focus_session` already used for an empty `cwd`) after a successful press — press first so Cursor picks the window, activate second so the app comes forward. Chosen over an `AXFrontmost` write (adds an AX write path to save a few ms) and over `open -a Cursor <folder>` (the pip is aggregate, has no folder, and a folder arg risks a new window) | Accepted |
 
 ---
 
@@ -2154,3 +2155,40 @@ crashed. Confirmed post-fix: completed without crashing and printed `pressed=tru
 pressed the one bulleted entry (`err=0`, logged via the `cursor-debug` marker); a second
 run correctly reported `no notified entry` once the queue was empty. Rebuilt and reinstalled
 with the fix; **the click from the bar itself is user-confirmed.**
+
+---
+
+## 046 — Activate Cursor after the pip's press (an AXPress alone doesn't front the app)
+
+**Date:** 2026-07-30
+**Status:** Accepted (fixes #045)
+
+**Context.** With #045 shipped, a pip click did half of what it promised: the notification
+cleared and Cursor's count ticked down, but the user was left staring at the same window they
+were already in. #045 assumed the entry's handler (`vscode:openComposer` → the composer's
+window, "focuses it") would also bring the user there. It doesn't: macOS gives focus per
+*application*, and an `AXPress` issued from a background process (the bar) never changes which
+app is frontmost. Cursor raised the composer's window inside its own app, behind everything
+else. Against UI Principle #3 — the click has to land you in the session.
+
+**Decision.** On a successful press, `cursor_open_next_attention` now also activates Cursor
+via `open -a Cursor` (extracted as `activate_cursor()`, shared with the empty-`cwd` branch of
+`focus_session`, which already did exactly this). Order matters: press first, activate second,
+so Cursor has already selected the right window before the app comes forward. `open -a` with
+no file argument only activates — it never spawns a window — so it cannot conflict with the
+window the press just chose, and activating switches Spaces to that window's Space.
+
+**Options considered.**
+
+| Option | Verdict |
+|---|---|
+| `open -a Cursor` after the press (chosen) | Reuses the proven activation path already in `focus_session`; no new permission; one process spawn per click |
+| Set `AXFrontmost = true` on Cursor's app element | Same effect with no spawn, but adds an AX *write* (we only ever read + press today) for a saving of a few ms on a user-initiated click |
+| `cursor` CLI / `open -a Cursor <folder>` | Wrong tool: the pip is aggregate and has no folder; passing one risks opening a *new* window (the failure #016 removed) |
+
+**Reasoning.** The press and the activation are two separate things macOS deliberately keeps
+separate — Cursor decides *which* window, the OS decides *which app is in front*, and only the
+front app change is ours to make. Doing both is what "click to open the next one" always meant.
+
+**Validation.** `cargo build` clean; rebuilt, signed and reinstalled via `./install.sh`.
+**User-confirmed:** a pip click now brings Cursor forward on the waiting composer.

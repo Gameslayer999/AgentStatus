@@ -1150,9 +1150,10 @@ async function refreshCursorAttention() {
 }
 
 // Click-through for the Cursor pip (decision 045): press the top entry in Cursor's tray
-// menu that carries a notification. Cursor opens that composer, focuses its window, and
-// marks it read — so its own count drops by one and the next click lands on the next
-// composer waiting. Decrement locally for immediate feedback, then re-read the real
+// menu that carries a notification. Cursor opens that composer and marks it read — so its
+// own count drops by one and the next click lands on the next composer waiting. The
+// backend also activates Cursor after the press, which the press alone does not do
+// (decision 046). Decrement locally for immediate feedback, then re-read the real
 // count once Cursor has updated its menu-bar item. If nothing was pressable (no notified
 // entry, Cursor gone, AX not granted), fall back to the old behaviour: activate Cursor.
 async function openNextCursorAttention() {

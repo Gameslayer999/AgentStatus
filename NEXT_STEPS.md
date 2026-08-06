@@ -239,6 +239,23 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-08-06** — **Released v0.6.0.** Version bumped 0.5.0 → 0.6.0 across
+  `tauri.conf.json`, `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock`, and the
+  README's download link and release-command example. Minor rather than patch: three
+  user-visible additions since v0.5.0 — hollow unknown lights (#042), the Unknown Show/Hide
+  setting (#044), and the click-through Cursor pip (#045, fixed by #046). Cut by pushing the
+  `v0.6.0` tag, which triggers the release workflow of decision 041.
+
+- **2026-07-30** — **Pip click now actually lands you in Cursor (decision 046).** #045's press
+  cleared the notification but never brought Cursor forward: macOS focus is per-*application*,
+  and an `AXPress` from a background process leaves the frontmost app unchanged, so Cursor
+  raised the composer's window behind whatever the user was in. `cursor_open_next_attention`
+  now activates Cursor (`open -a Cursor`, extracted as the shared `activate_cursor()` that
+  `focus_session`'s empty-`cwd` branch already used) after a successful press — press first so
+  Cursor selects the window, activate second so the app comes to the front. Rebuilt, signed and
+  reinstalled via `./install.sh`. No README change (this restores the behavior the README
+  already describes).
+
 - **2026-07-30** — **Cursor pip clicks through the waiting composers (decision 045).** The pip
   used to only activate Cursor; it now resolves what it reports. Cursor's tray menu is a native
   Electron `Menu` (`TrayMainService.createContextMenu`), so each row is an `AXMenuItem` readable

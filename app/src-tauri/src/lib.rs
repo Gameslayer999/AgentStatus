@@ -393,9 +393,7 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
             // to focus — just bring Cursor forward so the user can open the composer
             // that's awaiting them.
             if ide == "cursor" {
-                let _ = std::process::Command::new("open")
-                    .args(["-a", "Cursor"])
-                    .spawn();
+                activate_cursor();
             }
             return;
         }
@@ -433,6 +431,17 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+/// Bring Cursor.app to the front (activating it also switches to the Space its
+/// frontmost window lives on). `open -a` with no file argument only activates — it
+/// never opens a window — so it is safe to call after Cursor has already put the
+/// right composer's window in front.
+#[cfg(target_os = "macos")]
+fn activate_cursor() {
+    let _ = std::process::Command::new("open")
+        .args(["-a", "Cursor"])
+        .spawn();
 }
 
 /// The PID of the running Cursor app (its main process is `Cursor`), or None. Used to
@@ -680,7 +689,15 @@ fn cursor_open_next_attention() -> bool {
             let action = CFString::new("AXPress");
             let err = unsafe { AXUIElementPerformAction(row, action.as_concrete_TypeRef()) };
             cdbg(&format!("open_next: pressed {title:?} err={err}"));
-            return err == kAXErrorSuccess;
+            if err != kAXErrorSuccess {
+                return false;
+            }
+            // The press opens the composer and clears its notification, but it does not
+            // bring Cursor forward: an AXPress issued from a background app leaves the
+            // frontmost app unchanged (observed — the badge cleared, the user stayed put).
+            // Activating afterwards completes the click-through (decision 046).
+            activate_cursor();
+            return true;
         }
     }
     cdbg("open_next: no notified entry");
