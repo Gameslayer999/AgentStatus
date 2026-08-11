@@ -239,6 +239,14 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-08-11** — **Released v0.6.1.** Version bumped 0.6.0 → 0.6.1 across
+  `tauri.conf.json`, `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock`, and the
+  README's download link and release-command example. Patch rather than minor: everything
+  since v0.6.0 is a Cursor fix — click-to-focus opening the conversation instead of a new
+  agent (#047), and lights/badges reconciling against Cursor's own record (#048). Cut by
+  merging `development` into `main` and pushing the `v0.6.1` tag, which triggers the release
+  workflow of decision 041.
+
 - **2026-08-11** — **Cursor lights reconcile against Cursor's own record (decision 048).** Two
   reported bugs, one cause: a Cursor light sat green for 95 min on a finished agent, and
   archived agents kept their lights. Cursor's hook bridge is lossy at end-of-life — archiving
