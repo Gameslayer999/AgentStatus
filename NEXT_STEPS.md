@@ -239,6 +239,45 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-08-11** — **Cursor lights reconcile against Cursor's own record (decision 048).** Two
+  reported bugs, one cause: a Cursor light sat green for 95 min on a finished agent, and
+  archived agents kept their lights. Cursor's hook bridge is lossy at end-of-life — archiving
+  fires no `sessionEnd`, and a **subagent** or **aborted** turn fires no `stop`, so the light
+  freezes at the last `preToolUse`. `list_sessions` now reads all status files first, then runs
+  one throttled (5s TTL) `sqlite3 -readonly` query over all Cursor ids against Cursor's
+  `composerHeaders` table + `composerData.status`: archived (and deleted) composers are pruned,
+  `isSubagent` composers get **no light**, and a
+  terminal `status` forces `idle`. Guarded so it can never grey a working agent: the light must
+  have been silent 60s+ *and* Cursor's own write must be newer than its last hook event (a live
+  agent showed a stale `status="aborted"` on disk, which is exactly what this rejects), and a
+  failed query reconciles nothing. The **subagent badge** had the same disease — `subagentStop`
+  fired for neither subagent, so a leftover marker file left a permanent "1 subagent running"
+  badge — so for Cursor the badge now comes from Cursor's `subagentComposerIds`, counting only
+  the linked composers still firing events; those events also serve as the proof that an agent
+  silent on "Running Task" is still busy (Cursor's own `lastUpdatedAt` was tried as that guard
+  first and rejected: it read 13:27 while the agent's hooks fired through 13:45). Claude Code
+  keeps the marker files, whose Stop hook is reliable. New check: `cargo test --release --
+  --ignored --nocapture cursor_facts`. Verified live — 5 archived pruned, 3 subagent lights gone,
+  the stuck agent's badge resolves to zero and its light to idle. README updated.
+
+- **2026-08-11** — **A Cursor session light opens that conversation instead of a new agent
+  (decision 047).** Clicking a Cursor light landed the user on a *new agent page in the same
+  repo*: `focus_session` focuses a window by running the IDE CLI (decision 016), and Cursor
+  3.15.6's main process intercepts `cursor <folder>` — with the Agent ("glass") window active,
+  `resolveGlassCliFolderTarget` routes it to `vscode:createNewComposer {folderUri}`. Verified in
+  Cursor's bundle plus the user's `glassMode = true`. Fix: for `ide == "cursor"` the CLI is never
+  called. A Cursor session's `session_id` *is* its `composerId` (confirmed against Cursor's
+  `composerData:`/`bubbleId:` keys), so the click resolves the composer's name via
+  `sqlite3 -readonly` on Cursor's `state.vscdb` (the `.name` field only — no message content) and
+  AXPresses the matching row in Cursor's tray menu, which sends `vscode:openComposer` to that
+  conversation, then activates Cursor. Decision 045's press was generalized into
+  `cursor_press_tray_row(predicate)` + a recursive `press_in_menu`, shared with the pip, and both
+  now reach the "View More" submenu too. Misses (unnamed composer, or older than the tray's 10
+  recents, or no Accessibility grant) fall back to raise + activate — never a new agent. New
+  re-runnable check: `AGENTSTATUS_TEST_SESSION=<id> cargo test --release -- --ignored --nocapture
+  cursor_press_composer` (printed `name=Some("Simplify presentation slides") pressed=true` live).
+  README updated: Cursor click behavior and the Accessibility requirement.
+
 - **2026-08-06** — **Released v0.6.0.** Version bumped 0.5.0 → 0.6.0 across
   `tauri.conf.json`, `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock`, and the
   README's download link and release-command example. Minor rather than patch: three

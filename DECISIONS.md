@@ -56,6 +56,8 @@
 | 044 | 2026-07-30 | **Settings: `Unknown` Show/Hide toggle** — whether the hollow no-signal lights of #042 appear on the bar at all. Defaults to **Show** (preserves the behavior #042 shipped hours earlier); **Hide** filters them from both the bar and the menu-bar tray image. Frontend-only `localStorage` (`agentstatus.showunknown`), same pattern as orientation/sort/opacity. `latestSessions` stays complete and a new `visibleSessions()` applies the filter at draw time, so toggling repaints instantly from memory instead of waiting for the next poll, and re-enabling brings the lights straight back. Chosen over dropping the sessions in `list_sessions` (a display pref does not belong in the backend, and the data would be gone from the tray/chime paths too) | Accepted |
 | 045 | 2026-07-30 | **Cursor pip clicks through the waiting composers** — a click now presses the top notification entry in Cursor's own tray menu (a native `NSMenu`, so every row is an `AXMenuItem` readable/pressable without opening it; notified rows are titled `"• <name>"`). Cursor opens that composer, focuses its window, and marks it read, so its count drops by one and the next click lands on the next one waiting — verified live on Cursor 3.12.10 (` 2` → ` 1`). New `cursor_open_next_attention` command; falls back to the old "just activate Cursor" behavior when nothing is pressable. Extends #038; same Accessibility grant (#039), no hook/schema/installer change | Accepted |
 | 046 | 2026-07-30 | **Activate Cursor after the pip's press** — #045's press cleared the notification but left the user where they were: macOS focus is per-*application*, and an `AXPress` from a background process never changes the frontmost app, so Cursor raised the composer's window behind everything else. `cursor_open_next_attention` now calls a shared `activate_cursor()` (`open -a Cursor`, the same activation `focus_session` already used for an empty `cwd`) after a successful press — press first so Cursor picks the window, activate second so the app comes forward. Chosen over an `AXFrontmost` write (adds an AX write path to save a few ms) and over `open -a Cursor <folder>` (the pip is aggregate, has no folder, and a folder arg risks a new window) | Accepted |
+| 047 | 2026-08-11 | **Cursor session lights open the conversation, not a new agent** — with Cursor's Agent ("glass") window active, `cursor <folder>` is intercepted by Cursor's main process (`resolveGlassCliFolderTarget` → `vscode:createNewComposer {folderUri}`) and starts a **new agent in that repo** instead of focusing anything, so the decision-016 CLI route silently became wrong for Cursor. A Cursor session's `session_id` *is* its `composerId`, so a click now resolves the composer's name (read-only `sqlite3` on Cursor's `state.vscdb`, `composerData:<id>` → `.name`) and AXPresses that row in Cursor's tray menu — the #045 press path, generalized — then activates Cursor. No tray row (unnamed, or older than the tray's 10 recents) falls back to raise + activate; the `cursor` CLI is never invoked | Accepted |
+| 048 | 2026-08-11 | **Cursor lights reconcile against Cursor's own record** — Cursor's bridged hooks are lossy at end-of-life: archiving an agent fires no `sessionEnd`, and a subagent or aborted turn fires no `stop`, so lights sat green on finished agents (one for 95 min) and archived agents lingered until the 2h backstop. `list_sessions` now runs one throttled (5s TTL) `sqlite3 -readonly` query over all Cursor session ids against Cursor's `composerHeaders` table + `composerData` status, and drops archived/deleted composers, hides `isSubagent` composers (they belong to the parent's subagent badge), and forces `idle` when Cursor says `completed`/`aborted`. The subagent badge for a Cursor agent likewise comes from Cursor's own parent→subagent linkage (`subagentComposerIds`, keeping the ones still firing events) rather than the marker files, whose `subagentStop` leaks a permanent "1 subagent running" badge. Guarded: only lights silent 60s+ with no live subagent of their own are overruled, and a failed query reconciles nothing | Accepted |
 
 ---
 
@@ -2192,3 +2194,160 @@ front app change is ours to make. Doing both is what "click to open the next one
 
 **Validation.** `cargo build` clean; rebuilt, signed and reinstalled via `./install.sh`.
 **User-confirmed:** a pip click now brings Cursor forward on the waiting composer.
+
+---
+
+## 047 — A Cursor session light opens that conversation (the IDE CLI now starts a new agent)
+
+**Date:** 2026-08-11
+**Status:** Accepted (fixes #016 for Cursor; extends #045)
+**Evidence:** Cursor **3.15.6** — `windowsManager#open` / `resolveGlassCliFolderTarget` and
+`TrayMainService.createContextMenu` in `/Applications/Cursor.app/Contents/Resources/app/out/main.js`,
+the `vscode:openComposer` handler in `workbench.desktop.main.js`, and the user's
+`storage.json` (`lastActiveWindow.uiState.glassMode = true`).
+
+**Context.** Clicking a Cursor session light landed the user on a **new agent page in that
+repo** rather than the session's conversation. Root cause: `focus_session` focuses a window
+by running the IDE's own CLI with the workspace root (decision 016). Cursor's main process
+now intercepts that. When the CLI is given a single existing-directory argument and the last
+active window is a **glass** (Agent) window, `resolveGlassCliFolderTarget` returns that folder
+and Cursor sends the glass window `vscode:createNewComposer {folderUri}` — literally "start a
+new agent here." Decision 016 predates glass mode; the CLI route is now actively wrong for
+Cursor, and no flag combination makes `cursor <folder>` mean "focus the conversation."
+
+**What makes the fix possible.** Two facts, both verified:
+
+1. A Cursor session's `session_id` (from its Claude-compat hook bridge) **is** its
+   `composerId` — Cursor's own store holds `composerData:<session_id>` and
+   `bubbleId:<session_id>:*` for the ids in `~/.claude/status/sessions/`.
+2. Every row of Cursor's tray menu sends `vscode:openComposer {composerId}` →
+   `composer.openComposer` (or `glass.openAgentById`) to the composer's window. Decision 045
+   already presses such a row via the Accessibility API without opening the menu.
+
+The gap between them: the tray exposes only the composer **name** (the id lives in the click
+handler's closure, not the AX tree). So the click needs id → name.
+
+**Options considered.**
+
+| Option | Pros | Cons |
+|---|---|---|
+| **Name-matched tray press** (chosen) | Opens the exact conversation using Cursor's own handler; reuses the #045/#039 Accessibility path, no new permission; ~90 lines, no new crate | Depends on Cursor's KV-store layout *and* tray structure; reaches only the 10 most recent composers (5 main + 5 "View More"); an unnamed composer has no matchable row |
+| Stop calling the CLI, just raise + activate | 5 lines, no new data source | Never opens a new agent, but also never reaches the conversation — the light stops lying without becoming useful (UI Principle #3) |
+| Extension relay inside Cursor calling `composer.openComposer <id>` | Uses the command directly, no name lookup, no AX | Requires shipping/installing our extension into Cursor, and whether glass windows host extensions at all is unverified |
+| Deep link | No AX | None exists — Cursor's only composer URL handler is `fork-shared-chat`, and there is no CLI flag for a composer id |
+
+**Decision.** For `ide == "cursor"`, `focus_session` no longer touches the `cursor` CLI. It
+resolves the name with `cursor_composer_name(session_id)` — `/usr/bin/sqlite3 -readonly` on
+`~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`, selecting
+`json_extract(value,'$.name')` for `composerData:<id>`, with the id rejected unless it is
+`[A-Za-z0-9-]+` since it is interpolated into SQL — then presses the tray row whose title
+(minus any notification bullet) equals that name, then activates Cursor. On any miss it falls
+back to `raise_window_fast` + `activate_cursor()`, so the click is never dead and **never**
+starts a new agent. Only the `.name` field is read: no prompts, no message bodies
+(Guideline #5). The lookup runs in the app on click, not in a hook.
+
+The #045 press was generalized into `cursor_press_tray_row(predicate)` + a recursive
+`press_in_menu`, so the pip (`starts_with("•")`) and a session light (`name ==`) share one
+traversal — and both now also search the "View More" submenu, which the original could not
+reach. The dead `ide == "cursor"` arm of the CLI branch is gone; that branch is VS Code only.
+
+**Reasoning.** The signal layer already knows precisely which conversation the user clicked;
+what was missing was a way to say so to Cursor. Pressing Cursor's own menu row is the only
+external channel that carries a composer id, and it is the same mechanism the pip has used
+since #045. Everything else in the click path is unchanged — this is a Cursor-only fix.
+
+**Validation.** `cargo build --release` clean. Live end-to-end check, now a re-runnable
+`#[ignore]`d test (Guideline #8):
+
+    AGENTSTATUS_TEST_SESSION=<composer-uuid> \
+      cargo test --release -- --ignored --nocapture cursor_press_composer
+
+printed `name=Some("Simplify presentation slides")` and `pressed=true` for a live Cursor
+session in ~70ms, with Cursor opening that conversation. Rebuilt, signed and reinstalled via
+`./install.sh`.
+
+---
+
+## 048 — Cursor lights reconcile against Cursor's own record (archived, subagent, finished)
+
+**Date:** 2026-08-11
+**Status:** Accepted (extends #038, #042)
+**Evidence:** Cursor **3.15.6** — the `composerHeaders` table (`composerId`, `isArchived`,
+`isSubagent`, `lastUpdatedAt`, indexed) and `composerData:<id>.status` in
+`~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`, sampled live against
+the sessions on the bar.
+
+**Context.** Two symptoms, one cause. A Cursor light sat **green for 95 minutes** on an agent
+that had finished, and lights for **archived** agents stayed on the bar. Cursor's hook bridge
+is lossy exactly at the end of a session's life:
+
+- **Archiving fires nothing.** There is no `sessionEnd`, so the status file survived until the
+  2h `MAX_IDLE_SECS` backstop. Six of the ten Cursor lights on the bar were archived agents.
+- **Some turns never fire `stop`.** Both stuck-green lights were **subagent composers**
+  (`isSubagent = 1`); an aborted turn is the same story. The light stays frozen at whatever
+  the last `preToolUse` wrote — green, indefinitely. Directly against UI Principle #4.
+
+Cursor knows all of this. Its `composerHeaders` table carries `isArchived`/`isSubagent` per
+composer (indexed), `composerData` carries the turn `status` (`completed`/`aborted`/`none`),
+and a Cursor session's `session_id` *is* its `composerId` (#047).
+
+**Decision.** `list_sessions` reads every status file first, then asks Cursor about all of its
+composers **in one query** (`sqlite3 -readonly`, `composerHeaders` left-joined to
+`composerData`), cached with a 5s TTL so the ~1/s poll spawns at most one process per 5s. Then:
+
+| Cursor says | Light |
+|---|---|
+| `isArchived = 1` | file deleted, light gone |
+| no row at all, and silent 60s+ | file deleted (the composer was deleted) |
+| `isSubagent = 1` | **no light** — it counts toward its parent's subagent badge, as Claude Code's do |
+| `status` terminal, silent 60s+, no live subagent of its own | forced to **idle** |
+| `subagentComposerIds` | the parent's **subagent badge**: those composers, minus the ones gone quiet |
+| anything else / query failed | untouched — the hooks stay authoritative |
+
+Guards keep this from inventing a wrong light. A terminal `status` alone is **not** trusted:
+an agent that was actively working showed `status = "aborted"` on disk from its previous turn.
+So the light must *also* have been silent for `CURSOR_STALE_SECS` (60s) **and** have no live
+subagent — an agent parked on "Running Task" while a subagent works is silent by definition,
+and that subagent's own hook events are what prove the parent is still busy. A failed query
+(no `sqlite3`, no db, unreadable mid-write) returns None, which reconciles **nothing**;
+absence of Cursor's record is never treated as evidence.
+
+Cursor's `lastUpdatedAt` was tried as that second guard first — require Cursor's write to be
+newer than the light's last hook event — and rejected on the evidence: Cursor does not flush it
+per message. The stuck agent's header read 13:27 while its hooks had fired through 13:45, so the
+guard blocked the very case it was meant to fix. The subagent-liveness check replaces it and
+rests on our own signal rather than Cursor's flush timing.
+
+**The subagent badge had the same disease.** `subagentStop` fired for neither subagent of the
+stuck agent, so a marker file survived in `sessions/<id>.subagents/` and the light carried a
+permanent "1 subagent running" badge pointing at nothing — while Cursor's record showed both
+subagent composers terminal. For Cursor sessions the badge is now computed from
+`subagentComposerIds`, counting only composers whose *own* status file is still fresh (they run
+as sessions in their own right; this decision hides their lights, not their events). Claude Code
+keeps the marker files, whose Stop hook is reliable (#010).
+
+**Options considered.**
+
+| Option | Verdict |
+|---|---|
+| Reconcile against Cursor's store (chosen) | The only source that knows about archiving, subagents, and aborted turns; read-only, display-layer only, no hook or schema change |
+| Shorten `MAX_IDLE_SECS` for Cursor | Guesswork dressed as a fix: it would still show a wrong green for minutes, and would kill genuinely long-running agents |
+| Ask Cursor for a `stop` on subagent/aborted turns | Not ours to change, and #040's rule stands — build on what the host actually emits |
+| Read the tray menu's per-row status via AX | The tray exposes `in_progress`/`needs_attention` as a *sublabel*, unreliable through AX, and covers only the 10 most recent composers |
+
+**Why hide subagent composers.** A Cursor subagent is not a session the user tends separately —
+it belongs to the agent that spawned it, which already renders it in the blue subagent badge
+(the native `subagentStart`/`subagentStop` hooks in `~/.cursor/hooks.json` write those markers).
+One light per *thing the user acts on* is the whole point of the bar; a subagent light is
+duplicate chrome that also happens to be the one that never turns off.
+
+**Validation.** `cargo build --release` clean. New re-runnable check (Guideline #8):
+
+    cargo test --release -- --ignored --nocapture cursor_facts
+
+prints what Cursor says about every Cursor session currently on the bar, including each agent's
+subagent linkage. Live run classified 5 archived, 3 subagent, 2 real sessions; after rebuild +
+`./install.sh`, the five archived status files were pruned within one poll and the stuck-green
+subagent lights were gone. The follow-up run confirmed the badge fix on the same data: the
+remaining green agent linked to `[b3164824, 87e346b7]`, both silent for 12+ and 29+ minutes and
+both terminal in Cursor's record, so the badge drops to zero and the agent itself to idle.

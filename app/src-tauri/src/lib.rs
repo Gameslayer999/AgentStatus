@@ -190,6 +190,123 @@ fn cursor_running() -> bool {
         .unwrap_or(true)
 }
 
+/// What Cursor itself says about a composer (decision 048), read from its own store.
+#[derive(Clone, Default)]
+struct CursorFacts {
+    /// The user archived this agent — Cursor fires no `sessionEnd`, so only this says so.
+    archived: bool,
+    /// A subagent composer: it belongs to its parent agent's light, not one of its own.
+    subagent: bool,
+    /// The turn is over (`completed`/`aborted`) as far as Cursor's own record goes.
+    terminal: bool,
+    /// The composers this agent spawned as subagents. Cursor's `subagentStop` hook does not
+    /// reliably fire, so the badge counts these (the ones still firing events) rather than
+    /// the leftover marker files.
+    sub_ids: Vec<String>,
+}
+
+/// How long a Cursor fact set is reused before re-querying (seconds). The poll runs
+/// ~1×/s; a `sqlite3` spawn that often is pointless when archive/finish state changes
+/// on human timescales.
+const CURSOR_FACTS_TTL: i64 = 5;
+
+/// How long a Cursor session must have gone without a hook event to count as silent
+/// (seconds). A working agent fires a tool event every few seconds, and one waiting on a
+/// subagent has that subagent's events standing in for it — so silence *plus* Cursor
+/// calling the turn over is what makes a light reconcilable.
+const CURSOR_STALE_SECS: i64 = 60;
+
+/// Cursor's key-value store, which holds both the composer headers and the per-composer
+/// records the lights are reconciled against.
+#[cfg(target_os = "macos")]
+fn cursor_state_db() -> Option<std::path::PathBuf> {
+    Some(
+        std::path::PathBuf::from(std::env::var("HOME").ok()?)
+            .join("Library/Application Support/Cursor/User/globalStorage/state.vscdb"),
+    )
+}
+
+/// Ask Cursor about these composers — archived, subagent, finished — in one query
+/// (decision 048). `session_id` *is* `composerId` for a Cursor session, and its
+/// `composerHeaders` row carries `isArchived`/`isSubagent` while `composerData` carries
+/// the turn `status`. Returns None if the query can't run (no sqlite3, no db, unreadable
+/// while Cursor writes), which the caller treats as "reconcile nothing" — Cursor's
+/// record must never be *assumed* absent, or one bad read would clear the bar.
+#[cfg(target_os = "macos")]
+fn cursor_facts_query(ids: &[String]) -> Option<std::collections::HashMap<String, CursorFacts>> {
+    let list = ids
+        .iter()
+        .filter(|id| id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .map(|id| format!("'{id}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    if list.is_empty() {
+        return Some(std::collections::HashMap::new());
+    }
+    let out = std::process::Command::new("/usr/bin/sqlite3")
+        .arg("-readonly")
+        .arg(cursor_state_db()?)
+        .arg(format!(
+            "select h.composerId, h.isArchived, h.isSubagent, \
+             coalesce(json_extract(d.value,'$.status'),''), \
+             coalesce(json_extract(d.value,'$.subagentComposerIds'),'') \
+             from composerHeaders h \
+             left join cursorDiskKV d on d.key = 'composerData:'||h.composerId \
+             where h.composerId in ({list});"
+        ))
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let mut map = std::collections::HashMap::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let f: Vec<&str> = line.split('|').collect();
+        if f.len() < 5 {
+            continue;
+        }
+        map.insert(
+            f[0].to_string(),
+            CursorFacts {
+                archived: f[1] == "1",
+                subagent: f[2] == "1",
+                terminal: f[3] == "completed" || f[3] == "aborted",
+                // A JSON array of ids: pull the uuid-shaped tokens out of it.
+                sub_ids: f[4]
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                    .filter(|s| s.len() >= 32)
+                    .map(|s| s.to_string())
+                    .collect(),
+            },
+        );
+    }
+    Some(map)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cursor_facts_query(_ids: &[String]) -> Option<std::collections::HashMap<String, CursorFacts>> {
+    None
+}
+
+/// `cursor_facts_query` behind a TTL cache, so the once-a-second poll spawns at most one
+/// `sqlite3` every `CURSOR_FACTS_TTL` seconds. A failed query is cached too (as None) —
+/// retrying it every poll would be the same spawn storm the cache exists to avoid.
+fn cursor_facts(
+    ids: &[String],
+    now: i64,
+) -> Option<std::collections::HashMap<String, CursorFacts>> {
+    type Cache = std::sync::Mutex<(i64, Option<std::collections::HashMap<String, CursorFacts>>)>;
+    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new((0, None)));
+    let Ok(mut guard) = cache.lock() else {
+        return None;
+    };
+    if now - guard.0 >= CURSOR_FACTS_TTL {
+        *guard = (now, cursor_facts_query(ids));
+    }
+    guard.1.clone()
+}
+
 #[tauri::command]
 fn list_sessions() -> Vec<SessionStatus> {
     let mut out = Vec::new();
@@ -201,6 +318,9 @@ fn list_sessions() -> Vec<SessionStatus> {
     // lock-pruning is skipped below and only the idle timeout applies.
     let live_folders = live_workspace_folders();
     let cursor_alive = cursor_running();
+    // Read every status file first, so the Cursor reconciliation below can ask about all
+    // of that host's composers in one query instead of one per light.
+    let mut files: Vec<(std::path::PathBuf, String, serde_json::Value)> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -217,6 +337,30 @@ fn list_sessions() -> Vec<SessionStatus> {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
                 continue;
             };
+            files.push((path, id, v));
+        }
+    }
+    let cursor_ids: Vec<String> = files
+        .iter()
+        .filter(|(_, _, v)| v.get("ide").and_then(|x| x.as_str()) == Some("cursor"))
+        .map(|(_, id, _)| id.clone())
+        .collect();
+    // When each session last reported, so a Cursor agent's subagents can be checked for
+    // life below (their own lights are hidden, but their events still prove they're alive).
+    let fresh_at: std::collections::HashMap<&str, i64> = files
+        .iter()
+        .map(|(_, id, v)| {
+            (id.as_str(), v.get("updated_at").and_then(|x| x.as_i64()).unwrap_or(0))
+        })
+        .collect();
+    let facts = if cursor_ids.is_empty() {
+        None
+    } else {
+        cursor_facts(&cursor_ids, now)
+    };
+    {
+        for (path, id, v) in &files {
+            let (path, id) = (path.clone(), id.clone());
             let updated_at = v.get("updated_at").and_then(|x| x.as_i64()).unwrap_or(0);
             let cwd = v.get("cwd").and_then(|x| x.as_str()).unwrap_or("");
             // Prune dead sessions (delete the file + subagent markers, skip it; self-heals
@@ -242,10 +386,67 @@ fn list_sessions() -> Vec<SessionStatus> {
                 let _ = std::fs::remove_dir_all(dir.join(format!("{id}.subagents")));
                 continue;
             }
-            let subagents = read_subagents(&dir, &id);
+            let mut state = v.get("state").and_then(|x| x.as_str()).unwrap_or("idle").to_string();
+            let mut cursor_subs: Option<Vec<String>> = None;
+            // Reconcile Cursor lights against Cursor's own record (decision 048). Cursor's
+            // bridged hooks are lossy at the end of a life: archiving an agent fires no
+            // `sessionEnd`, and a subagent turn or an aborted one fires no `stop` — so a
+            // light can sit green forever on an agent that finished, and an archived agent
+            // keeps a light until the idle backstop. Only silent lights are touched
+            // (CURSOR_STALE_SECS), and only when the query actually answered.
+            if ide == "cursor" {
+                if let Some(facts) = &facts {
+                    let stale = now - updated_at >= CURSOR_STALE_SECS;
+                    // The subagents Cursor says this agent spawned, keeping the ones still
+                    // firing hook events of their own. `subagentStop` doesn't reliably fire
+                    // — a marker for a finished subagent survived every poll and left a
+                    // permanent "1 subagent running" badge on a finished agent — so for
+                    // Cursor these replace the marker files, and they double as the proof
+                    // that an agent sitting silent on "Running Task" is still working.
+                    if let Some(f) = facts.get(&id) {
+                        cursor_subs = Some(
+                            f.sub_ids
+                                .iter()
+                                .filter(|sid| {
+                                    fresh_at.get(sid.as_str()).is_some_and(|t| now - t < CURSOR_STALE_SECS)
+                                })
+                                .map(|_| "agent".to_string())
+                                .collect(),
+                        );
+                    }
+                    let subs_live = cursor_subs.as_ref().is_some_and(|s| !s.is_empty());
+                    match facts.get(&id) {
+                        // Archived, or (once silent) gone from Cursor's store entirely —
+                        // the session no longer exists to go back to.
+                        Some(f) if f.archived => {
+                            let _ = std::fs::remove_file(&path);
+                            let _ = std::fs::remove_dir_all(dir.join(format!("{id}.subagents")));
+                            continue;
+                        }
+                        None if stale => {
+                            let _ = std::fs::remove_file(&path);
+                            let _ = std::fs::remove_dir_all(dir.join(format!("{id}.subagents")));
+                            continue;
+                        }
+                        // A subagent belongs to its parent's light — which already counts it
+                        // via the subagent markers — not to one of its own.
+                        Some(f) if f.subagent => continue,
+                        // Cursor says the turn ended and nothing — not the agent, not a
+                        // subagent of its — has emitted anything since, but no `stop` ever
+                        // reached us.
+                        Some(f) if f.terminal && stale && !subs_live && state != "error" => {
+                            state = "idle".to_string();
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // Cursor's badge comes from its own parent→subagent linkage (above); Claude
+            // Code's from the marker files, whose Stop hook is reliable (decision 010).
+            let subagents = cursor_subs.unwrap_or_else(|| read_subagents(&dir, &id));
             out.push(SessionStatus {
                 id,
-                state: v.get("state").and_then(|x| x.as_str()).unwrap_or("idle").to_string(),
+                state,
                 cwd: cwd.to_string(),
                 label: v.get("label").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                 updated_at,
@@ -388,13 +589,29 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
     write_focus_request(&session_id);
     #[cfg(target_os = "macos")]
     {
-        if cwd.is_empty() {
-            // The aggregate Cursor menu-bar pip (decision 038) has no specific window
-            // to focus — just bring Cursor forward so the user can open the composer
-            // that's awaiting them.
-            if ide == "cursor" {
-                activate_cursor();
+        // Cursor never goes through the IDE CLI (decision 047): with the Agent ("glass")
+        // window active, `cursor <folder>` is intercepted by Cursor's main process
+        // (`resolveGlassCliFolderTarget` → `vscode:createNewComposer {folderUri}`) and
+        // opens a *new* agent in that folder instead of focusing anything. Press the
+        // session's own row in Cursor's tray menu instead — that's the one thing that
+        // opens the existing conversation. Falls back to raise + activate, never the CLI.
+        if ide == "cursor" {
+            if let Some(name) = cursor_composer_name(&session_id) {
+                if cursor_press_tray_row(&|t| trim_bullet(t) == name) {
+                    activate_cursor();
+                    return;
+                }
             }
+            // No row for this composer (unnamed, or older than the tray's 10 recents),
+            // or the aggregate menu-bar pip (decision 038), which has no session at all:
+            // bring Cursor forward — its window, if we can name one.
+            if !cwd.is_empty() {
+                raise_window_fast(&workspace_root(&cwd), &ide);
+            }
+            activate_cursor();
+            return;
+        }
+        if cwd.is_empty() {
             return;
         }
         let root = workspace_root(&cwd);
@@ -402,17 +619,10 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
         // The CLI below always runs too, covering the cross-Space / full-screen case
         // the fast path can't reach (decision 021).
         raise_window_fast(&root, &ide);
-        let (cli, app) = if ide == "cursor" {
-            (
-                "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
-                "Cursor",
-            )
-        } else {
-            (
-                "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
-                "Visual Studio Code",
-            )
-        };
+        let (cli, app) = (
+            "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+            "Visual Studio Code",
+        );
         if std::path::Path::new(cli).exists() {
             let _ = std::process::Command::new(cli).arg(&root).spawn();
         } else {
@@ -615,34 +825,67 @@ fn cursor_attention_count() -> i64 {
 #[cfg(target_os = "macos")]
 const CURSOR_NOTIFY_PREFIX: &str = "\u{2022}";
 
-/// Open the next Cursor composer that's awaiting the user, clearing that one
-/// notification (decision 045). Returns true if an entry was pressed.
-///
-/// Cursor's tray menu (`TrayMainService.createContextMenu`, verified in the Cursor
-/// 3.12.10 bundle) is a native Electron `Menu`, so every entry is a real `AXMenuItem`
-/// reachable from the status item *without opening the menu* — status item →
-/// `AXChildren[0]` (its `AXMenu`) → the item rows. Entries for composers with an unread
-/// notification are titled `"• <name>"`; pressing one sends `vscode:openComposer` to
-/// that composer's window and focuses it, which marks it read. So one `AXPress` both
-/// jumps the user to the waiting composer and decrements Cursor's own count — verified
-/// live: count `" 2"` → `" 1"` with the pressed entry's bullet gone.
-///
-/// Presses the *first* bulleted entry, which is the one Cursor itself ranks highest:
-/// its menu is sorted notification-first, then in-progress, then most-recently-updated.
-/// Same Accessibility grant as the count read (decision 039); fails silently (false) if
-/// Cursor isn't running, AX isn't granted, or no entry carries a notification.
+/// A tray row's title without the unread-notification bullet: `"• Fix the parser"` and
+/// `"Fix the parser"` both compare as `"Fix the parser"`.
 #[cfg(target_os = "macos")]
-#[tauri::command]
-fn cursor_open_next_attention() -> bool {
-    use accessibility_sys::{
-        kAXErrorSuccess, AXUIElementCreateApplication, AXUIElementPerformAction, AXUIElementRef,
-    };
+fn trim_bullet(title: &str) -> &str {
+    title
+        .strip_prefix(CURSOR_NOTIFY_PREFIX)
+        .unwrap_or(title)
+        .trim()
+}
+
+/// The name Cursor shows for a composer, looked up by id (decision 047). A Cursor
+/// session's `session_id` **is** its `composerId` — Cursor's Claude-compat bridge passes
+/// it straight through — and its record lives in Cursor's own key-value store under
+/// `composerData:<composerId>`. We pull one field, `.name`, because that string is the
+/// only handle Cursor's tray menu exposes for a row (the composerId is in the click
+/// handler's closure, not the AX tree), and pressing that row is what opens the
+/// conversation. Read-only `sqlite3` (on every macOS) against the live db, one field, no
+/// message content (Agent Guideline #5). None if the id isn't a plain uuid (this string
+/// goes into SQL), the db/binary is missing, or the composer has no name yet.
+#[cfg(target_os = "macos")]
+fn cursor_composer_name(session_id: &str) -> Option<String> {
+    if session_id.is_empty()
+        || !session_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return None;
+    }
+    let db = std::path::PathBuf::from(std::env::var("HOME").ok()?)
+        .join("Library/Application Support/Cursor/User/globalStorage/state.vscdb");
+    let out = std::process::Command::new("/usr/bin/sqlite3")
+        .arg("-readonly")
+        .arg(&db)
+        .arg(format!(
+            "select json_extract(value,'$.name') from cursorDiskKV \
+             where key='composerData:{session_id}';"
+        ))
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    cdbg(&format!("composer_name: {session_id} -> {name:?}"));
+    if name.is_empty() || name == "null" {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// AXPress the first row of Cursor's tray menu whose title satisfies `want`, and report
+/// whether one was pressed. Shared by the pip's "next waiting composer" click (decision
+/// 045) and a session light's "this composer" click (decision 047) — they differ only in
+/// the predicate. Path: Cursor's app element → `AXExtrasMenuBar` → the status item →
+/// `AXChildren[0]` (its `AXMenu`) → the rows, none of which requires opening the menu.
+#[cfg(target_os = "macos")]
+fn cursor_press_tray_row(want: &dyn Fn(&str) -> bool) -> bool {
+    use accessibility_sys::{AXUIElementCreateApplication, AXUIElementRef};
     use core_foundation::array::CFArray;
     use core_foundation::base::{CFType, TCFType};
-    use core_foundation::string::CFString;
 
     let Some(pid) = cursor_pid() else {
-        cdbg("open_next: no cursor pid");
+        cdbg("press: no cursor pid");
         return false;
     };
     let app_ref = unsafe { AXUIElementCreateApplication(pid) };
@@ -652,7 +895,6 @@ fn cursor_open_next_attention() -> bool {
     let app = unsafe { CFType::wrap_under_create_rule(app_ref as _) };
     let app_ref = app.as_CFTypeRef() as AXUIElementRef;
 
-    // status item → its menu → the menu's item rows.
     let Some(extras) = ax_attr(app_ref, "AXExtrasMenuBar") else {
         return false;
     };
@@ -674,34 +916,81 @@ fn cursor_open_next_attention() -> bool {
         let Some(menu) = menus.iter().next().map(|m| *m as AXUIElementRef) else {
             continue;
         };
-        let Some(rows) = ax_attr(menu, "AXChildren").and_then(|c| c.downcast::<CFArray>()) else {
-            continue;
-        };
-        for row in rows.iter() {
-            let row = *row as AXUIElementRef;
-            let title = ax_attr(row, "AXTitle")
-                .and_then(|t| t.downcast::<CFString>())
-                .map(|t| t.to_string())
-                .unwrap_or_default();
-            if !title.starts_with(CURSOR_NOTIFY_PREFIX) {
-                continue;
-            }
-            let action = CFString::new("AXPress");
-            let err = unsafe { AXUIElementPerformAction(row, action.as_concrete_TypeRef()) };
-            cdbg(&format!("open_next: pressed {title:?} err={err}"));
-            if err != kAXErrorSuccess {
-                return false;
-            }
-            // The press opens the composer and clears its notification, but it does not
-            // bring Cursor forward: an AXPress issued from a background app leaves the
-            // frontmost app unchanged (observed — the badge cleared, the user stayed put).
-            // Activating afterwards completes the click-through (decision 046).
-            activate_cursor();
+        if press_in_menu(menu, want) {
             return true;
         }
     }
-    cdbg("open_next: no notified entry");
+    cdbg("press: no matching entry");
     false
+}
+
+/// Press the first row of `menu` matching `want`, descending into a row's submenu
+/// (Cursor's "View More (N)", which holds recents 6–10) when the row itself doesn't
+/// match. Rows are walked in menu order, so a main-list match always wins over a
+/// submenu one.
+#[cfg(target_os = "macos")]
+fn press_in_menu(menu: accessibility_sys::AXUIElementRef, want: &dyn Fn(&str) -> bool) -> bool {
+    use accessibility_sys::{kAXErrorSuccess, AXUIElementPerformAction, AXUIElementRef};
+    use core_foundation::array::CFArray;
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+
+    let Some(rows) = ax_attr(menu, "AXChildren").and_then(|c| c.downcast::<CFArray>()) else {
+        return false;
+    };
+    for row in rows.iter() {
+        let row = *row as AXUIElementRef;
+        let title = ax_attr(row, "AXTitle")
+            .and_then(|t| t.downcast::<CFString>())
+            .map(|t| t.to_string())
+            .unwrap_or_default();
+        if want(&title) {
+            let action = CFString::new("AXPress");
+            let err = unsafe { AXUIElementPerformAction(row, action.as_concrete_TypeRef()) };
+            cdbg(&format!("press: pressed {title:?} err={err}"));
+            return err == kAXErrorSuccess;
+        }
+        // A submenu row's AXMenu is its only child; leaf rows have none.
+        let Some(subs) = ax_attr(row, "AXChildren").and_then(|c| c.downcast::<CFArray>()) else {
+            continue;
+        };
+        if let Some(sub) = subs.iter().next().map(|m| *m as AXUIElementRef) {
+            if press_in_menu(sub, want) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Open the next Cursor composer that's awaiting the user, clearing that one
+/// notification (decision 045). Returns true if an entry was pressed.
+///
+/// Cursor's tray menu (`TrayMainService.createContextMenu`, verified in the Cursor
+/// 3.12.10 bundle) is a native Electron `Menu`, so every entry is a real `AXMenuItem`
+/// reachable from the status item *without opening the menu* — status item →
+/// `AXChildren[0]` (its `AXMenu`) → the item rows. Entries for composers with an unread
+/// notification are titled `"• <name>"`; pressing one sends `vscode:openComposer` to
+/// that composer's window and focuses it, which marks it read. So one `AXPress` both
+/// jumps the user to the waiting composer and decrements Cursor's own count — verified
+/// live: count `" 2"` → `" 1"` with the pressed entry's bullet gone.
+///
+/// Presses the *first* bulleted entry, which is the one Cursor itself ranks highest:
+/// its menu is sorted notification-first, then in-progress, then most-recently-updated.
+/// Same Accessibility grant as the count read (decision 039); fails silently (false) if
+/// Cursor isn't running, AX isn't granted, or no entry carries a notification.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn cursor_open_next_attention() -> bool {
+    if !cursor_press_tray_row(&|t| t.starts_with(CURSOR_NOTIFY_PREFIX)) {
+        return false;
+    }
+    // The press opens the composer and clears its notification, but it does not bring
+    // Cursor forward: an AXPress issued from a background app leaves the frontmost app
+    // unchanged (observed — the badge cleared, the user stayed put). Activating
+    // afterwards completes the click-through (decision 046).
+    activate_cursor();
+    true
 }
 
 // Non-macOS stub (see cursor_attention_count).
@@ -907,5 +1196,77 @@ mod tests {
     #[ignore]
     fn cursor_press_next_attention() {
         println!("pressed={}", super::cursor_open_next_attention());
+    }
+
+    /// Manual check for the Cursor reconciliation (decision 048): prints what Cursor says
+    /// about every Cursor session currently on the bar, i.e. the input the light logic
+    /// runs on. Run it whenever Cursor's store layout or this query changes:
+    ///
+    ///   cargo test --release -- --ignored --nocapture cursor_facts
+    ///
+    /// `None` means the query itself failed (no sqlite3/db) — the app then reconciles
+    /// nothing. An id missing from the map is a composer Cursor no longer has.
+    #[test]
+    #[ignore]
+    fn cursor_facts_live() {
+        let dir = super::sessions_dir();
+        let mut ids = Vec::new();
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(v) = std::fs::read_to_string(&p)
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).map_err(Into::into))
+            else {
+                continue;
+            };
+            if v.get("ide").and_then(|x| x.as_str()) == Some("cursor") {
+                if let Some(id) = p.file_stem().and_then(|s| s.to_str()) {
+                    println!(
+                        "session {id} state={:?} age={}s",
+                        v.get("state").and_then(|x| x.as_str()).unwrap_or(""),
+                        super::now_unix() - v.get("updated_at").and_then(|x| x.as_i64()).unwrap_or(0)
+                    );
+                    ids.push(id.to_string());
+                }
+            }
+        }
+        match super::cursor_facts_query(&ids) {
+            None => println!("query failed"),
+            Some(m) => {
+                for id in &ids {
+                    match m.get(id) {
+                        None => println!("{id}: not in Cursor's store"),
+                        Some(f) => println!(
+                            "{id}: archived={} subagent={} terminal={} subagents={:?}",
+                            f.archived, f.subagent, f.terminal, f.sub_ids
+                        ),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Manual check for a Cursor session light's click path (decision 047): id → name →
+    /// tray row → press, i.e. exactly what `focus_session` does for `ide == "cursor"`.
+    /// Pass a Cursor session id from `~/.claude/status/sessions/`:
+    ///
+    ///   AGENTSTATUS_TEST_SESSION=<composer-uuid> \
+    ///     cargo test --release -- --ignored --nocapture cursor_press_composer
+    ///
+    /// Prints the resolved name and whether its row was pressed (Cursor then opens that
+    /// conversation). `name=None` means the lookup missed; `pressed=false` means no tray
+    /// row carries that name (older than the 10 recents, or Cursor isn't running).
+    #[test]
+    #[ignore]
+    fn cursor_press_composer() {
+        let id = std::env::var("AGENTSTATUS_TEST_SESSION").unwrap_or_default();
+        let name = super::cursor_composer_name(&id);
+        println!("id={id} name={name:?}");
+        let pressed = name
+            .map(|n| super::cursor_press_tray_row(&|t| super::trim_bullet(t) == n))
+            .unwrap_or(false);
+        println!("pressed={pressed}");
     }
 }

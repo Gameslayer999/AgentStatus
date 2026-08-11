@@ -66,10 +66,12 @@ first. **Already-open Claude Code sessions pick it up immediately — no restart
 AgentStatus is an accessory app (**no Dock icon**). To start it at login, add it in
 **System Settings → General → Login Items**.
 
-**Optional — faster click-to-focus:** grant AgentStatus **Accessibility** permission
-(System Settings → Privacy & Security → Accessibility). This lets a light click raise a
-same-Space window in ~0.2s instead of ~1s. Without it, click-to-focus still works via the
-slower IDE CLI.
+**Faster click-to-focus (and required for Cursor):** grant AgentStatus **Accessibility**
+permission (System Settings → Privacy & Security → Accessibility). For VS Code this is
+optional — it lets a light click raise a same-Space window in ~0.2s instead of ~1s, and
+without it click-to-focus still works via the slower IDE CLI. For **Cursor** it is what
+makes a click open the agent's conversation at all; without it a click only brings Cursor
+forward.
 
 ### Build from source instead
 
@@ -93,13 +95,16 @@ Each light is one Claude Code or Cursor session:
 
 - **A hollow ring** means a session whose state can't be read at all — a Cursor window with
   no folder open never reports progress, so the bar says "unknown" instead of showing a color
-  it would only be guessing at. Clicking it brings Cursor forward, and **Unknown → Hide** in
-  settings keeps these rings off the bar entirely.
+  it would only be guessing at. Clicking it opens that agent's conversation if Cursor still
+  lists it, and otherwise just brings Cursor forward; **Unknown → Hide** in settings keeps
+  these rings off the bar entirely.
 - **Hover** a light to see the session's project, its task, and what it's doing right now.
 - **A blue count badge** on a light means that session has that many subagents running
   (hover lists their types).
-- **Click** a light to jump to that session's window (VS Code or Cursor) and reveal its
-  tab.
+- **Click** a light to jump to that session — in VS Code its window comes forward with the
+  session's tab revealed; in Cursor that agent's conversation is opened (via Cursor's own
+  menu-bar list, so it needs Accessibility permission — otherwise the click just brings
+  Cursor forward).
 - **Right-click** the bar to open settings — orientation (row/column), light size, spacing,
   per-state colors, and bar opacity.
 - **Drag** the bar (grab the padding, not a light) to position it anywhere; it remembers
@@ -234,6 +239,16 @@ alone publishes nothing — the tag is the trigger.
   Cursor's menu bar needs AgentStatus to have **Accessibility** permission (the same grant the
   fast window-switch uses) — the app prompts for it on launch; without it the pip just doesn't
   appear.
+- Cursor's hooks go quiet at the end of an agent's life — archiving one fires no closing
+  event, and a subagent turn or an aborted one fires no finish event — so lights used to
+  linger or sit green on an agent that was done. The bar now checks Cursor's own record
+  every few seconds and follows it: **archiving an agent removes its light**, a **finished
+  or aborted agent drops to gray** even when no finish event arrived, and **Cursor
+  subagents get no light of their own** — they count toward their parent agent's blue
+  subagent badge, like Claude Code's. That badge is read from Cursor too, so a subagent
+  whose finish event never arrives no longer leaves a light claiming work that ended. A
+  light is only overruled once it has been silent for a minute *and* none of its subagents
+  is still reporting, so an agent waiting on a subagent stays green.
 - Earlier versions (≤ 0.4.2) also registered hooks for **Codex** (`~/.codex/hooks.json`)
   and **Antigravity** (`~/.gemini/config/hooks.json`). Neither host was ever verified
   against a live install, so both are removed. Launching the app — or running
