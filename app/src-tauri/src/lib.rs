@@ -26,6 +26,9 @@ struct SessionStatus {
     state: String,
     cwd: String,
     label: String,
+    /// The host's own name for this session — Claude Code's session name, or Cursor's
+    /// composer name. Empty when the host reports none. Tooltip only (decision 053).
+    name: String,
     updated_at: i64,
     task: String,
     detail: String,
@@ -177,6 +180,51 @@ fn read_subagents(dir: &std::path::Path, id: &str) -> Vec<String> {
     out
 }
 
+/// How long the session-name map is reused (seconds). A name is fixed for the life of
+/// a session (it changes only when one starts, ends, or is renamed), so re-reading the
+/// directory on every ~1 s poll would be pointless I/O.
+const SESSION_NAMES_TTL: i64 = 5;
+
+/// Claude Code's own name for each session, from the per-process record it writes at
+/// startup (~/.claude/sessions/<pid>.json — `sessionId`, `name`, `nameSource`). A
+/// derived name is the folder plus a short suffix ("agentstatus-5b"), which is what
+/// tells two sessions in the same folder apart; a renamed session carries the user's
+/// own name instead. Verified present for every live session on Claude Code 2.1.200
+/// and 2.1.223. Returns empty when the directory is missing or unreadable — the
+/// tooltip then just shows the folder, as before.
+fn claude_session_names() -> std::collections::HashMap<String, String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let dir = std::path::PathBuf::from(home).join(".claude").join("sessions");
+    let mut map = std::collections::HashMap::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return map;
+    };
+    for e in entries.flatten() {
+        let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+        let id = v.get("sessionId").and_then(|x| x.as_str()).unwrap_or("");
+        let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("");
+        if !id.is_empty() && !name.is_empty() {
+            map.insert(id.to_string(), name.to_string());
+        }
+    }
+    map
+}
+
+/// `claude_session_names` behind a TTL cache (same pattern as `cursor_facts`).
+fn session_names(now: i64) -> std::collections::HashMap<String, String> {
+    type Cache = std::sync::Mutex<(i64, std::collections::HashMap<String, String>)>;
+    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new((0, Default::default())));
+    let Ok(mut guard) = cache.lock() else {
+        return Default::default();
+    };
+    if now - guard.0 >= SESSION_NAMES_TTL {
+        *guard = (now, claude_session_names());
+    }
+    guard.1.clone()
+}
+
 /// Whether the Cursor app is alive. Cursor sessions are NOT tracked by the
 /// `~/.claude/ide/*.lock` files (only Claude Code's VS Code extension writes those),
 /// so lock-pruning would nuke every Cursor light the moment any VS Code window is
@@ -203,6 +251,9 @@ struct CursorFacts {
     /// reliably fire, so the badge counts these (the ones still firing events) rather than
     /// the leftover marker files.
     sub_ids: Vec<String>,
+    /// The composer's display name — the only handle Cursor's tray menu exposes for a row,
+    /// so it's what the "is this agent still running?" veto below matches on.
+    name: String,
 }
 
 /// How long a Cursor fact set is reused before re-querying (seconds). The poll runs
@@ -249,7 +300,8 @@ fn cursor_facts_query(ids: &[String]) -> Option<std::collections::HashMap<String
         .arg(format!(
             "select h.composerId, h.isArchived, h.isSubagent, \
              coalesce(json_extract(d.value,'$.status'),''), \
-             coalesce(json_extract(d.value,'$.subagentComposerIds'),'') \
+             coalesce(json_extract(d.value,'$.subagentComposerIds'),''), \
+             coalesce(replace(json_extract(d.value,'$.name'),'|',' '),'') \
              from composerHeaders h \
              left join cursorDiskKV d on d.key = 'composerData:'||h.composerId \
              where h.composerId in ({list});"
@@ -262,7 +314,7 @@ fn cursor_facts_query(ids: &[String]) -> Option<std::collections::HashMap<String
     let mut map = std::collections::HashMap::new();
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         let f: Vec<&str> = line.split('|').collect();
-        if f.len() < 5 {
+        if f.len() < 6 {
             continue;
         }
         map.insert(
@@ -277,6 +329,7 @@ fn cursor_facts_query(ids: &[String]) -> Option<std::collections::HashMap<String
                     .filter(|s| s.len() >= 32)
                     .map(|s| s.to_string())
                     .collect(),
+                name: f[5].trim().to_string(),
             },
         );
     }
@@ -358,6 +411,7 @@ fn list_sessions() -> Vec<SessionStatus> {
     } else {
         cursor_facts(&cursor_ids, now)
     };
+    let names = session_names(now);
     {
         for (path, id, v) in &files {
             let (path, id) = (path.clone(), id.clone());
@@ -433,8 +487,19 @@ fn list_sessions() -> Vec<SessionStatus> {
                         Some(f) if f.subagent => continue,
                         // Cursor says the turn ended and nothing — not the agent, not a
                         // subagent of its — has emitted anything since, but no `stop` ever
-                        // reached us.
-                        Some(f) if f.terminal && stale && !subs_live && state != "error" => {
+                        // reached us. Last check before greying a light: Cursor's tray row
+                        // for this composer must not say it's *running right now*
+                        // (decision 052). `status` on disk describes the composer's last
+                        // *flushed* turn, so a live agent whose hooks simply went quiet —
+                        // writing a big file, running a long command — reads as terminal,
+                        // and greying it there is a lying light (UI Principle #4).
+                        Some(f)
+                            if f.terminal
+                                && stale
+                                && !subs_live
+                                && state != "error"
+                                && !tray_says_running(&cursor_tray_titles_cached(now), &f.name) =>
+                        {
                             state = "idle".to_string();
                         }
                         _ => {}
@@ -444,11 +509,19 @@ fn list_sessions() -> Vec<SessionStatus> {
             // Cursor's badge comes from its own parent→subagent linkage (above); Claude
             // Code's from the marker files, whose Stop hook is reliable (decision 010).
             let subagents = cursor_subs.unwrap_or_else(|| read_subagents(&dir, &id));
+            // The host's name for this session: Cursor's composer name comes from the
+            // facts already queried above; Claude Code's from its session records.
+            let name = if ide == "cursor" {
+                facts.as_ref().and_then(|f| f.get(&id)).map(|f| f.name.clone()).unwrap_or_default()
+            } else {
+                names.get(&id).cloned().unwrap_or_default()
+            };
             out.push(SessionStatus {
                 id,
                 state,
                 cwd: cwd.to_string(),
                 label: v.get("label").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                name,
                 updated_at,
                 task: v.get("task").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                 detail: v.get("detail").and_then(|x| x.as_str()).unwrap_or("").to_string(),
@@ -848,6 +921,63 @@ fn tray_row_is(title: &str, name: &str) -> bool {
     t == name || t.strip_prefix(name).is_some_and(|rest| rest.starts_with(", "))
 }
 
+/// The status suffix Cursor puts on the tray row of a composer whose turn is in flight
+/// (`"Fix the parser, Running"`). Positive, live evidence that an agent is working — the
+/// one thing Cursor's on-disk record does not give us (decision 052).
+#[cfg(target_os = "macos")]
+const CURSOR_TRAY_RUNNING: &str = ", Running";
+
+/// Every row title in Cursor's tray menu, read without pressing anything: the walk in
+/// `cursor_press_tray_row` only presses a row its predicate accepts, so a predicate that
+/// records and always declines collects the whole menu. Empty when Cursor isn't running or
+/// the app has no Accessibility grant — indistinguishable from an empty menu, which is why
+/// callers may only use this as positive evidence, never as evidence of absence.
+#[cfg(target_os = "macos")]
+fn cursor_tray_titles() -> Vec<String> {
+    let titles = std::cell::RefCell::new(Vec::new());
+    cursor_press_tray_row(&|t| {
+        titles.borrow_mut().push(t.to_string());
+        false
+    });
+    titles.into_inner()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cursor_tray_titles() -> Vec<String> {
+    Vec::new()
+}
+
+/// Whether Cursor's own tray says the composer named `name` is running right now.
+#[cfg(target_os = "macos")]
+fn tray_says_running(titles: &[String], name: &str) -> bool {
+    !name.is_empty()
+        && titles.iter().any(|t| {
+            trim_bullet(t)
+                .strip_prefix(name)
+                .is_some_and(|rest| rest == CURSOR_TRAY_RUNNING)
+        })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn tray_says_running(_titles: &[String], _name: &str) -> bool {
+    false
+}
+
+/// `cursor_tray_titles` behind the same TTL as the fact query, and read lazily — the AX
+/// walk only happens on a poll that actually has a light to reconcile.
+fn cursor_tray_titles_cached(now: i64) -> Vec<String> {
+    type Cache = std::sync::Mutex<(i64, Vec<String>)>;
+    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new((0, Vec::new())));
+    let Ok(mut guard) = cache.lock() else {
+        return Vec::new();
+    };
+    if now - guard.0 >= CURSOR_FACTS_TTL {
+        *guard = (now, cursor_tray_titles());
+    }
+    guard.1.clone()
+}
+
 /// The name Cursor shows for a composer, looked up by id (decision 047). A Cursor
 /// session's `session_id` **is** its `composerId` — Cursor's Claude-compat bridge passes
 /// it straight through — and its record lives in Cursor's own key-value store under
@@ -1221,6 +1351,22 @@ mod tests {
         });
     }
 
+    /// Print the session-id → session-name map the tooltip's identifying line is built
+    /// from (decision 053). Ground truth for the join, since these names come from a
+    /// directory Claude Code owns and the hook never writes:
+    ///
+    ///   cargo test --release -- --ignored --nocapture dump_session_names
+    ///
+    /// Read-only. An id on the bar that's missing here has no record, and its tooltip
+    /// falls back to the project folder alone.
+    #[test]
+    #[ignore]
+    fn dump_session_names() {
+        for (id, name) in super::claude_session_names() {
+            println!("{id} -> {name}");
+        }
+    }
+
     /// The tray row for a running composer carries a status suffix, and a notified one a
     /// bullet; both must still resolve to the composer's name (decision 049).
     #[test]
@@ -1229,6 +1375,28 @@ mod tests {
         assert!(super::tray_row_is("Folder upload, Running", "Folder upload"));
         assert!(super::tray_row_is("\u{2022} Folder upload, Running", "Folder upload"));
         assert!(!super::tray_row_is("Folder upload functionality", "Folder upload"));
+    }
+
+    /// The veto that keeps a working Cursor agent's light green (decision 052). Only a row
+    /// that says this composer is running counts; a plain row, another composer's row, or
+    /// no row at all leaves the reconciler to its own judgement.
+    #[test]
+    fn tray_running_veto() {
+        let rows: Vec<String> = ["Folder upload, Running", "\u{2022} Fix the parser", "New Agent"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(super::tray_says_running(&rows, "Folder upload"));
+        // Idle rows carry no suffix, and a notified one only a bullet — neither is running.
+        assert!(!super::tray_says_running(&rows, "Fix the parser"));
+        // A composer too old for the tray, and an unnamed one, are both "no evidence".
+        assert!(!super::tray_says_running(&rows, "Some older agent"));
+        assert!(!super::tray_says_running(&rows, ""));
+        // Never let one composer's row speak for another whose name it merely prefixes.
+        assert!(!super::tray_says_running(&rows, "Folder"));
+        // A bullet and the suffix can appear together: notified *and* still running.
+        let both = vec!["\u{2022} Folder upload, Running".to_string()];
+        assert!(super::tray_says_running(&both, "Folder upload"));
     }
 
     #[test]
@@ -1271,6 +1439,8 @@ mod tests {
                 }
             }
         }
+        // What the tray says right now — the veto's whole input (decision 052).
+        let titles = super::cursor_tray_titles();
         match super::cursor_facts_query(&ids) {
             None => println!("query failed"),
             Some(m) => {
@@ -1278,8 +1448,14 @@ mod tests {
                     match m.get(id) {
                         None => println!("{id}: not in Cursor's store"),
                         Some(f) => println!(
-                            "{id}: archived={} subagent={} terminal={} subagents={:?}",
-                            f.archived, f.subagent, f.terminal, f.sub_ids
+                            "{id}: archived={} subagent={} terminal={} subagents={:?} name={:?} \
+                             tray_says_running={}",
+                            f.archived,
+                            f.subagent,
+                            f.terminal,
+                            f.sub_ids,
+                            f.name,
+                            super::tray_says_running(&titles, &f.name)
                         ),
                     }
                 }

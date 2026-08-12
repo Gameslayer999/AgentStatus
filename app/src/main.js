@@ -773,17 +773,29 @@ function subSummary(subs) {
   return `${subs.length} subagent${subs.length > 1 ? "s" : ""}: ${parts.join(", ")}`;
 }
 
+// What identifies the light in its tooltip: the project folder plus the host's own
+// name for the session ("AgentStatus · agentstatus-5b"), which is the only thing that
+// tells two sessions in the same folder apart. The name is dropped when it adds
+// nothing (absent, or the same text as the folder), and stands alone when there's no
+// folder — a light is never labeled with both nothing and a redundancy (decision 053).
+function headFor(s) {
+  const label = (s.label || "").trim();
+  const name = (s.name || "").trim();
+  if (label && name && name.toLowerCase() !== label.toLowerCase()) return `${label} · ${name}`;
+  return label || name || shortId(s.id);
+}
+
 // The hover tooltip: name — state, the task, active subagents, then the activity.
 function titleFor(s, ds) {
   // Say plainly that we have no signal, and why — never imply a state we don't know.
   if (ds === "unknown") {
     return (
-      `Cursor ${shortId(s.id)} — state unknown\n` +
+      `Cursor ${(s.name || "").trim() || shortId(s.id)} — state unknown\n` +
       `↳ no folder open in this Cursor window, so it reports no progress · click to open Cursor`
     );
   }
   const stateText = ds === "done" ? "finished — click to acknowledge" : ds;
-  const lines = [`${s.label || shortId(s.id)} — ${stateText}`];
+  const lines = [`${headFor(s)} — ${stateText}`];
   if (s.task) lines.push(`↳ ${s.task}`);
   const subs = subSummary(s.subagents);
   if (subs) lines.push(subs);

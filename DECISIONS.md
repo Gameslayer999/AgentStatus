@@ -61,6 +61,8 @@
 | 049 | 2026-08-11 | **Match a Cursor tray row by name prefix** — #047's click-to-conversation matched the tray row whose title *equals* the composer name (allowing only the unread bullet), but Cursor also appends a live status suffix: an AX dump of the real menu shows `"Folder upload functionality, Running"`. Exact matching therefore missed every **running** composer — the state a light is in when the user clicks it — so every real click fell through to the "just activate Cursor" fallback. A row now matches on the bare name or the name followed by `", "` (`tray_row_is`), the separator keeping one composer's name from matching a longer one. New `cursor_dump_tray` test prints the live row titles | Accepted |
 | 050 | 2026-08-12 | **Cursor gets a "done" (unread) light, derived from the observed transition** — decision 014's done light keys off a non-empty `detail` (the wrap-up message `Stop` writes), and Cursor's bridged finish carries none, so a finished Cursor turn dropped straight from green to dim idle with no unread cue. The bar now records a finish when a poll sees a **Cursor** session go from a non-idle state to `idle` (`noteFinishes`, keyed by that `updated_at`), and `isFinishedTurn` accepts it alongside the `detail` test — so the light goes white until clicked, and the existing `reviewedAt` ack + re-light cycle works unchanged. Frontend-only (`app/src/main.js`), no hook, schema, or backend change. Scoped to Cursor: Claude Code's `detail` is a real, restart-proof signal, whereas transitions are forgotten on reload. A session already idle at the first poll is never a finish, so launching the bar can't invent unread lights | Accepted |
 | 051 | 2026-08-12 | **Re-check the window against its content every poll** — the bar came up sized for *one* light with five in it, drawing a pill with a cut-off bottom. `resizeToContent()` is edge-triggered (a light added/removed, a geometry setting changed) and awaits two animation frames before measuring; the webview delivers none while the window isn't painting, so a resize landing during launch/relaunch is simply never applied, and the only measurements that stuck were the pre-poll ones taken when the bar held just the "empty" placeholder. A new `ensureSized()` runs after each poll's render, measures the content synchronously, and re-resizes when it disagrees with the last size actually applied — a level check behind the edges, so a lost resize self-corrects on the next tick instead of never | Accepted |
+| 052 | 2026-08-12 | **Cursor's tray row vetoes the finished-turn reconcile** — #048 greys a silent Cursor light when `composerData.status` is terminal, guarded only by 60s of hook silence. But 60s of silence isn't evidence an agent stopped: one writing a large file went **107s** between hook events while its `status` still held the value flushed at the end of its *previous* turn, so its light was forced to `idle` mid-turn — and #050, which derives Cursor's done light from a watched non-idle→idle transition, rendered that as a white **"finished, unread"** light on an agent that was still working (it also swallowed the real unread light 47s later, an idle→idle no-op). Fixed by adding a fourth condition: Cursor's tray row for that composer must not read `"<name>, Running"` (#049), the one live status signal Cursor exposes. Reuses #045/#047's AX walk with a record-and-decline predicate, cached at the same 5s TTL, read lazily; the name is one extra column on #048's existing query. Positive evidence only — an empty tray read (no Accessibility grant, composer off the recents list) never causes a veto, so it can only keep a light green, never light one up | Accepted |
+| 053 | 2026-08-12 | **Tooltip identifies a light by the host's own session name**, not the project folder alone — the bar's first line was the folder basename, so two sessions in one folder had byte-identical tooltips. Claude Code names every session in `~/.claude/sessions/<pid>.json` (`sessionId`, `name`, `nameSource`); Cursor names every composer in `composerData.name`, already queried by #048. The app joins both by session id and the tooltip head becomes `folder · name` ("AgentStatus · agentstatus-5b"), dropping the name when it is absent or repeats the folder. App-side read only — no hook change, no status-file change, and no transcript is read (Guideline #5). Rejected: an LLM-style session title (no `summary`/`title` entry exists in any transcript on the installed 2.1.200 — nothing to read) and recording the first prompt as a title (a schema change for something the `task` line already covers) | Accepted |
 
 ---
 
@@ -2521,3 +2523,166 @@ window is too small to show it, which is exactly what makes the mismatch detecta
 **Validation.** Rebuilt and relaunched via `./install.sh`: the window comes up at `37 × 123`
 for the five current sessions (was `37 × 31` before the fix), and a screenshot shows the pill
 whole — rounded at both ends, all five lights inside.
+
+---
+
+## 052 — Cursor's tray row vetoes the finished-turn reconcile, so a working agent can't be greyed (or flagged unread)
+
+**Date:** 2026-08-12
+**Status:** Accepted (amends #048, fixes a symptom introduced by #050)
+**Evidence:** live, from one Cursor agent's own timestamps on 2026-08-12:
+
+| Time | What |
+|---|---|
+| 13:45:30 | Cursor flushed `composerData.status = "aborted"` for composer `50ffc9dc` — its **previous** turn |
+| 13:48:09 | Last hook event of the **live** turn: `state=running`, `detail="Write app.js"` |
+| 13:49:09 | 60s of hook silence reached → #048's reconcile forced the light to `idle` |
+| 13:49:56 | The real `stop` finally arrived — a **107-second** gap between hook events, mid-turn |
+
+**Context.** #048 reconciles a Cursor light against Cursor's own record because the hook
+bridge is lossy at end-of-life: archiving fires no `sessionEnd`, and a subagent or aborted
+turn fires no `stop`, so a light can sit green forever on an agent that finished. Its guard
+against greying a *live* agent is 60 seconds of hook silence plus no live subagent of its own.
+
+**Root cause.** 60 seconds of silence is not evidence that an agent stopped working. A Cursor
+agent writing a large file or running a long command emits nothing in between — 107 seconds
+here — while `composerData.status` still holds the terminal value flushed at the end of its
+*previous* turn (Cursor does not flush per message; #048 established that too). Both reconcile
+conditions were therefore true of an agent that was actively editing a file, and its light was
+forced to `idle`.
+
+Before today that surfaced as a wrong dim-gray light. #050 then made it loud: the bar derives
+Cursor's **done** light from a watched non-idle→`idle` transition, and the forced idle is such
+a transition, so a working agent lit up **white — "finished, unread"**. That is the reported
+symptom. It also *swallowed* the real unread light: the genuine `stop` 47 seconds later was an
+idle→idle no-op, so `finishedAt` kept the forced timestamp, and once the file's `updated_at`
+moved on, the finished turn rendered dim gray with no unread cue at all.
+
+**Decision.** Add a fourth condition to the terminal-status reconcile: Cursor's **tray row**
+for that composer must not say it is running right now. Cursor titles the row of a live
+composer `"<name>, Running"` (#049 discovered this the hard way — exact-name matching missed
+every running composer). That is the one *live* status signal Cursor exposes to us; everything
+in `state.vscdb` describes the last flushed turn.
+
+    reconcile to idle only if:  60s hook silence          (#048)
+                              + status terminal on disk   (#048)
+                              + no live subagent          (#048)
+                              + tray row is not "<name>, Running"   (new)
+
+`cursor_tray_titles()` reuses #045/#047's AX walk unchanged — `cursor_press_tray_row` only
+presses a row its predicate accepts, so a predicate that records and always declines returns
+the whole menu without pressing anything or opening it on screen. Cached behind the same 5s
+TTL as the fact query and read lazily, so the AX walk happens at most once per 5s and only on
+a poll that actually has a light to reconcile. The composer's name comes from one extra column
+on #048's existing query (no second `sqlite3` spawn) — still `.name` only, no message content
+(Guideline #5).
+
+**Positive evidence only.** An empty tray read — Cursor not running, no Accessibility grant,
+a composer older than the tray's ~15 recents — is indistinguishable from "nothing is running",
+so it can never *cause* a veto; it just leaves #048's judgement as it is today. The veto only
+ever keeps a light green, never turns one on.
+
+**Options considered.**
+
+| Option | Verdict |
+|---|---|
+| Tray-row "Running" veto (chosen) | The only real-time signal Cursor gives us; purely additive, degrades to today's behavior, keeps #048's stuck-green fix intact |
+| Only count a real hook `stop` as a finish (frontend) | Fixes the white light in ~5 lines but leaves the light wrongly dim-gray mid-turn (UI Principle #4), and loses the real done light for the aborted/subagent turns #050 was added for |
+| Raise `CURSOR_STALE_SECS` 60s → 5min | Guesswork, which #048 itself rejected: a long tool call beats any threshold, and it delays the genuine stuck-green fix by the same amount |
+| Require Cursor's `lastUpdatedAt` to be newer than our last hook event | Already tried and rejected in #048 on live evidence — Cursor does not flush per message, so it blocked the very case it was meant to fix |
+
+**Known limits.** A composer that has fallen off the tray's recents list gets no veto (today's
+behavior). Without an Accessibility grant the veto never fires, so a long-silent agent can
+still drop to gray — noted in the README next to the existing Accessibility caveats. And if
+Cursor were to leave a stale `", Running"` on a finished row, the reconcile would be delayed
+until the row refreshes, with the 2h `MAX_IDLE_SECS` backstop unchanged behind it.
+
+**Validation.** `cargo build --release` and `cargo test --release` clean; new
+`tray_running_veto` unit test pins the matching rules (suffix required, bullet tolerated, no
+prefix bleed between composers, empty name and absent row both decline). The live check is
+folded into the existing re-runnable one (Guideline #8):
+
+    cargo test --release -- --ignored --nocapture cursor_facts
+
+which now prints each Cursor session's composer name and its `tray_says_running` verdict
+alongside the archived/subagent/terminal facts.
+
+**Verified live** on the very composer from the report (`50ffc9dc`, "Folder upload issue"),
+sampled every 3s across a real turn: while it ran, `terminal=true` (the stale `"aborted"` still
+on disk) and `tray_says_running=true` held **simultaneously for 71 consecutive samples** — that
+pair is precisely the state that greyed the light before this change, and the veto now blocks
+it. The suffix also **clears when the turn ends** (105 samples at `false` before and after), so
+the veto does not latch and #048's stuck-green fix still fires on a genuinely finished agent.
+The one thing that turn did not reproduce is the 60s clock itself — its longest gap between
+hook events was 17s — but that clock is unchanged #048 code; what 052 adds was exercised in
+both directions.
+
+Across the full 242-sample run, exactly one sample had the session `running` with the veto off,
+and it pins down the release timing: the tray dropped `", Running"` at 14:10:21 and the real
+`stop` hook landed at 14:10:24. The tray therefore **leads** the hook by a few seconds at
+end-of-turn — the veto lifts just before the turn is confirmed over, not after — so it can
+never delay a genuine reconcile. (That sample's light was 9s old, far inside the 60s clock, so
+nothing was reconcilable in the window regardless.)
+
+---
+
+## 053 — The tooltip identifies a light by the host's own session name, not the folder alone
+
+**Date:** 2026-08-12
+**Status:** Accepted
+
+### Context
+
+The hover tooltip's first line was `<project folder> — <state>`, e.g. `AgentStatus — running`.
+The folder comes from the hook (`label` = basename of the session `cwd`). Two problems:
+
+1. **Two sessions in the same folder are indistinguishable.** Three of the five live sessions
+   on this machine sit in two folders; their tooltips were byte-identical apart from the state.
+   The tooltip is the only surface that tells lights apart (UI Principle #5), and it could not.
+2. **A session that `cd`s into a subfolder is mislabeled.** The label follows the *current*
+   `cwd`, so a session working in `app/src-tauri` reads `src-tauri`, not `AgentStatus`.
+
+### What a "session title" could actually be (verified on the installed version)
+
+| Source | What it holds | Verdict |
+|---|---|---|
+| `~/.claude/sessions/<pid>.json` → `name` | Claude Code's own name for the session: `agentstatus-5b`, with `nameSource: derived \| user \| auto` | **Chosen.** Present for all 5 live sessions on 2.1.200 / 2.1.223, joinable by `sessionId` |
+| Cursor `composerData.name` | The composer's display name (`Fix the parser`) | **Chosen.** Already read by #048's query for the tray-row match — free |
+| Transcript `summary` / `title` entries | — | **Rejected: does not exist.** Zero `summary` or `title` records across every `.jsonl` in `~/.claude/projects/`. There is no LLM-written title to read |
+| First `UserPromptSubmit` of the session | The subject of the session | **Rejected.** A status-file schema change for something the existing `task` line already conveys, and it goes stale in a long session |
+
+A `derived` name is the folder plus a short suffix, so it is not *descriptive* of the work —
+but it is exactly what separates two sessions in one folder, and it becomes the user's own
+text when a session is renamed (`nameSource: user`) or auto-named when backgrounded (`auto`).
+
+### Decision
+
+`list_sessions` adds a `name` field per session:
+
+- **Claude Code** — from `~/.claude/sessions/*.json`, mapped `sessionId → name`, behind a 5s
+  TTL cache (`SESSION_NAMES_TTL`, the `cursor_facts` pattern) so the ~1s poll does not re-read
+  the directory each tick. A name is fixed for the life of a session, so 5s is generous.
+- **Cursor** — `CursorFacts.name`, already fetched by #048's single query. No new work.
+
+The tooltip head becomes `folder · name — state` (`AgentStatus · agentstatus-5b — running`).
+The name is dropped when it is empty or repeats the folder (case-insensitive), and stands
+alone when there is no folder, so the line never carries a redundancy or a bare id it could
+have avoided (`headFor` in `app/src/main.js`). An `unknown` Cursor light now names the
+composer instead of showing a truncated id. Everything below line 1 is unchanged.
+
+### Why this shape
+
+- **App-side read, no signal-layer change.** The hook is untouched: no new field, no extra
+  work in the user's session, and the status-file schema is exactly as before (Guideline #3).
+  The names live in directories the hosts already maintain.
+- **No transcript is read** (Guideline #5). The two files consulted hold an id, a name, a cwd
+  and a pid — no prompt or response text.
+- **Fails to the old behaviour.** A missing/unreadable `~/.claude/sessions` yields an empty
+  map and the tooltip shows the folder alone, exactly as it did before this change.
+
+### Verification
+
+- `cargo test --release -- --ignored --nocapture dump_session_names` prints the live
+  id → name map (read-only). All 5 sessions resolved, including the two sharing a folder.
+- `node app/tests/tooltip-head.mjs` covers `headFor`: folder + name, name absent, name
+  duplicating the folder, folder absent, and both absent (short-id fallback).
