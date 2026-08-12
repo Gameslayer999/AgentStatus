@@ -597,7 +597,7 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
         // opens the existing conversation. Falls back to raise + activate, never the CLI.
         if ide == "cursor" {
             if let Some(name) = cursor_composer_name(&session_id) {
-                if cursor_press_tray_row(&|t| trim_bullet(t) == name) {
+                if cursor_press_tray_row(&|t| tray_row_is(t, &name)) {
                     activate_cursor();
                     return;
                 }
@@ -833,6 +833,19 @@ fn trim_bullet(title: &str) -> &str {
         .strip_prefix(CURSOR_NOTIFY_PREFIX)
         .unwrap_or(title)
         .trim()
+}
+
+/// Whether a tray row is the row for the composer named `name`. Cursor decorates a row's
+/// `AXTitle` on both ends: the unread bullet in front (`"• Fix the parser"`) and a live
+/// status suffix behind (`"Fix the parser, Running"` — verified live against the tray of
+/// Cursor 3.12). Exact-equality matching therefore missed every *running* composer, which
+/// is exactly the state a light is in when the user clicks it, so the click fell through
+/// to the "just activate Cursor" fallback instead of opening the conversation. Match the
+/// bare name or the name plus that `", <status>"` suffix.
+#[cfg(target_os = "macos")]
+fn tray_row_is(title: &str, name: &str) -> bool {
+    let t = trim_bullet(title);
+    t == name || t.strip_prefix(name).is_some_and(|rest| rest.starts_with(", "))
 }
 
 /// The name Cursor shows for a composer, looked up by id (decision 047). A Cursor
@@ -1192,6 +1205,32 @@ pub fn run() {
 /// `AXUIElementCopyAttributeValue`.
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
+    /// Print every row title in Cursor's tray menu without pressing anything — the ground
+    /// truth for the title format the click path matches against (decision 049):
+    ///
+    ///   cargo test --release -- --ignored --nocapture cursor_dump_tray
+    ///
+    /// No output at all means the AX read failed (Cursor not running, or the terminal
+    /// lacks Accessibility), not that the menu is empty.
+    #[test]
+    #[ignore]
+    fn cursor_dump_tray() {
+        super::cursor_press_tray_row(&|t| {
+            println!("row {t:?}");
+            false
+        });
+    }
+
+    /// The tray row for a running composer carries a status suffix, and a notified one a
+    /// bullet; both must still resolve to the composer's name (decision 049).
+    #[test]
+    fn tray_row_matching() {
+        assert!(super::tray_row_is("Folder upload", "Folder upload"));
+        assert!(super::tray_row_is("Folder upload, Running", "Folder upload"));
+        assert!(super::tray_row_is("\u{2022} Folder upload, Running", "Folder upload"));
+        assert!(!super::tray_row_is("Folder upload functionality", "Folder upload"));
+    }
+
     #[test]
     #[ignore]
     fn cursor_press_next_attention() {
@@ -1265,7 +1304,7 @@ mod tests {
         let name = super::cursor_composer_name(&id);
         println!("id={id} name={name:?}");
         let pressed = name
-            .map(|n| super::cursor_press_tray_row(&|t| super::trim_bullet(t) == n))
+            .map(|n| super::cursor_press_tray_row(&|t| super::tray_row_is(t, &n)))
             .unwrap_or(false);
         println!("pressed={pressed}");
     }

@@ -707,8 +707,38 @@ const reviewedAt = new Map(); // session id -> updated_at that was acknowledged
 // A finished turn = idle with a wrap-up message. `Stop` writes a non-empty detail
 // (the last assistant message); `SessionStart` forces detail="" — so detail is the
 // reliable "a turn ended and there's output to review" signal (vs. a fresh idle).
+// Cursor's bridged `Stop` carries no wrap-up message (verified, decision 038), so a
+// Cursor light could never take that path — it dropped straight from green to dim
+// idle with nothing saying "this finished and you haven't looked at it yet". For
+// Cursor the finish comes from the observed transition instead (see noteFinishes).
 function isFinishedTurn(s) {
-  return s.state === "idle" && !!s.detail;
+  return s.state === "idle" && (!!s.detail || finishedAt.get(s.id) === s.updated_at);
+}
+
+// The unread signal for hosts that report no wrap-up message: the poll that first
+// sees a session leave a non-idle state for idle IS the finish. We remember the
+// `updated_at` it landed on, so every later poll (which sees only a plain idle)
+// still reads as finished, and the same click/updated_at key that acknowledges a
+// Claude Code "done" light acknowledges this one — the next finish re-lights it.
+// Only Cursor is recorded: Claude Code's detail is a real, restart-proof signal,
+// and deriving its lights from transitions too would just make them forget on a
+// reload. A session already idle when we first see it is NOT a finish (no `prev`),
+// so relaunching the bar never invents unread lights for old turns.
+const finishedAt = new Map(); // session id -> updated_at of a finish we watched happen
+const prevRawState = new Map(); // session id -> raw state at the previous poll
+
+function noteFinishes(sessions) {
+  const seen = new Set();
+  for (const s of sessions) {
+    seen.add(s.id);
+    const prev = prevRawState.get(s.id);
+    prevRawState.set(s.id, s.state);
+    if (s.ide === "cursor" && s.state === "idle" && prev && prev !== "idle") {
+      finishedAt.set(s.id, s.updated_at);
+    }
+  }
+  for (const id of prevRawState.keys()) if (!seen.has(id)) prevRawState.delete(id);
+  for (const id of finishedAt.keys()) if (!seen.has(id)) finishedAt.delete(id);
 }
 
 // A Cursor session with no workspace folder is unobservable (decision 042): Cursor
@@ -1178,7 +1208,11 @@ async function tick() {
     // the AX read is not free, so once every few ticks is plenty and keeps it off the
     // hot path (decision 038).
     if (tickCount++ % CURSOR_POLL_EVERY === 0) await refreshCursorAttention();
-    const sessions = sortSessions(await invoke("list_sessions"));
+    const polled = await invoke("list_sessions");
+    // Before anything reads displayState() — sorting, chimes, render — record which
+    // sessions just finished a turn, which is only visible as a change between polls.
+    noteFinishes(polled);
+    const sessions = sortSessions(polled);
     latestSessions = sessions;
     checkChimes(sessions); // edge-triggered audio alerts (seeds silently on first tick)
     render(visibleSessions());

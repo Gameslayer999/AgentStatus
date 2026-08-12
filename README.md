@@ -42,7 +42,7 @@ itself on first launch.
 > launch. Step 3 below clears the download quarantine so it opens — nothing is code-signed
 > yet.
 
-1. Download **`AgentStatus_0.6.1_aarch64.dmg`** from the
+1. Download **`AgentStatus_0.6.2_aarch64.dmg`** from the
    [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest).
 2. Open the DMG and drag **AgentStatus** into **Applications**.
 3. The app is **unsigned**, so macOS Gatekeeper blocks it on first launch. Clear the
@@ -93,6 +93,9 @@ Each light is one Claude Code or Cursor session:
 
 ![A running light with a blue "2" subagent badge and its hover tooltip, showing the project name and state, the task, and the running subagents.](docs/lightbar-hover.svg)
 
+- **A white light is unread** — that session finished a turn and you haven't looked at it
+  yet. Clicking it (which jumps you to the session) dims it to gray; the next turn that
+  finishes lights it white again. Works for both Claude Code and Cursor sessions.
 - **A hollow ring** means a session whose state can't be read at all — a Cursor window with
   no folder open never reports progress, so the bar says "unknown" instead of showing a color
   it would only be guessing at. Clicking it opens that agent's conversation if Cursor still
@@ -208,7 +211,7 @@ Releases are built and published by GitHub Actions. Bump the version in
 to `main`, then push a matching tag:
 
 ```bash
-git tag v0.6.1 && git push origin v0.6.1
+git tag v0.6.2 && git push origin v0.6.2
 ```
 
 The workflow builds the arm64 DMG on a macOS runner and publishes it with generated notes.
@@ -225,34 +228,23 @@ alone publishes nothing — the tag is the trigger.
   once); this does not affect Gatekeeper for downloaded copies.
 - A light == one `session_id`, labeled by its project folder. Two windows on the *same*
   folder collapse into one label.
-- On **Cursor**, per-session lights show running (green) and idle — blocked (orange) is
-  unavailable (Cursor emits no permission event), and its turn-finished event carries no
-  wrap-up, so a Cursor session never lights as "done". Per-session lights also require a
-  **folder-open** Cursor window (Cursor runs no hooks in a folder-less window) — a folder-less
-  one still fires a single opening event, so it appears as a **hollow "unknown" ring**: a
-  session is there, but nothing about its state can be read. To cover the
-  "done"/attention gap, AgentStatus **mirrors Cursor's own menu-bar item**: a hollow-ring pip
-  with a count appears on the bar when Cursor has composers awaiting you (even for
-  folder-less/background agents). **Clicking the pip opens the next composer that's waiting**
-  — Cursor jumps to that agent and clears its notification, so the count ticks down by one and
-  the next click takes you to the one after it, until the pip disappears. Reading and clicking
-  Cursor's menu bar needs AgentStatus to have **Accessibility** permission (the same grant the
-  fast window-switch uses) — the app prompts for it on launch; without it the pip just doesn't
-  appear.
-- Cursor's hooks go quiet at the end of an agent's life — archiving one fires no closing
-  event, and a subagent turn or an aborted one fires no finish event — so lights used to
-  linger or sit green on an agent that was done. The bar now checks Cursor's own record
-  every few seconds and follows it: **archiving an agent removes its light**, a **finished
-  or aborted agent drops to gray** even when no finish event arrived, and **Cursor
-  subagents get no light of their own** — they count toward their parent agent's blue
-  subagent badge, like Claude Code's. That badge is read from Cursor too, so a subagent
-  whose finish event never arrives no longer leaves a light claiming work that ended. A
-  light is only overruled once it has been silent for a minute *and* none of its subagents
-  is still reporting, so an agent waiting on a subagent stays green.
-- Earlier versions (≤ 0.4.2) also registered hooks for **Codex** (`~/.codex/hooks.json`)
-  and **Antigravity** (`~/.gemini/config/hooks.json`). Neither host was ever verified
-  against a live install, so both are removed. Launching the app — or running
-  `node hooks/setup.mjs install|uninstall` — deletes those leftover entries and leaves any
+- On **Cursor**, lights show running (green), done (white) and idle (gray). Blocked
+  (orange) isn't available — Cursor emits no permission event. A Cursor light goes white
+  for a turn that finishes while the bar is running; one that finished before you launched
+  the bar shows as idle.
+- Cursor lights follow Cursor's own record as well as its hooks: archiving an agent removes
+  its light, a finished or aborted agent drops to gray, and Cursor subagents count toward
+  their parent's blue badge instead of getting lights of their own. An agent still waiting
+  on a subagent stays green.
+- A per-session Cursor light needs a **folder-open** Cursor window; a folder-less one
+  reports nothing and shows as a hollow "unknown" ring. For the agents that get no light —
+  folder-less and background ones — the bar mirrors Cursor's own menu-bar item: a
+  hollow-ring pip with the number of composers awaiting you. Clicking it opens the next one
+  waiting and clears its notification, so repeated clicks walk the queue until the pip
+  disappears. The pip needs **Accessibility** permission; without it, it doesn't appear.
+- The supported hosts are **Claude Code (VS Code)** and **Cursor**. Launching the app — or
+  running `node hooks/setup.mjs install|uninstall` — removes hook entries left in
+  `~/.codex/hooks.json` and `~/.gemini/config/hooks.json` by versions ≤ 0.4.2, leaving any
   other hooks in those files untouched.
 - Sessions with no activity for 2h are pruned (they reappear on their next event).
 - Subagents are tracked by lifecycle (which are running + their types), not by their

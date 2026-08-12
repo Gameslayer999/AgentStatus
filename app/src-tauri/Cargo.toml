@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.6.1"
+version = "0.6.2"
 description = "AgentStatus — a floating light bar for Claude Code and Cursor session status"
 authors = ["you"]
 edition = "2021"

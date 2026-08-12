@@ -73,8 +73,9 @@
   and writes an `ide` field driving per-IDE click-to-focus. Verification tooling
   ([hooks/cursor-log-events.sh](hooks/cursor-log-events.sh),
   [hooks/cursor-logger-setup.mjs](hooks/cursor-logger-setup.mjs)) kept for future Cursor
-  versions. Blocked (orange) is unavailable on Cursor (no event); the menu-bar pip (038) now
-  supplies the attention/"done" signal instead. **Still open:** port `cursor-setup.mjs` into
+  versions. Blocked (orange) is unavailable on Cursor (no event); "done" (white) is now derived
+  from the watched running→idle transition (decision 050), and the menu-bar pip (038) covers the
+  agents that have no light at all. **Still open:** port `cursor-setup.mjs` into
   `install.rs` so the packaged app self-installs the native Cursor hooks (today they're
   installed via `node hooks/cursor-setup.mjs install`).
 - **Milestones 1–6 done — v1 complete.** Two shipping surfaces off one signal layer:
@@ -238,6 +239,39 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 ---
 
 ## Recently completed
+
+- **2026-08-12** — **Released v0.6.2.** Version bumped 0.6.1 → 0.6.2 across
+  `tauri.conf.json`, `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock`, and the
+  README's download link and release-command example. Patch: both changes since v0.6.1 are
+  Cursor fixes — the tray-row prefix match that made click-to-conversation actually work
+  (#049) and the derived Cursor done light (#050). Cut by merging `development` into `main`
+  and pushing the `v0.6.2` tag, which triggers the release workflow of decision 041.
+
+- **2026-08-12** — **Cursor lights get a "done" (unread) state (decision 050).** Decision 014's
+  done light keys off a non-empty `detail` (the wrap-up message `Stop` writes), and Cursor's
+  bridged finish carries none (verified in #038) — so every Cursor turn ended in dim gray,
+  indistinguishable from an hour-old idle. Fixed frontend-only in `app/src/main.js`: a new
+  `noteFinishes()` runs first thing each poll and records a finish when a **Cursor** session
+  moves from a non-idle state to `idle` (keyed by that `updated_at`); `isFinishedTurn()` accepts
+  it alongside the `detail` test, so the light turns white and everything downstream — the
+  `reviewedAt` click-to-acknowledge, the re-light on the next turn, urgency sort, tray priority,
+  the "done" chime — works unchanged. Also lights up the #048 reconciled finishes (Cursor's own
+  record says terminal → forced `idle` → a transition). Scoped to Cursor deliberately: Claude
+  Code's `detail` survives a bar reload, a remembered transition doesn't. No hook, schema, or
+  Rust change. Re-runnable check: `node app/tests/unread-light.mjs` (evals the shipped functions
+  out of `main.js`; 5 lifecycle checks pass). README updated. **Left to verify live:** rebuild via
+  `./install.sh`, run a Cursor agent with the bar up, confirm white-on-finish and dim-on-click.
+
+- **2026-08-11** — **Cursor click-to-conversation actually works now (decision 049).** Reported
+  again after v0.6.1: clicking a Cursor light only fronted Cursor, never opened the
+  conversation. Decision 047's tray-row match required the row title to *equal* the composer's
+  name (bullet aside), but an AX dump of the live menu shows Cursor appends a status suffix —
+  `"Folder upload functionality, Running"` — so only **idle** composers matched, and a light is
+  clicked precisely when its session is running. `tray_row_is` now accepts the bare name or the
+  name plus `", "`; verified live (`pressed=true` on the composer that failed before, Cursor
+  opening that conversation). New `cursor_dump_tray` ignored test prints the real row titles for
+  the next time Cursor changes them. The other two Cursor sessions in the repro had no tray row
+  at all — they are subagents, which #048 already keeps off the bar.
 
 - **2026-08-11** — **Released v0.6.1.** Version bumped 0.6.0 → 0.6.1 across
   `tauri.conf.json`, `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock`, and the

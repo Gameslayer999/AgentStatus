@@ -58,6 +58,8 @@
 | 046 | 2026-07-30 | **Activate Cursor after the pip's press** — #045's press cleared the notification but left the user where they were: macOS focus is per-*application*, and an `AXPress` from a background process never changes the frontmost app, so Cursor raised the composer's window behind everything else. `cursor_open_next_attention` now calls a shared `activate_cursor()` (`open -a Cursor`, the same activation `focus_session` already used for an empty `cwd`) after a successful press — press first so Cursor picks the window, activate second so the app comes forward. Chosen over an `AXFrontmost` write (adds an AX write path to save a few ms) and over `open -a Cursor <folder>` (the pip is aggregate, has no folder, and a folder arg risks a new window) | Accepted |
 | 047 | 2026-08-11 | **Cursor session lights open the conversation, not a new agent** — with Cursor's Agent ("glass") window active, `cursor <folder>` is intercepted by Cursor's main process (`resolveGlassCliFolderTarget` → `vscode:createNewComposer {folderUri}`) and starts a **new agent in that repo** instead of focusing anything, so the decision-016 CLI route silently became wrong for Cursor. A Cursor session's `session_id` *is* its `composerId`, so a click now resolves the composer's name (read-only `sqlite3` on Cursor's `state.vscdb`, `composerData:<id>` → `.name`) and AXPresses that row in Cursor's tray menu — the #045 press path, generalized — then activates Cursor. No tray row (unnamed, or older than the tray's 10 recents) falls back to raise + activate; the `cursor` CLI is never invoked | Accepted |
 | 048 | 2026-08-11 | **Cursor lights reconcile against Cursor's own record** — Cursor's bridged hooks are lossy at end-of-life: archiving an agent fires no `sessionEnd`, and a subagent or aborted turn fires no `stop`, so lights sat green on finished agents (one for 95 min) and archived agents lingered until the 2h backstop. `list_sessions` now runs one throttled (5s TTL) `sqlite3 -readonly` query over all Cursor session ids against Cursor's `composerHeaders` table + `composerData` status, and drops archived/deleted composers, hides `isSubagent` composers (they belong to the parent's subagent badge), and forces `idle` when Cursor says `completed`/`aborted`. The subagent badge for a Cursor agent likewise comes from Cursor's own parent→subagent linkage (`subagentComposerIds`, keeping the ones still firing events) rather than the marker files, whose `subagentStop` leaks a permanent "1 subagent running" badge. Guarded: only lights silent 60s+ with no live subagent of their own are overruled, and a failed query reconciles nothing | Accepted |
+| 049 | 2026-08-11 | **Match a Cursor tray row by name prefix** — #047's click-to-conversation matched the tray row whose title *equals* the composer name (allowing only the unread bullet), but Cursor also appends a live status suffix: an AX dump of the real menu shows `"Folder upload functionality, Running"`. Exact matching therefore missed every **running** composer — the state a light is in when the user clicks it — so every real click fell through to the "just activate Cursor" fallback. A row now matches on the bare name or the name followed by `", "` (`tray_row_is`), the separator keeping one composer's name from matching a longer one. New `cursor_dump_tray` test prints the live row titles | Accepted |
+| 050 | 2026-08-12 | **Cursor gets a "done" (unread) light, derived from the observed transition** — decision 014's done light keys off a non-empty `detail` (the wrap-up message `Stop` writes), and Cursor's bridged finish carries none, so a finished Cursor turn dropped straight from green to dim idle with no unread cue. The bar now records a finish when a poll sees a **Cursor** session go from a non-idle state to `idle` (`noteFinishes`, keyed by that `updated_at`), and `isFinishedTurn` accepts it alongside the `detail` test — so the light goes white until clicked, and the existing `reviewedAt` ack + re-light cycle works unchanged. Frontend-only (`app/src/main.js`), no hook, schema, or backend change. Scoped to Cursor: Claude Code's `detail` is a real, restart-proof signal, whereas transitions are forgotten on reload. A session already idle at the first poll is never a finish, so launching the bar can't invent unread lights | Accepted |
 
 ---
 
@@ -2351,3 +2353,126 @@ subagent linkage. Live run classified 5 archived, 3 subagent, 2 real sessions; a
 subagent lights were gone. The follow-up run confirmed the badge fix on the same data: the
 remaining green agent linked to `[b3164824, 87e346b7]`, both silent for 12+ and 29+ minutes and
 both terminal in Cursor's record, so the badge drops to zero and the agent itself to idle.
+
+---
+
+## 049 — Match a Cursor tray row by name **prefix**: a running composer's row is `"<name>, Running"`
+
+**Date:** 2026-08-11
+**Status:** Accepted (fixes #047)
+**Evidence:** live AX dump of Cursor's tray menu (Cursor 3.12 build in `/Applications/Cursor.app`),
+new `cursor_dump_tray` test.
+
+**Context.** Clicking a Cursor session light still only brought Cursor to the front — never the
+conversation — i.e. the exact symptom #047 was supposed to fix, silently falling through to the
+raise + `activate_cursor()` fallback on every click the user actually makes.
+
+**Root cause.** #047 matches the tray row whose title equals the composer's name, allowing only
+for the unread bullet (`"• <name>"`). Cursor also appends a **live status suffix**. Dumping the
+real menu against the bar's own sessions:
+
+    row "Folder upload functionality, Running"     ← composerData name: "Folder upload functionality"
+    row "Simplify presentation slides"
+
+So `trim_bullet(title) == name` matched only *idle* composers. A light is clicked precisely when
+its session is running — the one case that never matched.
+
+**Decision.** Match on the bare name **or** the name followed by `", "` (`tray_row_is`), so both
+`"<name>"` and `"<name>, Running"` resolve, bullet or not. Requiring the `", "` separator keeps a
+name that is a prefix of another composer's name from pressing the wrong row.
+
+**Options considered.**
+
+| Option | Verdict |
+|---|---|
+| Name prefix + `", "` separator (chosen) | Two lines, no new permission or data source; tolerates whatever status words Cursor uses, since only the separator is assumed |
+| Enumerate the status suffixes (`, Running`/`, Done`/…) | Hard-codes strings from Cursor's UI that we cannot verify exhaustively and that change with its releases |
+| Split on the last `", "` and compare | Same result, but breaks on composer names that themselves contain `", "` |
+| Read the composerId off the AX row | Not exposed — it lives in the menu item's click-handler closure (#047) |
+
+**Note on subagent lights.** The two other Cursor sessions in the repro (`87e346b7`, `b3164824`)
+have no tray row at all, because Cursor's tray lists top-level agents only. They are subagents,
+and #048 already hides them from the bar — so no light points at a rowless composer. If that
+query ever fails, such a light falls back to raise + activate, as before.
+
+**Validation.** Re-runnable (Guideline #8):
+
+    cargo test --release -- --ignored --nocapture cursor_dump_tray        # the real row titles
+    AGENTSTATUS_TEST_SESSION=<composer-uuid> \
+      cargo test --release -- --ignored --nocapture cursor_press_composer # the full click path
+
+The running composer that failed before (`a09f5f12…`, name `"Folder upload functionality"`) now
+prints `pressed=true` and Cursor opens that conversation; `cargo test --release` green, including
+a unit test pinning the bullet/suffix combinations.
+
+---
+
+## 050 — Cursor "done" (unread) light, derived from the running→idle transition
+
+**Date:** 2026-08-12
+**Status:** Accepted
+**Evidence:** decision 038's live finding that Cursor's bridged `Stop` carries no wrap-up
+message; `hooks/report.sh`'s `detail` rule; a re-runnable lifecycle check of the shipped
+functions (below).
+
+**Context.** Decision 014 split gray into **done** (a turn just finished, output not yet
+reviewed — bright white) and **idle** (acknowledged — dim gray). Its discriminator is
+`state == "idle" && detail != ""`: `report.sh` writes `detail` from `Stop`'s
+`last_assistant_message`, and forces `detail: ""` on `SessionStart`, so a non-empty detail
+means "a turn ended and there's something to look at".
+
+Cursor's bridge sends no `last_assistant_message` (verified in #038), so a Cursor session's
+`detail` on finish is always `""` — every Cursor turn ended in dim gray, indistinguishable
+from a session that had been sitting idle for an hour. The one state a user most wants at a
+glance ("this agent came back to you") was exactly the one Cursor couldn't show, and its
+absence is what the menu-bar pip (#038) was working around.
+
+**Decision.** Take the finish from the *transition* rather than from the payload. Each poll,
+`noteFinishes()` compares every session's raw state against the previous poll; a **Cursor**
+session that moves from any non-idle state to `idle` has just finished a turn, and its
+`updated_at` is recorded in `finishedAt`. `isFinishedTurn()` accepts either signal:
+
+```js
+s.state === "idle" && (!!s.detail || finishedAt.get(s.id) === s.updated_at)
+```
+
+Everything downstream is unchanged — the same white `.dot.done`, the same tooltip, the same
+click that acknowledges via `reviewedAt` keyed on `updated_at`, the same urgency rank and
+tray priority, and the same "done" chime. Because the key is `updated_at`, the next turn's
+finish writes a new key and the light re-lights on its own.
+
+This also picks up the finishes #048 supplies: when Cursor's own record says a turn is
+terminal and no `stop` ever arrived, `list_sessions` forces the state to `idle` — a
+transition, so it lights white too, which is right (the agent did finish).
+
+**Scope: Cursor only.** Claude Code keeps the `detail` test. `detail` lives in the status
+file, so a Claude light stays correctly "done" across a bar reload or restart; a transition
+lives only in the running webview and would be forgotten. Adding transitions there would
+trade a durable signal for a fragile one.
+
+**Options considered.**
+
+| Option | Verdict |
+|---|---|
+| Frontend transition memory, Cursor only (chosen) | ~20 lines, no hook/schema/backend change, reuses the whole #014 ack cycle; costs only that a finish while the bar is down isn't seen |
+| Have `report.sh` write a synthetic `detail` on Cursor's `stop` (e.g. `"turn finished"`) | Puts a fabricated message in the status file that the tooltip would then display as if it were the agent's wrap-up — a lying label, and it changes the hook contract for a display concern |
+| Persist the finish to `localStorage` so it survives a reload | Solves a case that barely exists (the bar runs continuously) and risks the opposite failure: a stale unread light for a turn from days ago |
+| Read Cursor's own record for the last message | An unnecessary read of conversation content (Guideline #5) for a signal the transition already gives |
+| Leave Cursor without a done light, rely on the pip | The status quo, and the reason this was reported: the pip is an aggregate count for agents with no light, not a per-session unread cue |
+
+**Known limit (documented in the README).** The bar only counts finishes it *watched*. A
+Cursor turn that ended before the bar launched — or during a reload — shows as plain idle
+rather than white. This is deliberate: seeding unread state from a session that was already
+idle would light up old turns on every launch, which is the "lying light" failure of UI
+Principle #4 in the other direction.
+
+**Validation.** Re-runnable (Guideline #8) — `node` over the functions extracted from the
+shipped `app/src/main.js`, so it tests the real source, not a copy:
+
+    node app/tests/unread-light.mjs
+
+Checks: a pre-existing idle Cursor session is not a finish; `running → idle` lights and stays
+lit across later polls; a new turn advances the finish key; a vanished session drops its
+memory; and Claude Code is untouched (still driven by `detail`, no transition memory kept).
+All passed. **Left to verify live:** run a Cursor agent with the bar up and confirm its light
+goes white on finish and dims on click.
