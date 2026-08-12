@@ -240,6 +240,12 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-08-12** — **Released v0.6.3.** Version bumped 0.6.2 → 0.6.3 across
+  `tauri.conf.json`, `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock`, and the
+  README's download link and release-command example. Patch: one fix, the clipped-pill resize
+  trap (#051), which shipped in v0.6.2 and every version before it. Cut by merging
+  `development` into `main` and pushing the `v0.6.3` tag (decision 041's workflow).
+
 - **2026-08-12** — **Fixed the bar rendering clipped after one light (decision 051).** Reported
   right after the v0.6.2 relaunch: the pill was drawn with a rounded top and a flat, cut-off
   bottom. The window was `37 × 31` points — one light's worth — while its DOM held five lights.
