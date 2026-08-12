@@ -60,6 +60,7 @@
 | 048 | 2026-08-11 | **Cursor lights reconcile against Cursor's own record** — Cursor's bridged hooks are lossy at end-of-life: archiving an agent fires no `sessionEnd`, and a subagent or aborted turn fires no `stop`, so lights sat green on finished agents (one for 95 min) and archived agents lingered until the 2h backstop. `list_sessions` now runs one throttled (5s TTL) `sqlite3 -readonly` query over all Cursor session ids against Cursor's `composerHeaders` table + `composerData` status, and drops archived/deleted composers, hides `isSubagent` composers (they belong to the parent's subagent badge), and forces `idle` when Cursor says `completed`/`aborted`. The subagent badge for a Cursor agent likewise comes from Cursor's own parent→subagent linkage (`subagentComposerIds`, keeping the ones still firing events) rather than the marker files, whose `subagentStop` leaks a permanent "1 subagent running" badge. Guarded: only lights silent 60s+ with no live subagent of their own are overruled, and a failed query reconciles nothing | Accepted |
 | 049 | 2026-08-11 | **Match a Cursor tray row by name prefix** — #047's click-to-conversation matched the tray row whose title *equals* the composer name (allowing only the unread bullet), but Cursor also appends a live status suffix: an AX dump of the real menu shows `"Folder upload functionality, Running"`. Exact matching therefore missed every **running** composer — the state a light is in when the user clicks it — so every real click fell through to the "just activate Cursor" fallback. A row now matches on the bare name or the name followed by `", "` (`tray_row_is`), the separator keeping one composer's name from matching a longer one. New `cursor_dump_tray` test prints the live row titles | Accepted |
 | 050 | 2026-08-12 | **Cursor gets a "done" (unread) light, derived from the observed transition** — decision 014's done light keys off a non-empty `detail` (the wrap-up message `Stop` writes), and Cursor's bridged finish carries none, so a finished Cursor turn dropped straight from green to dim idle with no unread cue. The bar now records a finish when a poll sees a **Cursor** session go from a non-idle state to `idle` (`noteFinishes`, keyed by that `updated_at`), and `isFinishedTurn` accepts it alongside the `detail` test — so the light goes white until clicked, and the existing `reviewedAt` ack + re-light cycle works unchanged. Frontend-only (`app/src/main.js`), no hook, schema, or backend change. Scoped to Cursor: Claude Code's `detail` is a real, restart-proof signal, whereas transitions are forgotten on reload. A session already idle at the first poll is never a finish, so launching the bar can't invent unread lights | Accepted |
+| 051 | 2026-08-12 | **Re-check the window against its content every poll** — the bar came up sized for *one* light with five in it, drawing a pill with a cut-off bottom. `resizeToContent()` is edge-triggered (a light added/removed, a geometry setting changed) and awaits two animation frames before measuring; the webview delivers none while the window isn't painting, so a resize landing during launch/relaunch is simply never applied, and the only measurements that stuck were the pre-poll ones taken when the bar held just the "empty" placeholder. A new `ensureSized()` runs after each poll's render, measures the content synchronously, and re-resizes when it disagrees with the last size actually applied — a level check behind the edges, so a lost resize self-corrects on the next tick instead of never | Accepted |
 
 ---
 
@@ -2476,3 +2477,47 @@ lit across later polls; a new turn advances the finish key; a vanished session d
 memory; and Claude Code is untouched (still driven by `detail`, no transition memory kept).
 All passed. **Left to verify live:** run a Cursor agent with the bar up and confirm its light
 goes white on finish and dims on click.
+
+---
+
+## 051 — Re-check the window against its content every poll, so a lost resize can't leave the pill clipped
+
+**Date:** 2026-08-12
+**Status:** Accepted
+**Evidence:** live — the running bar measured `37 × 31` points (one light's worth) while its
+DOM held five lights, so the pill was drawn with a rounded top and a flat, cut-off bottom.
+
+**Context.** The window hugs its content: `resizeToContent()` measures `#bar` and calls
+`setSize`. It is triggered by *edges* — `render()` sets `sizeChanged` when a light is added
+or removed, a setting changes the geometry, or the settings panel opens.
+
+**Root cause.** That edge is the only trigger, and the resize can be lost. It awaits two
+animation frames before measuring (so it never measures a 0-width pre-paint bar), and the
+webview stops delivering animation frames while the window isn't being painted — during
+launch, or the relaunch `install.sh` performs. If the frames never arrive, the `await` never
+resolves and the size is never applied. The startup measurements that *did* land were taken
+before the first poll rendered anything, when the bar held only the "empty" placeholder — one
+dot, 31 points tall. From then on `sizeChanged` stayed false (the five dots already existed),
+so nothing re-measured and the window stayed sized for one light indefinitely. Confirmed live:
+dropping one synthetic session file into the status dir — an add, so an edge — instantly
+resized the window to `37 × 146`, and removing it settled at the correct `37 × 123`.
+
+**Decision.** Keep the edge triggers and add a **level check**: `ensureSized()` runs each poll
+after `render()`, measures the content synchronously (one layout read, no animation frames),
+and calls `resizeToContent()` only when it disagrees with `appliedSize` — the size we last
+successfully applied. A lost resize now self-corrects on the next tick instead of never.
+`#bar` is an auto-sized `inline-flex` box, so it reports its full content size even while the
+window is too small to show it, which is exactly what makes the mismatch detectable.
+
+**Options considered.**
+
+| Option | Verdict |
+|---|---|
+| Level check each poll (chosen) | Self-healing regardless of *why* a resize was lost; one `getBoundingClientRect` per second |
+| Drop the double-rAF wait | It exists to stop the bar measuring 0-width before paint and shrinking to nothing — the bug it prevents is worse |
+| Retry only when the resize is skipped (`document.hidden`) | Covers the early-return path but not the stalled-`await` one, which is the path that actually fired here |
+| `ResizeObserver` on `#bar` | Event-driven and elegant, but it's another edge — a fresh one to lose — where the poll already gives a natural level check |
+
+**Validation.** Rebuilt and relaunched via `./install.sh`: the window comes up at `37 × 123`
+for the five current sessions (was `37 × 31` before the fix), and a screenshot shows the pill
+whole — rounded at both ends, all five lights inside.

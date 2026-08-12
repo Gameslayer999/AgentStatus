@@ -240,6 +240,21 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-08-12** — **Fixed the bar rendering clipped after one light (decision 051).** Reported
+  right after the v0.6.2 relaunch: the pill was drawn with a rounded top and a flat, cut-off
+  bottom. The window was `37 × 31` points — one light's worth — while its DOM held five lights.
+  Not a v0.6.2 regression: `resizeToContent()` is edge-triggered (a light added/removed, a
+  geometry setting changed) and awaits two animation frames before measuring, and the webview
+  delivers none while the window isn't painting, so a resize landing during launch or
+  `install.sh`'s relaunch is never applied; the measurements that did stick were taken before
+  the first poll, when the bar held only the "empty" placeholder. Fix: `ensureSized()` runs
+  after each poll's render, measures the content synchronously (one layout read, no animation
+  frames) and re-resizes when it disagrees with the last size actually applied — a level check
+  behind the existing edges. Verified live: the bar now relaunches at `37 × 123` for the five
+  current sessions, screenshot-confirmed whole. Diagnosis was empirical — dropping one synthetic
+  session file (an add edge) instantly resized the stuck window, proving the resize path worked
+  and only its trigger had been lost.
+
 - **2026-08-12** — **Released v0.6.2.** Version bumped 0.6.1 → 0.6.2 across
   `tauri.conf.json`, `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock`, and the
   README's download link and release-command example. Patch: both changes since v0.6.1 are

@@ -924,6 +924,23 @@ function renderCursorPip(lights) {
   return false;
 }
 
+// +BADGE_PAD so a subagent badge overflowing the last dot's corner isn't clipped.
+const BADGE_PAD = 6;
+
+// The window size the content asks for right now. #bar is an auto-sized inline-flex
+// box, so it measures its full content even when the window is currently too small
+// to show it — which is what lets ensureSized() detect a clipped bar.
+function contentSize() {
+  const rect = document.getElementById("bar").getBoundingClientRect();
+  if (!rect.width) return null; // pre-paint: measuring now would shrink to nothing
+  return {
+    w: Math.max(MIN_W, Math.ceil(rect.width) + BADGE_PAD),
+    h: Math.max(MIN_H, Math.ceil(rect.height)),
+  };
+}
+
+let appliedSize = null; // the size we last successfully set the window to
+
 async function resizeToContent() {
   if (!AUTO_RESIZE || !LogicalSize) return;
   // Skip while the panel is hidden (menu-bar mode, popover closed): the webview
@@ -934,16 +951,29 @@ async function resizeToContent() {
   // Wait for layout+paint so we never measure a 0-width bar (which shrank the
   // window to nothing before the content rendered).
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-  const bar = document.getElementById("bar");
-  const rect = bar.getBoundingClientRect();
-  // +BADGE_PAD so a subagent badge overflowing the last dot's corner isn't clipped.
-  const BADGE_PAD = 6;
-  const w = Math.max(MIN_W, Math.ceil(rect.width) + BADGE_PAD);
-  const h = Math.max(MIN_H, Math.ceil(rect.height));
+  const size = contentSize();
+  if (!size) return;
   try {
-    await appWindow.setSize(new LogicalSize(w, h));
+    await appWindow.setSize(new LogicalSize(size.w, size.h));
+    appliedSize = size;
   } catch (_) {
     /* fail-silent: keep last size */
+  }
+}
+
+// Self-heal a window that doesn't match its content. A resize is normally triggered
+// only when a light is added or removed, so a single lost one leaves the pill clipped
+// (the bar sized for one light with five in it) until the next add/remove — and a
+// resize CAN be lost: it awaits two animation frames, which the webview stops
+// delivering while the window isn't being painted, so a size change that lands during
+// launch or a relaunch can simply never apply. Checking the measurement each poll
+// costs one layout read and fixes it on the next tick instead of never.
+function ensureSized() {
+  if (!AUTO_RESIZE || !LogicalSize || document.hidden) return;
+  const size = contentSize();
+  if (!size) return;
+  if (!appliedSize || appliedSize.w !== size.w || appliedSize.h !== size.h) {
+    resizeToContent();
   }
 }
 
@@ -1216,6 +1246,7 @@ async function tick() {
     latestSessions = sessions;
     checkChimes(sessions); // edge-triggered audio alerts (seeds silently on first tick)
     render(visibleSessions());
+    ensureSized(); // catch a resize that never applied, so the pill is never clipped
     if (currentMode() === "menubar") await pushTrayImage();
   } catch (_) {
     /* backend not ready yet; try again next tick */
