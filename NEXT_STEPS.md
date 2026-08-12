@@ -7,6 +7,14 @@
 
 ## Current state
 
+- **Cursor lights are reconciled against Cursor's record, vetoed by its tray (decisions 048,
+  052).** A silent Cursor light is forced to `idle` when Cursor's stored `status` is terminal —
+  but only if Cursor's own tray row doesn't say that composer is `", Running"` right now.
+  Without that veto, an agent 107 seconds between hook events (a long file write) was greyed
+  mid-turn, and #050's derived done light turned that into a white "unread" on a working agent.
+  The veto is positive-evidence-only: no Accessibility grant, or a composer off the tray's
+  recents list, means no veto and the pre-052 behavior.
+
 - **Unobservable sessions render hollow (decision 042).** A folder-less Cursor window fires one
   bridged `sessionStart` and then nothing (Cursor runs command hooks only with a folder open), so
   its light used to sit at a permanent, untrue `idle`. It now renders as a **hollow gray ring**
@@ -239,6 +247,59 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 ---
 
 ## Recently completed
+
+- **2026-08-12** — **Released v0.6.4.** Version bumped 0.6.3 → 0.6.4 across
+  `tauri.conf.json`, `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock`, and the
+  README's download link and release-command example. Contents: the Cursor tray-row veto
+  (decision 052) and the session-name tooltip (decision 053). The README was also rewritten to
+  describe what the tool does — the prose no longer explains the problems behind each
+  behaviour, and `Notes & limits` became a four-bullet `Limits` section covering only the
+  standing constraints (macOS/Apple Silicon, unsigned builds, no Cursor blocked light, the
+  Cursor Accessibility requirement).
+
+- **2026-08-12** — **The tooltip names the session, not just the folder (decision 053).** Its
+  first line was the project folder alone, so two sessions in one folder had identical
+  tooltips — and a session that had `cd`'d into a subfolder read `src-tauri`, not
+  `AgentStatus`. It now reads `folder · session name` (`AgentStatus · agentstatus-5b`), taken
+  from the host's own record: Claude Code names every session in `~/.claude/sessions/<pid>.json`
+  (`sessionId` → `name`, read behind a 5s TTL cache), and Cursor's composer name was already
+  being queried by #048. App-side only — no hook change, no status-file change, no transcript
+  read. There is **no LLM-written session title to use**: zero `summary`/`title` entries exist
+  in any transcript under `~/.claude/projects/` on Claude Code 2.1.200. The name is dropped
+  when it repeats the folder and stands alone when there is no folder. Verified with
+  `cargo test -- --ignored --nocapture dump_session_names` (all 5 live sessions resolved) and
+  `node app/tests/tooltip-head.mjs`.
+
+- **2026-08-12** — **A working Cursor agent can no longer be greyed — or flagged unread
+  (decision 052).** Reported live: a Cursor agent that was *running right now* showed up as
+  white/unread. Traced to three things in sequence, from that composer's own timestamps:
+  Cursor flushed `status="aborted"` at 13:45:30 (the **previous** turn), the live turn's last
+  hook event was 13:48:09 (`running`, `detail="Write app.js"`), and the next one didn't arrive
+  until 13:49:56 — a **107-second** mid-turn gap. #048's reconcile only requires 60s of hook
+  silence plus a terminal `status`, so at 13:49:09 it forced the light to `idle`; #050 derives
+  Cursor's done light from a watched non-idle→idle transition, so that forced idle rendered as
+  **white "finished, unread"** on an agent still editing a file. (It also swallowed the real
+  unread light: the genuine `stop` 47s later was an idle→idle no-op, so the finished turn ended
+  up dim gray.) Fix: a fourth condition on the reconcile — Cursor's tray row for that composer
+  must not read `"<name>, Running"` (#049's suffix), the only live status signal Cursor exposes;
+  everything in `state.vscdb` describes the last *flushed* turn. `cursor_tray_titles()` reuses
+  #045/#047's AX walk with a record-and-decline predicate (nothing pressed, no menu opened),
+  cached at the same 5s TTL and read lazily; the composer name is one extra column on #048's
+  existing query, so no second `sqlite3` spawn. **Positive evidence only** — an empty tray read
+  (no Accessibility grant, composer off the tray's recents) never causes a veto, so it can only
+  keep a light green, never light one up. Rust-only; no hook, schema, or frontend change.
+  New `tray_running_veto` unit test; the live check rides on the existing
+  `cargo test --release -- --ignored --nocapture cursor_facts`, which now prints each Cursor
+  session's composer name and `tray_says_running` verdict. Rebuilt + reinstalled via
+  `./install.sh`. README updated. **Verified live** on the reported composer itself, sampled
+  every 3s through a real turn: `terminal=true` and `tray_says_running=true` held together for
+  71 consecutive samples (exactly the pair that used to grey the light), and the suffix cleared
+  when the turn ended (105 samples `false`), so the veto doesn't latch and #048's stuck-green
+  fix still fires. The full 242-sample run also pinned the release timing: the tray drops
+  `", Running"` ~3s *before* the `stop` hook arrives, so the veto lifts just ahead of the turn
+  being confirmed over and can never delay a genuine reconcile. Not reproduced in that turn: the
+  60s clock itself (its longest hook gap was 17s) — unchanged #048 code, but worth catching on a
+  longer turn.
 
 - **2026-08-12** — **Released v0.6.3.** Version bumped 0.6.2 → 0.6.3 across
   `tauri.conf.json`, `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock`, and the

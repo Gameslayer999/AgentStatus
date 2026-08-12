@@ -4,9 +4,9 @@
 
 # AgentStatus
 
-**A small, always-on-top bar of lights showing the live status of every open Claude Code
-or Cursor session — so you can tell at a glance which agent is working, waiting on you,
-idle, or errored, without hunting through windows.**
+**A small bar of lights that stays above all other windows. It shows the live state of
+each open Claude Code or Cursor session. You see immediately which sessions run, which
+wait for you, which are idle, and which have an error.**
 
 [![Latest release](https://img.shields.io/github/v/release/Gameslayer999/AgentStatus?sort=semver&label=release)](https://github.com/Gameslayer999/AgentStatus/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Gameslayer999/AgentStatus/total?label=downloads)](https://github.com/Gameslayer999/AgentStatus/releases)
@@ -16,167 +16,170 @@ idle, or errored, without hunting through windows.**
 
 </div>
 
-![The AgentStatus light bar floating over the desktop: green (running), orange (blocked), white (done), a running session with a blue "2" subagent badge, red (error), and a dim gray (idle) light.](docs/lightbar-hero.svg)
+![The AgentStatus light bar above the desktop. From left to right: a green light, an orange light, a white light, a green light with a blue subagent badge that shows 2, a red light, and a dim gray light.](docs/lightbar-hero.svg)
 
-<sub>One light per session. Left to right: running · blocked · done · running with 2 subagents · error · idle. It floats over everything, including full-screen apps.</sub>
+<sub>One light for each session. From left to right: running, blocked, done, running with
+2 subagents, error, idle. The bar stays above all other windows, also full-screen
+applications.</sub>
 
-Run several agent sessions across projects and windows and it's easy to lose track of
-which one just finished, which is blocked on a permission prompt, and which hit an
-error. AgentStatus floats one colored light per session over everything on screen
-(including full-screen apps), updates in real time, and lets you click a light to jump
-straight to that session.
+When you run many agent sessions in different projects and windows, it is difficult to
+know their state. AgentStatus shows one colored light for each session. The bar stays
+above all other windows, also full-screen applications. The lights change immediately.
+Click a light to go directly to that session.
 
-Works with **Claude Code in VS Code** and **Cursor's native agent** (both drive the same
-hook). There's also an optional VS Code extension that adds a per-window status-bar item
-for Claude Code in VS Code.
+AgentStatus operates with **Claude Code in VS Code** and with the **Cursor agent**. Both
+use the same hook. An optional VS Code extension adds a status-bar item to each VS Code
+window.
 
 ## Install (macOS, Apple Silicon)
 
-The fastest path is the prebuilt DMG — no build tools, and the app wires up all its hooks
-itself on first launch.
+The DMG is the fastest method. You do not need build tools. The application installs its
+own hooks at the first start.
 
 **Requirements:** macOS on Apple Silicon (M1 or later), and Claude Code or Cursor.
 
 > [!IMPORTANT]
-> AgentStatus is **unsigned and unnotarized**, so macOS Gatekeeper blocks it on first
-> launch. Step 3 below clears the download quarantine so it opens — nothing is code-signed
-> yet.
+> AgentStatus is **not signed and not notarized**. Thus macOS Gatekeeper stops it at the
+> first start. Step 3 removes the download quarantine, and the application starts.
 
-1. Download **`AgentStatus_0.6.3_aarch64.dmg`** from the
+1. Download **`AgentStatus_0.6.4_aarch64.dmg`** from the
    [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest).
-2. Open the DMG and drag **AgentStatus** into **Applications**.
-3. The app is **unsigned**, so macOS Gatekeeper blocks it on first launch. Clear the
-   download quarantine and open it:
+2. Open the DMG. Drag **AgentStatus** into **Applications**.
+3. Remove the download quarantine and start the application:
 
    ```bash
    xattr -dr com.apple.quarantine /Applications/AgentStatus.app
    open /Applications/AgentStatus.app
    ```
 
-   (Alternatively: double-click it, let macOS block it, then go to **System Settings →
-   Privacy & Security**, scroll to the "AgentStatus was blocked" message, and click
-   **Open Anyway**. On macOS 15+ the old right-click → Open shortcut no longer bypasses
-   this for downloaded apps.)
+   As an alternative, double-click the application and let macOS stop it. Then open
+   **System Settings → Privacy & Security**. Find the message "AgentStatus was blocked".
+   Click **Open Anyway**. On macOS 15 and later, right-click → Open does not remove this
+   block for downloaded applications.
 
-On first launch the app **installs its own hooks** — it writes
-`~/.claude/status/report.sh` and registers it for Claude Code
-(`~/.claude/settings.json`) and Cursor (`~/.cursor/hooks.json`), backing up the originals
-first. **Already-open Claude Code sessions pick it up immediately — no restart needed.**
+At the first start, the application **installs its own hooks**. It writes
+`~/.claude/status/report.sh`. It registers that script for Claude Code
+(`~/.claude/settings.json`) and for Cursor (`~/.cursor/hooks.json`). It makes a backup of
+the initial files first. **Claude Code sessions that are already open use the hook
+immediately. A restart is not necessary.**
 
-AgentStatus is an accessory app (**no Dock icon**). To start it at login, add it in
-**System Settings → General → Login Items**.
+AgentStatus is an accessory application and has **no Dock icon**. To start it at login,
+add it in **System Settings → General → Login Items**.
 
-**Faster click-to-focus (and required for Cursor):** grant AgentStatus **Accessibility**
-permission (System Settings → Privacy & Security → Accessibility). For VS Code this is
-optional — it lets a light click raise a same-Space window in ~0.2s instead of ~1s, and
-without it click-to-focus still works via the slower IDE CLI. For **Cursor** it is what
-makes a click open the agent's conversation at all; without it a click only brings Cursor
-forward.
+**Accessibility permission:** give AgentStatus **Accessibility** permission in System
+Settings → Privacy & Security → Accessibility. For VS Code this permission is optional.
+With the permission, a click on a light shows a window in the same Space in approximately
+0.2 s. Without the permission, the click uses the slower IDE command line and needs
+approximately 1 s. For **Cursor**, this permission is necessary. Without it, a click only
+brings Cursor to the front.
 
 ### Build from source instead
 
-If you're on Intel, or want to build it yourself:
+If you have an Intel Mac, or if you want to build the application yourself:
 
 ```bash
 ./install.sh
 ```
 
-This needs [Rust](https://rustup.rs), Node, and `jq` (`brew install jq`). It builds the
-app and copies it to `/Applications`; the app self-installs its hooks on first launch,
-same as the DMG. (On a fresh install you still need the Gatekeeper step above.)
+This needs [Rust](https://rustup.rs), Node, and `jq` (`brew install jq`). The script
+builds the application and copies it to `/Applications`. The application installs its own
+hooks at the first start, as the DMG does. For a new installation, do the Gatekeeper step
+above.
 
 ## The lights
 
-Each light is one Claude Code or Cursor session:
+Each light is one Claude Code or Cursor session.
 
-![The six light states: green running, orange blocked (pulsing), white done, dim gray idle, red error (pulsing), and a hollow gray ring for unknown, each labeled with its meaning.](docs/lightbar-states.svg)
+![The six light states: green for running, orange for blocked with a pulse, white for done, dim gray for idle, red for error with a pulse, and a hollow gray ring for unknown. Each state has a label.](docs/lightbar-states.svg)
 
-![A running light with a blue "2" subagent badge and its hover tooltip, showing the project name and state, the task, and the running subagents.](docs/lightbar-hover.svg)
+![A green light with a blue subagent badge that shows 2, and its tooltip. The tooltip shows the project name, the state, the task, and the subagents that run.](docs/lightbar-hover.svg)
 
-- **A white light is unread** — that session finished a turn and you haven't looked at it
-  yet. Clicking it (which jumps you to the session) dims it to gray; the next turn that
-  finishes lights it white again. Works for both Claude Code and Cursor sessions.
-- **A hollow ring** means a session whose state can't be read at all — a Cursor window with
-  no folder open never reports progress, so the bar says "unknown" instead of showing a color
-  it would only be guessing at. Clicking it opens that agent's conversation if Cursor still
-  lists it, and otherwise just brings Cursor forward; **Unknown → Hide** in settings keeps
-  these rings off the bar entirely.
-- **Hover** a light to see the session's project, its task, and what it's doing right now.
-- **A blue count badge** on a light means that session has that many subagents running
-  (hover lists their types).
-- **Click** a light to jump to that session — in VS Code its window comes forward with the
-  session's tab revealed; in Cursor that agent's conversation is opened (via Cursor's own
-  menu-bar list, so it needs Accessibility permission — otherwise the click just brings
-  Cursor forward).
-- **Right-click** the bar to open settings — orientation (row/column), light size, spacing,
-  per-state colors, and bar opacity.
-- **Drag** the bar (grab the padding, not a light) to position it anywhere; it remembers
-  where you put it and floats over everything, including full-screen apps.
+- **A white light is unread.** That session completed a turn, and you did not look at it.
+  A click on the light moves you to the session and makes the light gray. The next
+  completed turn makes it white again. This applies to Claude Code sessions and to Cursor
+  sessions.
+- **A hollow ring** is a session that reports no state, such as a Cursor window with no
+  open folder. The bar shows "unknown" instead of a color it would only guess. A click
+  opens that agent conversation. Set **Unknown → Hide** in the settings to keep these
+  rings off the bar.
+- **A ring pip** at the end of the bar counts the Cursor agents that wait for you and have
+  no light of their own. Click the pip to open the next one in the queue.
+- **Put the pointer on a light** to see the project, the session name, the task, and the
+  current operation. The session name is the name the host gives the session — for example
+  `agentstatus-5b` in Claude Code, or the name of the agent conversation in Cursor. This
+  name tells two sessions in the same project folder apart.
+- **A blue badge** on a light shows the number of subagents in that session. The tooltip
+  gives their types.
+- **Click a light** to go to that session. In VS Code, the window comes to the front and
+  shows the tab of the session. In Cursor, the application opens that agent conversation.
+- **Right-click the bar** to open the settings.
+- **Drag the bar** to move it. Hold the bar by the padding, not by a light. The
+  application keeps the position.
 
 ## Customize it
 
-**Right-click** the bar to open the settings panel — everything is adjustable and persists
-across restarts:
+**Right-click** the bar to open the settings panel. All settings stay after a restart.
 
-![The AgentStatus settings panel: Orientation, Sort, and Unknown (Show/Hide) toggles, Size, Padding, and Opacity sliders, per-state color swatches (Running, Blocked, Done, Idle, Error), and Reload / Reset to defaults / Quit links.](docs/lightbar-settings.svg)
+![The AgentStatus settings panel. It has Orientation, Sort, and Unknown controls, sliders for Size, Padding, and Opacity, color swatches for Running, Blocked, Done, Idle, and Error, and Reload, Reset to defaults, and Quit links.](docs/lightbar-settings.svg)
 
-- **Mode** — run the lights as the floating bar (default) or up in the **macOS menu bar** (see
-  [below](#run-it-in-the-menu-bar-instead)).
-- **Orientation** — flip the bar between a horizontal row and a vertical column; the window
-  auto-resizes to hug the new shape.
+- **Mode** — show the lights as the floating bar (default) or in the **macOS menu bar**.
+  Refer to [Run it in the menu bar instead](#run-it-in-the-menu-bar-instead).
+- **Orientation** — change the bar between a horizontal row and a vertical column. The
+  window changes its size to fit the new shape.
 
-![The same light bar shown as a horizontal row on the left and a vertical column on the right.](docs/lightbar-orientation.svg)
+![The same light bar as a horizontal row on the left and as a vertical column on the right.](docs/lightbar-orientation.svg)
 
-- **Sort** — group lights by window, or push the attention states (blocked/error) to the front.
-- **Unknown** — **Show** (default) or **Hide** the hollow no-signal rings, if you'd rather see
-  only lights whose state actually means something.
-- **Size, padding, and opacity** — scale the lights, tighten or loosen the bar, and fade the
-  pill (the lights themselves always stay fully opaque so the signal never dims).
-- **Per-state colors** — recolor any of the five states with a native color picker.
-- **Audio alerts** — off by default; flip **Audio** on to get a short chime when a session
-  turns blocked, errors, or finishes a turn. Toggle which of those three chime, and set the
-  volume, in the sub-panel that appears. The chime fires once on the transition, not on a
-  loop, and only while the app is running.
+- **Sort** — put the lights in groups by window, or move the attention states (blocked and
+  error) to the front.
+- **Unknown** — **Show** (default) or **Hide** the hollow rings.
+- **Size, padding, and opacity** — change the size of the lights, the space in the bar,
+  and the opacity of the bar. The lights stay fully opaque.
+- **Colors** — change the color of each of the five states with the macOS color picker.
+- **Audio alerts** — off by default. Set **Audio** to on to get a short tone when a
+  session becomes blocked, has an error, or completes a turn. In the sub-panel, select
+  which of the three events make a tone, and set the volume. The tone sounds one time at
+  the change of state, and only while the application runs.
 
 ### Run it in the menu bar instead
 
-Prefer a tidy always-there presence over a floating bar? In the settings panel set **Mode →
-Menu bar**. The same lights render as a live status item in the macOS menu bar, and clicking
-it drops the full bar down as a popover — so per-light click-to-focus, hover tooltips, and
-subagent badges all still work.
+For a smaller and permanent presence, set **Mode → Menu bar** in the settings panel. The
+same lights become a live item in the macOS menu bar. Click the item to show the full bar
+as a popover. Click-to-focus, tooltips, and subagent badges continue to operate.
 
-- **Dots vs. Single** — show one dot per session (default), or condense to a single dot for the
-  most-urgent state (error → blocked → done → running → idle) to save menu-bar width.
-- Menu-bar mode is always horizontal (the Orientation control is hidden there).
-- macOS decides where third-party menu-bar items sit; ⌘-drag the item once to pin it where you
-  want (the OS remembers).
+- **Dots or Single** — show one dot for each session (default), or one dot for the most
+  urgent state (error, then blocked, then done, then running, then idle). One dot uses
+  less menu-bar width.
+- Menu-bar mode is always horizontal. The Orientation control is not available.
+- macOS controls the position of menu-bar items. Hold ⌘ and drag the item one time to set
+  its position. The system keeps that position.
 
 > [!NOTE]
-> The macOS menu bar auto-hides in full-screen apps, so in menu-bar mode the lights disappear
-> while you're in a full-screen window — exactly the case the floating bar exists to cover. Use
-> floating for glancing over full-screen apps, menu bar for a tidy presence otherwise.
+> The macOS menu bar hides itself in full-screen applications. Thus in menu-bar mode the
+> lights are not visible in a full-screen window. Use the floating bar for full-screen
+> work, and the menu bar for other work.
 
 ## How it works
 
-Two pieces, decided independently (see [DECISIONS.md](DECISIONS.md) for the why):
+AgentStatus has two parts:
 
-- **Signal layer** — a single **hook** (`report.sh`) fires on session lifecycle events and
-  writes each session's state to `~/.claude/status/sessions/<id>.json`. Hooks are global, so
-  **one install covers every project and Claude Code / Cursor window**.
-  The hook does the minimum work and exits — it never blocks or slows down a turn.
-- **Display layer** — a **Tauri** app (a non-activating macOS `NSPanel`) watches that
-  directory and renders the lights, either as the floating bar or as a live menu-bar item
-  (the item is an image the webview paints from the same lights, so a click reveals the panel
-  itself as a popover — see [Run it in the menu bar instead](#run-it-in-the-menu-bar-instead)).
+- **The signal layer** — one hook script (`report.sh`) starts at each session event. It
+  writes the state of that session to `~/.claude/status/sessions/<id>.json`. The hook is
+  global, thus one installation covers all projects and all Claude Code and Cursor
+  windows. The hook does the minimum work and stops immediately. It does not delay a turn.
+- **The display layer** — a Tauri application reads that directory and shows the lights,
+  as the floating bar or as the menu-bar item.
 
-The status file holds only what the lights need — `session_id`, coarse state, a short
-project label, and a timestamp. No prompt or transcript content is stored.
+The status files contain only the data for the lights: the session ID, the state, a short
+project name, and a time. AgentStatus does not store prompt text or transcript text.
+
+For the reasons for these decisions, refer to [DECISIONS.md](DECISIONS.md).
 
 ## Optional — VS Code extension
 
-The extension adds a per-window status-bar item (scoped to that window's workspace) with
-the same hover detail and click-to-focus. It reads the same status files, so it needs the
-app (or the dev hooks) installed for the signal.
+The extension adds a status-bar item to each VS Code window, for the workspace of that
+window. It has the same click-to-focus and the same tooltip, without the session name. It
+reads the same status files, thus it needs the application (or the development hooks) for
+the signal.
 
 ```bash
 code --install-extension extension/claudestatus-0.1.2.vsix
@@ -189,63 +192,43 @@ node hooks/setup.mjs uninstall     # remove the hooks from settings.json
 rm -rf /Applications/AgentStatus.app ~/.claude/status
 ```
 
-Your original settings are backed up at `~/.claude/settings.json.agentstatus-bak`.
+The backup of your initial settings is at `~/.claude/settings.json.agentstatus-bak`.
 
 ## Develop
 
 ```bash
 cd app
 npm install
-node ../hooks/setup.mjs install   # register the Claude repo hooks (dev points at hooks/report.sh)
+node ../hooks/setup.mjs install   # register the repo hooks (development uses hooks/report.sh)
 npm run tauri dev
 ```
 
-In dev the app does **not** self-install (so edits to `hooks/report.sh` are live without a
-rebuild); the release build does. `node hooks/setup.mjs status|uninstall` manages the dev
-hooks.
+In development, the application does **not** install its own hooks. Thus changes to
+`hooks/report.sh` are immediately in use, and a rebuild is not necessary. The release
+build installs its own hooks. Use `node hooks/setup.mjs status|uninstall` to control the
+development hooks.
 
-### Cutting a release
+### Make a release
 
-Releases are built and published by GitHub Actions. Bump the version in
-`app/src-tauri/tauri.conf.json`, `app/package.json`, and `app/src-tauri/Cargo.toml`, merge
-to `main`, then push a matching tag:
+GitHub Actions builds and publishes the releases. Set the new version in
+`app/src-tauri/tauri.conf.json`, `app/package.json`, and `app/src-tauri/Cargo.toml`. Merge
+to `main`. Then push a tag with the same version:
 
 ```bash
-git tag v0.6.3 && git push origin v0.6.3
+git tag v0.6.4 && git push origin v0.6.4
 ```
 
-The workflow builds the arm64 DMG on a macOS runner and publishes it with generated notes.
-It fails fast if the tag doesn't match the version in `tauri.conf.json`. Merging to `main`
-alone publishes nothing — the tag is the trigger.
+The workflow builds the arm64 DMG on a macOS runner and publishes it with generated
+notes. The workflow stops if the tag does not agree with the version in
+`tauri.conf.json`. A merge to `main` publishes nothing. The tag starts the workflow.
 
-## Notes & limits
+## Limits
 
-- **macOS only** (uses a non-activating `NSPanel` + private transparency API to float
-  over full-screen apps). Prebuilt DMG is **Apple Silicon only**; Intel builds from source.
-- **Downloaded builds are unsigned/unnotarized** — hence the Gatekeeper step; nothing is
-  Apple-notarized. When you build locally, `install.sh` re-signs the app with a per-machine
-  self-signed identity so its **Accessibility permission survives rebuilds/updates** (grant
-  once); this does not affect Gatekeeper for downloaded copies.
-- A light == one `session_id`, labeled by its project folder. Two windows on the *same*
-  folder collapse into one label.
-- On **Cursor**, lights show running (green), done (white) and idle (gray). Blocked
-  (orange) isn't available — Cursor emits no permission event. A Cursor light goes white
-  for a turn that finishes while the bar is running; one that finished before you launched
-  the bar shows as idle.
-- Cursor lights follow Cursor's own record as well as its hooks: archiving an agent removes
-  its light, a finished or aborted agent drops to gray, and Cursor subagents count toward
-  their parent's blue badge instead of getting lights of their own. An agent still waiting
-  on a subagent stays green.
-- A per-session Cursor light needs a **folder-open** Cursor window; a folder-less one
-  reports nothing and shows as a hollow "unknown" ring. For the agents that get no light —
-  folder-less and background ones — the bar mirrors Cursor's own menu-bar item: a
-  hollow-ring pip with the number of composers awaiting you. Clicking it opens the next one
-  waiting and clears its notification, so repeated clicks walk the queue until the pip
-  disappears. The pip needs **Accessibility** permission; without it, it doesn't appear.
-- The supported hosts are **Claude Code (VS Code)** and **Cursor**. Launching the app — or
-  running `node hooks/setup.mjs install|uninstall` — removes hook entries left in
-  `~/.codex/hooks.json` and `~/.gemini/config/hooks.json` by versions ≤ 0.4.2, leaving any
-  other hooks in those files untouched.
-- Sessions with no activity for 2h are pruned (they reappear on their next event).
-- Subagents are tracked by lifecycle (which are running + their types), not by their
-  individual live tool calls — those aren't attributable to a specific subagent.
+- **macOS only, and the DMG is for Apple Silicon.** For Intel, build from source.
+- **Downloaded builds are not signed and not notarized**, thus the Gatekeeper step above
+  is necessary.
+- **Cursor has no blocked light.** Cursor sends no permission event, so its lights show
+  running, done, and idle only.
+- **Cursor needs the Accessibility permission** for click-to-focus and to keep its lights
+  correct. Without it, a click only brings Cursor to the front, and a long-silent agent
+  can go gray while it still works.
