@@ -77,6 +77,13 @@ With the permission, a click on a light shows a window in the same Space in appr
 approximately 1 s. For **Cursor**, this permission is necessary. Without it, a click only
 brings Cursor to the front.
 
+**Automation permission:** the first time you click a light for a **terminal** session,
+macOS asks whether AgentStatus may control that terminal application. Click **OK**. This is
+what selects the tab, so a refused prompt leaves the click bringing the terminal to the
+front on whatever tab was last used. It is a separate grant from Accessibility, asked once
+per terminal application, and you can change it later in System Settings → Privacy &
+Security → Automation.
+
 ### Build from source instead
 
 If you have an Intel Mac, or if you want to build the application yourself:
@@ -251,7 +258,7 @@ notes. The workflow stops if the tag does not agree with the version in
   split, which the bar matches against the session title Claude Code writes there. A
   session Claude has not titled yet, two sessions whose titles do not tell them apart, and
   any other terminal application fall back to bringing the application to the front so you
-  pick the tab. macOS asks once for permission to control the terminal application.
+  pick the tab — as does a refused Automation prompt (see **Automation permission** above).
 - **A background agent opens in a new terminal.** `claude --bg` runs detached from any
   terminal, so there is no tab to show. A click opens a new terminal window running
   `claude attach` for that agent instead. Ghostty is used when it runs, otherwise

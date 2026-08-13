@@ -65,6 +65,10 @@
 | 054 | 2026-08-13 | **Claude Code in the terminal (`cli`) and in Claude Desktop (`claude-desktop`) become first-class hosts** — both already ran the hook (all three surfaces read the same `~/.claude/settings.json`), so the signal layer needed nothing; they were invisible because everything non-Cursor was tagged `vscode` and therefore lock-pruned. `report.sh` now tags the host from `$CLAUDE_CODE_ENTRYPOINT` and records the owning `claude` pid; the app prunes those hosts by pid liveness instead of IDE locks, and clicks focus the terminal tab (Terminal.app, by `tty`) or Claude. Claude Desktop's **normal chat threads are out of scope** — no hook mechanism exists and no local state is observable | Accepted |
 | 053 | 2026-08-12 | **Tooltip identifies a light by the host's own session name**, not the project folder alone — the bar's first line was the folder basename, so two sessions in one folder had byte-identical tooltips. Claude Code names every session in `~/.claude/sessions/<pid>.json` (`sessionId`, `name`, `nameSource`); Cursor names every composer in `composerData.name`, already queried by #048. The app joins both by session id and the tooltip head becomes `folder · name` ("AgentStatus · agentstatus-5b"), dropping the name when it is absent or repeats the folder. App-side read only — no hook change, no status-file change, and no transcript is read (Guideline #5). Rejected: an LLM-style session title (no `summary`/`title` entry exists in any transcript on the installed 2.1.200 — nothing to read) and recording the first prompt as a title (a schema change for something the `task` line already covers) | Accepted |
 | 055 | 2026-08-13 | **A Ghostty light focuses the exact tab (and split)** — #054 left Ghostty at app-level focus because it publishes no tty, so a click brought Ghostty forward on whatever tab was last active. Two things changed since: Ghostty 1.3 ships an AppleScript dictionary (`window` → `tab` → `terminal` surface, each with a title, plus a `focus` command that selects the surface and fronts its window), and Claude Code 2.1.231 writes a session title into the terminal title bar, stored as an `ai-title` record in the transcript — which #053 checked for on 2.1.223 and correctly found absent. The app reads the last `ai-title` for the session and runs one `osascript` that focuses the surface whose title **contains** it (the leading glyph is the activity spinner), acting only on an **exactly one** match. No `ai-title`, no hit, several hits, Ghostty < 1.3, or a refused Automation grant all fall back to fronting the app — the old behaviour, never a wrong tab (UI Principle #4). Reading the transcript is a flagged exception to Guideline #5: only the title is extracted, nothing is stored. No hook change, no schema change | Accepted |
+| 056 | 2026-08-13 | **Re-adding Codex and Gemini starts with observation, not with restoring the deleted code** — both were removed in #040 as unverified, so a re-add repeats the observe-then-build sequence using the existing logger tooling, and must first gate the #040 cleanup (`install.rs:80-121`, `setup.mjs:73-82`) that would otherwise delete the new entries on the next launch. Codex is verifiable today (the `openai.chatgpt` VS Code extension is installed) at ~2–2.5 days; Gemini is **blocked on which product is meant** — Antigravity IDE, Gemini CLI, or Antigravity CLI are three different config paths and event sets, and only the IDE is installed here. Only Codex can reach orange; **none of the three can reach red** | Proposed — blocked on user |
+| 057 | 2026-08-13 | **Token/cost tracking: data exists for Claude Code only, and the maintenance is the real cost** — transcripts carry per-call `message.usage`/`model`, but hook payloads carry nothing, no aggregated local source exists, and Cursor stores context-window fullness with no cost at all, so any version is Claude-only. Options: (1) defer, (2) last-turn cost in the tooltip ~½–1 day, (3) cumulative cost + settings-panel readout ~2–3 sessions. Constraints: the read goes app-side, never in the hook (reversing #040 / Guideline #3); it is a schema change needing approval; nothing numeric goes on the bar (UI Principle #1); the price table must be hardcoded and rots on every model release | Proposed — awaiting go/no-go |
+| 058 | 2026-08-13 | **A fallback view for high session counts** — the one-light-per-session bar is the project's one unmatched design property (every competitor aggregates to a single icon), but it grows at `8 + 23N` px, so 30 sessions is a 698 px bar. Five options drafted (folder grouping, overflow chip, grid wrap, auto-shrink, attention-only); recommendation is the **overflow chip** bounded by urgency sort with folder grouping as an orthogonal toggle, auto-shrink rejected outright for fighting UI Principle #1. Must be a **threshold, not a mode switch**, so per-session lights stay the default at normal counts | Proposed — awaiting choice |
+| 059 | 2026-08-13 | **Hook-only is a real risk for the core path, but the fix is one guarded reconcile, not a second architecture** — six *observed* failures (hooks not executing at all, events that never fire, dropped end-of-life events, a 95-minute stuck green light), plus two silent undetectable ones (hook registration disappearing; `jq` missing on the DMG path, which `install.sh:11` guards and `install.rs` does not). Cursor already has a state reconcile (#048/#052) and CLI/Desktop have pid liveness, but **Claude Code has no state reconcile at all** — while `claude agents --json` and `~/.claude/sessions/<pid>.json` both carry `status`/`statusUpdatedAt` that the app already reads and discards. Fix mirrors #048's guarded shape. **Unverified: whether a VS Code session reports `status`** — confirm before writing code | Proposed — needs live check |
 
 ---
 
@@ -3021,3 +3025,313 @@ session's tab.
   through to the activate-by-pid path, which fronts Ghostty and leaves the focused split
   alone — the split change could not have happened. Both directions, on the real app, from a
   real click.
+
+## 057 — Token/cost tracking: what the data allows, and what it would cost
+
+**Date:** 2026-08-13
+**Status:** Proposed — options presented, awaiting the user's go/no-go
+
+**Context:** A survey of comparable tools (2026-08-13) found that cost/usage analytics is the
+single most common feature AgentStatus does not have: **AgentsView** keeps per-session and
+per-model cost breakdowns, daily spend charts, and activity heatmaps in a local SQLite
+database; **usage** shows token burn rate, session/weekly quota, and per-project cost
+estimates; **claude-statistics** shows subscription usage and cost in real time. The user
+asked for an effort estimate before deciding whether to build it.
+
+**What the data actually allows (verified live on this machine, not inferred):**
+
+| Source | Carries token/cost data? | Evidence |
+|---|---|---|
+| Claude Code transcripts (`~/.claude/projects/*/<id>.jsonl`) | **Yes** — `type:"assistant"` records carry `message.model` and `message.usage.{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}` | Parsed a real 3.7 MB / 464-line transcript |
+| **Hook payloads** | **No** — nothing token-shaped on any event | All 246 captured events in `logs/events.log`; the full key set is `background_tasks, cwd, duration_ms, effort, hook_event_name, last_assistant_message, permission_mode, prompt, prompt_id, reason, session_crons, session_id, source, stop_hook_active, tool_input, tool_name, tool_response, tool_use_id, transcript_path` |
+| `~/.claude/sessions/<pid>.json` | **No** usage field (it carries `status`/`name`/`pid` bookkeeping only) | Read live |
+| `claude` CLI | **No** cost/usage subcommand | `claude --help`: `agents, auth, auto-mode, doctor, gateway, import, install, mcp, plugin, project, setup-token, ultrareview, update` |
+| **Cursor** `state.vscdb` | **No cost data.** `usageData` is empty `{}` on every sampled `composerData` row. It does carry `contextTokensUsed` / `contextTokenLimit` / `contextUsagePercent` (e.g. `127637 / 200000 / 63.8`) | Read-only `sqlite3` query |
+| Model pricing | **Nowhere local** — a price table would have to be hardcoded in the app | — |
+
+Two consequences fall straight out of that table. **The usage data is per-API-call, not a
+session total**, so "tokens spent this session" means summing every assistant record in the
+file, not reading its tail. And **Cursor can never be covered** — it stores context-window
+fullness, which is a different metric, and no cumulative spend at all. Any version of this
+feature is Claude-Code-only and therefore partial, on a bar whose whole point is showing all
+hosts side by side.
+
+**Options considered:**
+
+| # | Option | Where the code goes | Effort | Biggest blocker |
+|---|---|---|---|---|
+| 1 | **Do nothing / defer** | — | none | Only the cost of staying honest that it isn't shipped |
+| 2 | **Last-turn cost in the tooltip**, Claude Code only | New TTL-cached reader in `lib.rs` following the `cursor_facts_query`/`cli_facts` pattern (`lib.rs:288-362`, `935-978`); a `transcript_path` field added to the status file; one line appended in `titleFor()` (`main.js:789-804`) | ~half a day to a day | Claude-only; a hardcoded price table that rots on every model release |
+| 3 | **Cumulative session cost** + an aggregate readout in the settings panel | Option 2 plus a per-session byte-offset checkpoint (so a poll parses only newly appended bytes) and new settings-panel UI | ~2–3 sessions | Same two blockers, plus new UI real estate the "glanceable dots" design has no room for, plus a first-scan cost on long resumed transcripts |
+
+**Decision:** Present these three and build nothing until the user picks. Recording the
+constraints that bind whichever option is chosen:
+
+1. **Do not put the token read in the hook.** Decision 040 deliberately removed *all*
+   transcript reading from `report.sh` (and its `python3` spawn with it). A last-turn read is
+   cheap (~3 ms for a `tail -c 4000` on a 3.7 MB file) but a session total needs a full-file
+   scan, and putting either back on the user's turn reverses #040 and runs at Guideline #3.
+   The app-side TTL-cached reader has no such cost because it runs in AgentStatus's own
+   process, and the codebase already has that exact pattern twice.
+2. **This is a status-file schema change and needs explicit approval** (Agent Decision
+   Framework #2) — options 2 and 3 both add at least a `transcript_path` field.
+3. **Nothing numeric goes on the bar itself** (UI Principle #1). The tooltip and the settings
+   panel are the only two surfaces that don't compete with the lights.
+4. **The price table is a standing maintenance liability**, not a one-time cost — it goes
+   stale every time a model ships, and there is no local source of truth to query instead.
+
+**Reasoning:** The question the user asked was "how much work," and the answer is that the
+work is small but the *maintenance* is not, and the *coverage is partial by construction*.
+That reframing is the actual decision input: option 2 is genuinely cheap, but it buys a
+Claude-Code-only number that needs hand-maintained pricing forever. Worth stating plainly
+rather than burying under an effort estimate.
+
+## 058 — A fallback view for high session counts (design options)
+
+**Date:** 2026-08-13
+**Status:** Proposed — options drafted, awaiting the user's choice; nothing implemented
+
+**Context:** The same competitor survey found that AgentStatus's **one-light-per-session bar
+is its one genuinely unmatched design choice** — `claude-status-bar` and `gmr/claude-status`
+both collapse every session into a single aggregate menu-bar icon and make the user open a
+dropdown to see which session needs them. That is the inverse of this project's whole premise
+(UI Principle #1: read state at a glance, no click-through). But it does not scale, and the
+scaling is linear and measurable.
+
+**The actual numbers.** The bar is `--dot-size: 13px` with a `10px` gap and `9px` padding per
+side (`styles.css:18,45,101`), so its long axis is **`8 + 23N` px** for N lights — confirmed
+against a real measurement in decision 051 (5 sessions → 123 px):
+
+| Sessions | Bar length |
+|---|---|
+| 5 | 123 px |
+| 10 | 238 px |
+| 20 | 468 px |
+| 30 | 698 px |
+
+At 30 sessions a vertical bar is 698 px — roughly two-thirds of a 1080p display's height. The
+failure is not sudden; the bar just quietly stops being glanceable somewhere past ~15.
+
+Worth noting what the live machine looks like today: **4 sessions, 3 of which share one
+project folder** (`AgentStatus`). That distribution is the clue — the count grows much faster
+than the number of *things the user is actually working on*.
+
+**Options considered:**
+
+| # | Option | How it works | Pros | Cons |
+|---|---|---|---|---|
+| **A** | **Group by project folder** | One light per folder; badge = session count; color = most urgent state in the group (reuse `summaryState`, `main.js:253`) | Collapses the common case hard (today: 4 lights → 2). Reuses the `byWindow` sort (#025), the tray's `TRAY_PRIORITY` condense (#026), and the badge element (#009) — very little new code. Groups match how the user thinks about their work | Collides with the subagent badge, which already owns that corner (#009). Click is ambiguous — which session does it focus? |
+| **B** | **Overflow chip** | Show the top K lights by urgency, then one summary chip for the rest; chip color = most urgent hidden state, badge = count; click expands a list | **Bounds the bar by construction** — never exceeds K+1 lights at any session count. Urgency sort (#025) guarantees the hidden ones are never the ones needing attention | Needs an expansion surface (though menu-bar mode already has a popover). Hidden sessions are genuinely invisible |
+| **C** | **Wrap into a grid** | Past a threshold, flow lights into multiple rows/columns | Zero information loss — every session keeps its own light, fully preserving the differentiator. Nearly free: a CSS `flex-wrap` plus a max-per-line setting; `contentSize()`/`ensureSized()` (#051) already measure whatever the DOM produces | A 5×6 dot grid is materially less scannable than a row. Still unbounded, just in two dimensions |
+| **D** | **Auto-shrink density** | Past a threshold, shrink dot size and gap so total length stays bounded | Trivial — size is already a CSS variable driven by a setting (#017) | Fights UI Principle #1 directly: 6 px dots are not glanceable and the state colors get hard to tell apart. **Recommend rejecting** |
+| **E** | **Attention-only mode** | Show only lights in an attention state (error/blocked/done); collapse all running/idle into one summary dot | Targets the real need most directly (UI Principle #2), and is bounded by how many things actually need the user — naturally a small number | A running session vanishing from the bar is jarring ("where did it go?"), and a near-empty bar can read as "the app broke" |
+
+**Recommendation (not yet approved):** **B as the mechanism, A as an orthogonal toggle.** B is
+the only option that bounds the bar no matter how many sessions exist, and it does so while
+keeping urgency ordering so the lights that survive are exactly the ones that matter. A is
+worth having independently because it attacks the *cause* of high counts in the common case —
+several sessions in one repo — rather than the symptom. D should be rejected outright, and E
+is compelling but its "disappearing light" failure mode needs a real answer before it ships.
+
+Whatever is chosen should be **a threshold, not a mode switch**: below the threshold nothing
+changes at all, so the user's normal 4–5 sessions look exactly as they do today, and per-session
+lights stay the default (explicitly what the user asked for). The setting belongs in the
+existing panel as a new `.seg` row alongside `Sort` / `Unknown`, following the same
+`localStorage` + apply-function pattern (`index.html:40-53`, `main.js:625-650`) that every
+display pref already uses — frontend-only, no hook and no schema change.
+
+**Reasoning:** The survey result cuts both ways. Every competitor that aggregates has given up
+the property that makes this tool worth using, so aggregating *by default* would be trading
+away the differentiator to solve a problem the user does not have at 4 sessions. But the linear
+growth is real and the bar does become unusable. A threshold keeps the differentiator at normal
+counts and degrades gracefully past them, which is the only shape that satisfies both.
+
+## 059 — The hook-only signal layer: real risk, and the reconcile the core path never got
+
+**Date:** 2026-08-13
+**Status:** Proposed — analysis complete, fix not yet implemented
+
+**Context:** Competitors take visibly different bets on signal reliability.
+**gmr/claude-status** runs *three* redundant channels — Darwin push notifications, filesystem
+watching, and a 5-second polling fallback — on top of its hook plugin. **so-agentbar** and
+**marmonitor** skip hooks entirely and passively parse each agent's own session/log files from
+outside, accepting staleness in exchange for zero in-session instrumentation. AgentStatus is
+hook-only (#001, #002). The user asked how risky that actually is.
+
+**Observed failure modes — every one of these has actually happened in this project:**
+
+| # | Failure | Evidence |
+|---|---|---|
+| 1 | **The hook never executes at all.** Not a bad payload — no invocation | Cursor 3.12.10 fired `sessionStart`/`beforeSubmitPrompt`/`stop` but every hook failed with `MainThreadShellExec not initialized`, so no light ever appeared. Proven not our bug: `report.sh` ran correctly for Claude Code in the same window seconds later |
+| 2 | **Documented events that never fire.** `Notification`, `Elicitation`, `PermissionDenied`, `SubagentStart/Stop`, `Pre/PostCompact` fired zero times in a full captured run; `StopFailure` fired **0 times even under an induced tool failure** | #006, #013 — the red/error signal has been marked "interim" since #006 and has never been validated against a real turn-level failure |
+| 3 | **End-of-life events silently drop.** Archiving a Cursor agent fires no `sessionEnd`; a subagent or aborted turn fires no `stop` | #048 — lights sat green on finished agents for up to **95 minutes** |
+| 4 | **One event, then permanent silence.** A folder-less Cursor window fires `sessionStart` and nothing ever again | #042 — which is why the hollow "unknown" ring exists |
+| 5 | **Structurally unreachable sessions.** Cloud/background Cursor agents run remotely and fire no local hooks at all | Confirmed while building #038 |
+| 6 | **Two entire hosts removed over exactly this.** Codex and Antigravity were ripped out rather than papered over with inference | #040 |
+
+**Theoretical but real, and currently undetectable:**
+
+- **The hook registration silently disappears.** A Claude Code update, a hand-edit, or another
+  tool's installer overwriting the settings file would stop every future invocation.
+  `ensure_installed()` runs **once, at app launch** (release builds only) and there is no
+  periodic re-check — the app never reads the settings file at runtime. Worse, this failure is
+  **indistinguishable from "nothing is running"**: the bar renders the same "No active Claude
+  Code or Cursor sessions" placeholder (`main.js:823`) either way. That is a silent failure
+  with no light to be wrong about — arguably worse than the lying light UI Principle #4 guards
+  against.
+- **`jq` missing on the packaged-app path.** `report.sh` uses `jq` nine times with no
+  availability guard; `install.sh:11` checks for it, but **`install.rs` — the DMG path, which
+  is the *primary* distribution channel per #024 — never does**. Without `jq` every hook
+  invocation silently no-ops forever. Scope check: `jq` ships at `/usr/bin/jq` only since
+  **macOS 15 (Sequoia)** (verified present here on 26.6.1, root-owned). The README requires only
+  "macOS on Apple Silicon (M1 or later)", so a DMG user on macOS 11–14 without Homebrew gets a
+  completely inert app and no error.
+
+**A genuine strength worth recording:** because the transport is a file (#002/#007), hooks keep
+writing whether or not the display app is running — sessions that ran while the bar was closed
+are fully present the moment it relaunches. A socket/push design would lose them. This is why
+the answer below is *not* "adopt the competitor's architecture."
+
+**What is already mitigated — the project has largely built a second channel without calling
+it one:** IDE-lock pruning (#027), the 2h heartbeat backstop (#004), pid-liveness pruning for
+`cli`/`claude-desktop` (#054), the `claude agents --json` spare-ghost check, the Cursor sqlite
+reconcile (#048), the Cursor tray-row veto (#052), and the honest hollow ring (#042).
+
+**The gap, stated precisely:** *Cursor* has a real independent **state** reconcile (#048/#052).
+*CLI/Desktop* have pid liveness — an **existence** check, not a state check. **The core Claude
+Code path has no state reconcile at all.** Its only protections are the hook itself, IDE-lock
+existence pruning, and a 2-hour idle timer. The #048-class bug — a session that finishes or
+dies through a path that doesn't cleanly fire `Stop`/`SessionEnd`, leaving a stuck green light
+— was only ever found on Cursor *because someone went looking there*. It has never been checked
+for on the core path.
+
+**And the material for the fix is already being read and thrown away:**
+
+- `claude agents --json` returns a **`status`** field (`"busy"`/`"idle"` observed live), but
+  `CliFact` (`lib.rs:916-919`) stores only `kind` and `pid` — **`status` is parsed and
+  discarded**.
+- `~/.claude/sessions/<pid>.json` carries **`status` *and* `statusUpdatedAt`** (verified live:
+  `{'pid': 34282, 'status': 'busy', 'statusUpdatedAt': 1786644705862, ...}`). `session_names()`
+  (`lib.rs:216-227`) already opens this exact file every poll — for the `name` field only.
+
+`statusUpdatedAt` matters specifically: it is the freshness stamp a guarded reconcile needs, the
+direct analogue of #048's "Cursor's own write must be newer than the last hook event" guard,
+which is what stops a reconcile from greying a working agent (#052).
+
+**Decision:** Do **not** adopt a multi-channel architecture. Add **one** guarded state
+reconcile for Claude Code sessions, mirroring #048's proven shape exactly: read `status` +
+`statusUpdatedAt` from sources already being read, behind the existing TTL pattern
+(`CLI_FACTS_TTL`, `lib.rs:923`); override only a light already silent past a threshold; never
+override a fresh hook write; no-op entirely on a failed read. Separately, add the missing `jq`
+guard to `install.rs` to match `install.sh:11`.
+
+**Explicitly unverified, and must be before any code (Guideline #4):** the live machine had no
+VS Code Claude Code session running, so `status` was confirmed present for **`entrypoint:"cli"`**
+sessions and confirmed **absent (`None`) for `claude-desktop`** ones. Whether a VS Code session
+reports `status` is **unknown**. If it does not, this reconcile does not cover the core path and
+the decision needs revisiting — which is precisely the mistake #040 was written about. Observe a
+real VS Code session first, then write code against what was observed.
+
+**Reasoning:** Hook-only is not an acceptable long-term risk for the core path — the evidence
+above is six *observed* failures, not hypotheticals. But the competitor's three-always-on-channels
+answer is the wrong correction: #040 is this project's own precedent that unverified redundant
+complexity is worse than a missing feature, because it produces lying lights. The right fix is
+the narrow pattern already battle-tested here on Cursor, applied to the one host that never got
+it, using data the app is already reading. It costs no new subprocess, reuses an existing
+throttle, and targets a bug class this project has already proven exists.
+
+## 056 — Re-adding Codex and Gemini: what verification actually costs, and which one is even possible
+
+**Date:** 2026-08-13
+**Status:** Proposed — scoped, blocked on one question to the user; no code written
+
+**Context:** A survey of comparable tools (2026-08-13) found multi-agent coverage is the most
+common thing AgentStatus lacks — `claude-statistics`, `usage`, `anotifier` and `marmonitor` each
+track 3–4 agents, and `AgentsView` lists 60+. The user confirmed real pull toward covering Codex
+and Gemini alongside Cursor.
+
+**The thing to say first: AgentStatus already had both, and removed them.** Decision 040
+(2026-07-29) stripped Codex (#029/#031/#032) and Antigravity/Gemini (#033) because neither was
+ever verified against a live install. #033 shipped explicitly "Accepted, unverified"; the Codex
+path substituted a `~/.codex/state_5.sqlite` read, a `pgrep -x codex` probe, and a bespoke
+10-minute idle timeout for lifecycle events nobody had confirmed fire. So this is a **re-add,
+not a new feature**, and the reason it was removed is exactly the reason it can't simply be
+restored from git history.
+
+**A re-add must first defuse the removal.** #040 left cleanup code that runs unconditionally and
+would silently delete freshly-written hook entries on the very next launch:
+`cleanup_legacy_hosts()` (`install.rs:80-121`, called from `try_install()` at `install.rs:71`)
+strips any `report.sh` entry from `~/.codex/hooks.json` and deletes the `agentstatus` key from
+`~/.gemini/config/hooks.json`; `cleanupLegacyHosts()` (`setup.mjs:73-82`) does the same from both
+`install` and `uninstall`. Verified working on this machine — both files are currently cleaned
+(`{"hooks": {}}` and `{}`) with `.agentstatus-bak` files preserving the old registrations.
+
+**What is actually installed here (verified):**
+
+| Host | Installed? | Consequence |
+|---|---|---|
+| Codex CLI (`codex` binary) | **No** | — |
+| Codex VS Code extension (`openai.chatgpt`) | **Yes** — two versions | **Codex is verifiable today**, via the same integration #032 examined |
+| Gemini CLI (`gemini`) | **No** — and no `~/.gemini/settings.json` | Verification blocked until installed |
+| Antigravity CLI (`agy`) | **No** | Verification blocked until installed |
+| Antigravity IDE | **Yes** — both `.app` bundles present | Verifiable today |
+
+**"Gemini" has become ambiguous since #033 shipped, and this is the blocking question.** Three
+different products now exist, with different config paths, schemas, and event sets:
+
+1. **Antigravity IDE** — what #033 actually targeted: `~/.gemini/config/hooks.json`, hooks under
+   a bespoke top-level `agentstatus` key, payloads using `workspacePaths[]` and `toolCall.name`.
+   Installed here.
+2. **Gemini CLI** — Google's separate terminal tool, with its own official hooks in
+   `~/.gemini/settings.json` under a `hooks` map (a shape much closer to Claude's). Never built;
+   not installed here.
+3. **Antigravity CLI (`agy`)** — newer still, reportedly moved off `settings.json`/`hooks.json`
+   onto `.agents/hooks.json`. Never built; not installed here.
+
+Building against #1 would not cover #2, and vice versa. **The user must say which they mean**
+before any work starts — it changes the config path, the schema, the effort, and whether
+verification can begin today at all.
+
+**Whether orange and red are even reachable — the question NEXT_STEPS.md item 10 says to settle
+up front,** because a host with no permission-request and no failure event can never show an
+attention state, quietly breaking UI Principle #2 for that host:
+
+| Host | 🟠 blocked | 🔴 error |
+|---|---|---|
+| **Codex** | **Likely reachable** — `PermissionRequest` is documented for shell/network escalation | **Not reachable** — no failure/error event documented anywhere; matches #032/#040's original finding |
+| **Gemini CLI** | **Not cleanly reachable** — `Notification` fires on permission alerts but is documented as observability-only, unable to represent a pending approval. Blocked would have to be *inferred* — the exact class of guess #040 deleted | **Not reachable** — no failure event; exit-code-2 abort/retry on `BeforeModel`/`AfterModel` is control flow, not an error signal |
+| **Antigravity IDE** | **Not reachable** — #033 established no permission-request event exists; nothing suggests it changed | **Not reachable** — same, known at ship time |
+
+So **only Codex can plausibly reach even three of four states**, and none of the three can show
+red. Re-adding Gemini or Antigravity today means shipping a permanently green/gray-only light.
+That is a limitation to accept knowingly up front, not to discover mid-build.
+
+**One more reason not to trust the docs here:** the two sources found for Codex hooks *directly
+contradict each other* on the single fact that mattered most to #032 — whether a session-close
+signal exists. The apparent official location says hooks are production-ready and enabled by
+default with a real `SessionEnd` (firing on close or 30-minute idle); a second, non-OpenAI source
+says hooks are experimental, disabled by default, with no `SessionEnd` at all. That conflict is
+itself the argument for Guideline #4: build on neither claim, observe the installed version.
+
+**Decision:** Do not restore any removed code. Re-add per host through the same
+observe-then-build sequence that Claude Code and Cursor went through, reusing the verification
+tooling already in the repo — `hooks/log-events.sh` + `logger-setup.mjs` and their Cursor
+equivalents (`cursor-log-events.sh`, `cursor-logger-setup.mjs`) are the direct template: a
+throwaway, fail-silent, stdout-silent logger registered across a deliberately *broad* event list,
+appending raw payloads to a log, then uninstalled.
+
+Sequence per host: **(a)** write the host's logger + setup script and capture a real session
+through representative actions — a command needing approval, a failing command, a session closed
+and idled out; **(b)** write `report.sh` payload branches from what was observed; **(c)** installer
+writers, gating the #040 cleanup so it stops deleting the host being re-added; **(d)** app-side
+liveness pruning and click-to-focus; **(e)** live end-to-end verification.
+
+**Effort:** **Codex ≈ 2–2.5 days** and can start now. **Gemini ≈ 2.5–3.5 days**, plus install
+time, and cannot start until the user resolves which product is meant.
+
+**Reasoning:** The pull toward multi-agent coverage is real and worth acting on, but the failure
+mode here is already documented in this repo: both hosts were previously built from documentation
+rather than observation, produced lights that could not be trusted, and were deleted three weeks
+later. The cost of doing it properly is a few days per host; the cost of doing it the fast way has
+already been paid once. Codex is the one to start with — it is verifiable today and is the only
+host that can show an attention state at all.

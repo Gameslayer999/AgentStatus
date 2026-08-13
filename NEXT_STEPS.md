@@ -297,6 +297,25 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Decisions needed
 
+- **Which product is "Gemini"? (decision 056 — blocks all Gemini work.)** Three different
+  products now exist with different config paths and event sets: the **Antigravity IDE**
+  (`~/.gemini/config/hooks.json`, what #033 built, installed on this machine), the **Gemini
+  CLI** (`~/.gemini/settings.json`, never built, **not installed**), and the **Antigravity CLI
+  `agy`** (`.agents/hooks.json`, never built, not installed). Building for one does not cover
+  the others. Also needs accepting up front: **neither Gemini nor Antigravity can show orange
+  or red** — no permission-request and no failure event — so their lights would be permanently
+  green/gray only. Codex is unblocked and can start now (~2–2.5 days); it can reach orange but
+  also **not red**.
+- **Token/cost tracking: go or no-go? (decision 057.)** Three options costed: defer;
+  last-turn cost in the tooltip (~½–1 day); or cumulative cost with a settings-panel readout
+  (~2–3 sessions). The deciding facts are that it is **Claude-Code-only by construction**
+  (Cursor stores no cost data locally) and that it needs a **hardcoded price table that goes
+  stale on every model release**. Options 2 and 3 also require a status-file schema change,
+  which needs explicit approval before code.
+- **Which high-session-count fallback? (decision 058.)** Five options drafted; recommendation
+  is the **overflow chip** (top-K by urgency + one summary chip, bounding the bar at any
+  session count), with **folder grouping** as an orthogonal toggle, and auto-shrink rejected.
+  Should be a **threshold**, not a mode switch, so per-session lights stay the default.
 - **Confirmed event→state mapping** — pending Milestone 1's real-session observations
   (may adjust the doc-sourced names in Current state).
 - **Light bar visual design** — ~~orientation (horizontal/vertical)~~ **decided (decision
