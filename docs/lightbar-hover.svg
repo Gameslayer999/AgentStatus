@@ -1,11 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 220" width="620" height="220" role="img" aria-label="A running light with a blue badge showing two subagents, and its hover tooltip listing the project, task, and subagents">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 220" width="680" height="220" role="img" aria-label="A running light with a blue badge showing two subagents, and its hover tooltip listing the project, session name, application, task, and subagents">
     <defs>
       <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="#1b2733"/>
         <stop offset="100%" stop-color="#0f1720"/>
       </linearGradient>
     </defs>
-    <rect x="0" y="0" width="620" height="220" rx="18" fill="url(#bg)"/>
+    <rect x="0" y="0" width="680" height="220" rx="18" fill="url(#bg)"/>
     
     <defs><radialGradient id="h0" cx="50%" cy="50%" r="50%">
       <stop offset="0%" stop-color="#2ecc71" stop-opacity="0.630"/>
@@ -15,6 +15,6 @@
     <line x1="172" y1="78" x2="210" y2="94" stroke="rgba(255,255,255,0.09)" stroke-width="1.5"/>
     <circle cx="150" cy="78" r="30" fill="url(#h0)"/><circle cx="150" cy="78" r="15" fill="#2ecc71"/><circle cx="163" cy="65" r="9.5" fill="rgba(20,22,26,0.92)"/><circle cx="163" cy="65" r="8" fill="#4c7dd9"/><text x="163" y="65.5" fill="#f4f7fe" font-family="-apple-system, system-ui, sans-serif" font-size="11" font-weight="700" text-anchor="middle" dominant-baseline="central">2</text>
     <text x="150" y="136" fill="#9fb0c0" font-family="-apple-system, system-ui, sans-serif" font-size="13" text-anchor="middle">hover a light</text>
-    <rect x="210" y="46" width="360" height="96" rx="9" fill="rgba(20,22,26,0.95)" stroke="rgba(255,255,255,0.09)" stroke-width="1"/><text x="226" y="74" fill="#eef2f6" font-family="-apple-system, system-ui, sans-serif" font-size="14" font-weight="600">AgentStatus — running</text><text x="226" y="98" fill="#b9c6d3" font-family="-apple-system, system-ui, sans-serif" font-size="14" font-weight="400">↳ Wire lightbar screenshots into the README</text><text x="226" y="122" fill="#b9c6d3" font-family="-apple-system, system-ui, sans-serif" font-size="14" font-weight="400">running: 2× explore</text>
-    <text x="390" y="168" fill="#9fb0c0" font-family="-apple-system, system-ui, sans-serif" font-size="13" text-anchor="middle">blue badge = subagents running · click jumps to the session</text>
+    <rect x="210" y="46" width="440" height="96" rx="9" fill="rgba(20,22,26,0.95)" stroke="rgba(255,255,255,0.09)" stroke-width="1"/><text x="226" y="74" fill="#eef2f6" font-family="-apple-system, system-ui, sans-serif" font-size="14" font-weight="600">AgentStatus · agentstatus-5b (Ghostty) — running</text><text x="226" y="98" fill="#b9c6d3" font-family="-apple-system, system-ui, sans-serif" font-size="14" font-weight="400">↳ Wire lightbar screenshots into the README</text><text x="226" y="122" fill="#b9c6d3" font-family="-apple-system, system-ui, sans-serif" font-size="14" font-weight="400">running: 2× explore</text>
+    <text x="430" y="168" fill="#9fb0c0" font-family="-apple-system, system-ui, sans-serif" font-size="13" text-anchor="middle">blue badge = subagents running · click jumps to the session</text>
   </svg>

@@ -186,21 +186,21 @@ function states() {
 
 // ── 3. Hover: one light with its badge + tooltip ─────────────────────────────
 function hover() {
-  const W = 620;
+  const W = 680;
   const H = 220;
   const cx = 150;
   const cy = 78;
   const gid = "h0";
   const grad = haloGradient(gid, STATES.running.color, STATES.running.glow);
-  // Tooltip mirrors titleFor(): "label — state", "↳ task", subagent summary.
+  // Tooltip mirrors titleFor(): "label · name (app) — state", "↳ task", subagent summary.
   const tipLines = [
-    { t: "AgentStatus — running", strong: true },
+    { t: "AgentStatus · agentstatus-5b (Ghostty) — running", strong: true },
     { t: "↳ Wire lightbar screenshots into the README" },
     { t: "running: 2× explore" },
   ];
   const tipX = 210;
   const tipY = 46;
-  const tipW = 360;
+  const tipW = 440;
   const tipH = 96;
   let tip = `<rect x="${tipX}" y="${tipY}" width="${tipW}" height="${tipH}" rx="9" fill="rgba(20,22,26,0.95)" stroke="${PILL_BORDER}" stroke-width="1"/>`;
   tipLines.forEach((l, i) => {
@@ -208,7 +208,7 @@ function hover() {
   });
   // A little connector from the dot to the tooltip.
   const connector = `<line x1="${cx + 22}" y1="${cy}" x2="${tipX}" y2="${tipY + tipH / 2}" stroke="${PILL_BORDER}" stroke-width="1.5"/>`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="A running light with a blue badge showing two subagents, and its hover tooltip listing the project, task, and subagents">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="A running light with a blue badge showing two subagents, and its hover tooltip listing the project, session name, application, task, and subagents">
     ${backdrop(W, H)}
     <defs>${grad}</defs>
     ${connector}
@@ -326,7 +326,7 @@ function settings() {
   const segRow = (t, labels, active) => { const r = label(t) + seg(cx, y, ctrlW, labels, active); y += 38; return r; };
   const sliderRow = (t, frac) => { const r = label(t) + slider(cx, y, ctrlW, frac); y += 34; return r; };
   body += segRow("Orientation", ["Horizontal", "Vertical"], 0);
-  body += segRow("Sort", ["Window", "Urgency"], 0);
+  body += segRow("Sort", ["Stable", "Urgency"], 0);
   body += segRow("Unknown", ["Show", "Hide"], 0);
   body += sliderRow("Size", 0.4);
   body += sliderRow("Padding", 0.55);

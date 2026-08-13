@@ -67,10 +67,13 @@
 | 055 | 2026-08-13 | **A Ghostty light focuses the exact tab (and split)** — #054 left Ghostty at app-level focus because it publishes no tty, so a click brought Ghostty forward on whatever tab was last active. Two things changed since: Ghostty 1.3 ships an AppleScript dictionary (`window` → `tab` → `terminal` surface, each with a title, plus a `focus` command that selects the surface and fronts its window), and Claude Code 2.1.231 writes a session title into the terminal title bar, stored as an `ai-title` record in the transcript — which #053 checked for on 2.1.223 and correctly found absent. The app reads the last `ai-title` for the session and runs one `osascript` that focuses the surface whose title **contains** it (the leading glyph is the activity spinner), acting only on an **exactly one** match. No `ai-title`, no hit, several hits, Ghostty < 1.3, or a refused Automation grant all fall back to fronting the app — the old behaviour, never a wrong tab (UI Principle #4). Reading the transcript is a flagged exception to Guideline #5: only the title is extracted, nothing is stored. No hook change, no schema change | Accepted |
 | 056 | 2026-08-13 | **A light that names no session does nothing, and a background agent opens in a tab** — a pre-warmed spare's light was clicked inside #054's 20s grace, and the click ran `open -na Ghostty` (a *second instance*) on `claude attach <spare>`; `attach` on an id with no live job does not fail but lands in Claude Code's **agent view**, so the user got a new window listing every session. Underneath it, a latent defect: `zsh -lc` is non-interactive, never reads `.zshrc`, and that is where `~/.local/bin` is set — so #054's `claude agents --json` returned nothing whenever the bar was launched from Login Items rather than a shell, silently disabling **all** CLI reconciliation (fail-open). Fixes: resolve `claude` by absolute path and run it with no shell; a click on a CLI light Claude Code does not list does nothing; an unlisted light whose pid owns no terminal is dropped on sight (a pid *with* a tty, and a pre-054 file with no pid, keep the 20s grace); and a background agent opens in a **tab of the running Ghostty** via 1.3's scripting dictionary, which also removes #055's two-instances limitation at the source | Accepted |
 | 057 | 2026-08-13 | **A finished background agent's light retires after 5 minutes** — lights lingered for sessions with "no currently active tab or terminal anywhere". A `--bg` job has no terminal by construction and Claude Code keeps its process alive and listed after the work is done, so #054's pid-liveness rule never fired and #056's unlisted rule never applied; the lights sat until the two-hour backstop. New rule (g): retire a `cli` light once Claude Code reports it `kind: background` + `status: idle` (a new `status` field on `CliFact`) **and** it has been hook-silent for `CLI_BG_DONE_SECS` = 5 min — a clock rather than a category, so "just finished" stays readable while an abandoned job stops taking a slot. Never applied to a `blocked` or `error` light: those are the states the user must act on and both go quiet by nature, so a silence timer would delete exactly the wrong ones. Interactive sessions are untouched — verified live that an idle-38-minute terminal session in an open tab keeps its light while two background ghosts went within one poll | Accepted |
+| 061 | 2026-08-13 | **A click reaches a background agent where it already is** — "the ghostty light kept opening a new tab": a background session has no terminal to focus, so the click attaches, and nothing asked whether that agent was already open. Reproduced through `focus_session` itself: 2 -> 3 -> 4 surfaces, one per click. #055's matcher could not be reused — an attached agent's tab carries the same session title as every other view of it, so three surfaces matched and #055's exactly-one rule would have declined and attached again. `focus_ghostty_surface` gains `require_unique`, set **true** for an interactive light (the alternative is fronting the app, so a wrong tab is worse than no tab) and **false** for a background one (the alternative is creating another terminal, so any existing surface wins). `attach_background_agent` now focuses an existing surface, else fronts Ghostty when `pgrep` finds an attach already running for that id, else opens the tab. Also records a **false verification** that nearly shipped: the first check piped a non-compiling test to /dev/null, so the clicks never ran and the unchanged surface count read as a pass | Accepted |
 | 056 | 2026-08-13 | **Re-adding Codex and Gemini starts with observation, not with restoring the deleted code** — both were removed in #040 as unverified, so a re-add repeats the observe-then-build sequence using the existing logger tooling, and must first gate the #040 cleanup (`install.rs:80-121`, `setup.mjs:73-82`) that would otherwise delete the new entries on the next launch. Codex is verifiable today (the `openai.chatgpt` VS Code extension is installed) at ~2–2.5 days; Gemini is **blocked on which product is meant** — Antigravity IDE, Gemini CLI, or Antigravity CLI are three different config paths and event sets, and only the IDE is installed here. Only Codex can reach orange; **none of the three can reach red** | Proposed — blocked on user |
 | 057 | 2026-08-13 | **Token/cost tracking: data exists for Claude Code only, and the maintenance is the real cost** — transcripts carry per-call `message.usage`/`model`, but hook payloads carry nothing, no aggregated local source exists, and Cursor stores context-window fullness with no cost at all, so any version is Claude-only. Options: (1) defer, (2) last-turn cost in the tooltip ~½–1 day, (3) cumulative cost + settings-panel readout ~2–3 sessions. Constraints: the read goes app-side, never in the hook (reversing #040 / Guideline #3); it is a schema change needing approval; nothing numeric goes on the bar (UI Principle #1); the price table must be hardcoded and rots on every model release | Proposed — awaiting go/no-go |
 | 058 | 2026-08-13 | **A fallback view for high session counts** — the one-light-per-session bar is the project's one unmatched design property (every competitor aggregates to a single icon), but it grows at `8 + 23N` px, so 30 sessions is a 698 px bar. Five options drafted (folder grouping, overflow chip, grid wrap, auto-shrink, attention-only); recommendation is the **overflow chip** bounded by urgency sort with folder grouping as an orthogonal toggle, auto-shrink rejected outright for fighting UI Principle #1. Must be a **threshold, not a mode switch**, so per-session lights stay the default at normal counts | Proposed — awaiting choice |
 | 059 | 2026-08-13 | **Hook-only is a real risk for the core path, but the fix is one guarded reconcile, not a second architecture** — six *observed* failures (hooks not executing at all, events that never fire, dropped end-of-life events, a 95-minute stuck green light), plus two silent undetectable ones (hook registration disappearing; `jq` missing on the DMG path, which `install.sh:11` guards and `install.rs` does not). Cursor already has a state reconcile (#048/#052) and CLI/Desktop have pid liveness, but **Claude Code has no state reconcile at all** — while `claude agents --json` and `~/.claude/sessions/<pid>.json` both carry `status`/`statusUpdatedAt` that the app already reads and discards. Fix mirrors #048's guarded shape. **Unverified: whether a VS Code session reports `status`** — confirm before writing code | Proposed — needs live check |
+| 060 | 2026-08-13 | **The tooltip names the application a session runs in** — a light said which project and which session but never which app, so a user reading `AgentStatus · agentstatus-5b` could not tell a VS Code tab from a Ghostty split from Claude Desktop before clicking it. `list_sessions` now returns an `app` string and the tooltip head becomes `folder · name (app)`. For the IDE hosts it is the `ide` field spelled the way the app is named on screen; for a terminal session it is the **emulator**, walked from the owning `claude` pid up to the first app bundle (`terminal_app_of`, already written for click-to-focus) and memoized per session because the tooltip is rebuilt every 1 s poll. A detached background agent is named `background agent`, never by the `ClaudeCode` launcher the walk would find — decided the same way `focus_session` routes a click, so the tooltip and the click agree (UI Principle #4). App-side only: no hook change, no status-file change | Accepted |
+| 062 | 2026-08-13 | **A light keeps the slot it arrived in** — reported live: the lights kept swapping places. The strip was re-sorted on every 1 s poll by `cwd`, then by session id, so a new session in a folder that already had lights landed at a position decided by its random uuid and pushed every later light along, and a session that `cd`'d changed groups mid-life. With a background agent per `/stop` and pre-warmed spares appearing and vanishing (#056, #057), the bar reshuffled constantly and a light moved out from under the pointer between seeing it and clicking it. Ordering is now **arrival**: a session takes the next free slot the first time the bar sees it and holds it until it is gone, when the gap closes; the first poll after a launch is laid out in the backend's deterministic (label, id) order. The settings segment becomes **Stable | Urgency** (a stored `window` reads as stable), so folder grouping is dropped — it never separated the common case of several sessions in one repo, and the folder is in the tooltip. Frontend-only: no hook change, no status-file change, no Rust change | Accepted |
 
 ---
 
@@ -3537,3 +3540,266 @@ anything quiet. `cargo build --release` clean with no new warnings; `cargo test 
 `claude attach` run during decision 056's investigation woke it (`Waking session 0e984070` in
 the daemon log). The rule was therefore verified against `a011978b` as well, which no
 diagnostic ever touched, and against the general shape rather than that one light.
+
+---
+
+## 060 — The tooltip names the application a session runs in
+
+**Date:** 2026-08-13
+**Status:** Accepted
+
+### Context
+
+Requested: *"when you hover over a light in the lightbar, it should also tell you which
+application that session is in (ex: vscode, ghostty, etc)"*.
+
+The tooltip's first line was `folder · session name — state` (decision 053). It answers
+*which project* and *which session*, never *where*. That gap grew with the host list: since
+decision 054 a light can be Claude Code in a VS Code tab, in a terminal, or in Claude
+Desktop, or a Cursor agent — four applications rendered as the same colored dot, so the only
+way to find out which one a light means was to click it.
+
+The application is also the one part of a light's identity the bar already knows and throws
+away at render time: `ide` is on every session and drives both pruning and click routing.
+
+### Options considered
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| **A. Map `ide` in the frontend** (`cli` → "Terminal") | No backend change, no cost | `cli` covers *every* emulator, so it could not say **Ghostty** — the example in the request. It would name a category, not an application |
+| **B. Record the app in the hook** | Resolved once, at the source | Puts a process walk (`ps` per generation) on the user's turn — Guideline #3. The hook currently spawns nothing |
+| **C. Resolve it app-side from the pid the hook already records** (chosen) | Names the real emulator; the walk already exists (`terminal_app_of`, written for click-to-focus); costs nothing on the user's turn | Runs in the poll, so it needs a cache; a background agent has no application at all and needs its own answer |
+
+### Decision
+
+Option C. `list_sessions` returns a new `app` field and the tooltip head becomes
+`folder · name (app) — state`:
+
+- `vscode` → `VS Code`, `cursor` → `Cursor`, `claude-desktop` → `Claude Desktop` — the `ide`
+  field spelled the way the application is named on screen.
+- `cli` → the terminal emulator hosting it (`Ghostty`, `Terminal`, `iTerm2`), from
+  `terminal_app_of(pid)` — the ancestor walk decision 054 already uses to decide where a
+  click goes. It falls back to the literal `terminal` when the walk finds no app bundle.
+- A detached background agent → `background agent`, never an application name. It has no
+  terminal by construction and the walk would find Claude Code's own launcher
+  (`ClaudeCode.app`), which is where the process lives, not where the user would land.
+
+### Reasoning
+
+- **The tooltip and the click must agree.** Interactive-vs-background is decided here exactly
+  as `focus_session` decides it — Claude Code's reported `kind` when the query answered, the
+  presence of a tty when it did not. A tooltip that reads `Ghostty` for a session a click
+  cannot take you to a Ghostty tab would be a lying label (UI Principle #4).
+- **Naming the emulator is the whole point of the request.** "Terminal" is what the status
+  file already implies; `Ghostty` is what the user asked for and the only version that tells
+  two terminal lights apart when one is in Ghostty and one in Terminal.app.
+- **It goes app-side, not in the hook** (Guideline #3). The pid the hook records is enough
+  for the app to answer the question on its own, so nothing new runs inside a session.
+- **Memoized per session.** The tooltip is rebuilt on every 1 s poll and the walk costs one
+  `ps` per process generation, so the result is cached under the session id *and* pid — the
+  `claude` process owning a session never changes, so the only way to stale the entry would
+  be pid reuse under the same session id, which cannot happen, and a differing pid recomputes.
+- **Parenthesized after the identity, not appended to the state.** The application qualifies
+  *which session this is*, and putting it last would split `finished — click to acknowledge`.
+- No status-file schema change, no hook change, no new permission.
+
+### Verification
+
+- `cargo test -- --ignored --nocapture dump_host_apps` (new; prints the exact tooltip string
+  for every live light) against the four sessions running at the time:
+  `1616d3bb ide=cli app=Ghostty`, `ccbaa786 ide=cli app=Ghostty`,
+  `6fb0bb46 ide=claude-desktop app=Claude Desktop`,
+  `74dbc1ee ide=cli app=background agent` — a terminal session resolved to the emulator
+  hosting it, and the background agent was not called `ClaudeCode`.
+- `node app/tests/tooltip-head.mjs` — two new cases on the shipped `appTag`/`headFor`
+  (`AgentStatus · agentstatus-5b (VS Code)`, and an empty `app` rendering exactly as before,
+  which is what a status file written by an older build produces).
+- `cargo check` and `cargo test` clean (2 passed, 11 ignored); `node app/tests/unread-light.mjs`
+  passes.
+- **Not verified live:** `VS Code` and `Cursor` on a running session of each — no window of
+  either was open. Both are constants with no resolution step, unlike the `cli` path that was
+  checked.
+
+---
+
+## 061 — A click reaches a background agent where it already is, instead of opening another one
+
+**Date:** 2026-08-13
+**Status:** Accepted
+
+> **Numbering note.** This log currently has **two 056s and two 057s**: decisions written by
+> concurrent sessions in the same repository, each picking "the next number" from a file the
+> other had not written to yet. This entry takes 061 because 060 was the highest in the file.
+> The duplicates are recorded, not silently renumbered — see the end of this entry.
+
+### Context
+
+Reported live: *"i tried clicking around in the lightbar and the ghostty light kept opening a
+new tab."*
+
+Reproduced through `focus_session` itself — the real click path, not the leaf it happens to
+pick — against the background job on the bar. Ghostty surface count: **2 → 3 → 4**, one new
+terminal per click.
+
+The cause is that the attach path had no memory. A `kind: background` session has no terminal
+to focus, so decision 054 routes its click to `claude attach`, and nothing ever asked whether
+that agent was *already* open somewhere. Decision 056 made this far more visible by turning
+"a whole second Ghostty instance" into "a tab in the window you are looking at" — the same
+defect, now stacking up in front of the user.
+
+Decision 055's matcher cannot be reused as-is here. Once an agent is attached, its tab carries
+the same session title as every other view of it, so this session had **three** matching
+surfaces; 055 requires exactly one and would have declined, then attached again.
+
+### Decision
+
+`focus_ghostty_surface` takes a `require_unique` flag, and the two callers set it opposite:
+
+| Caller | `require_unique` | Why |
+|---|---|---|
+| Interactive session's light (#055) | **true** | The alternative is fronting the app. A wrong tab is worse than no tab (UI Principle #4) |
+| Background agent's light (this) | **false** | The alternative is *creating another terminal*. Any surface already showing the session beats one more, so the first hit wins — and several hits is the normal state here |
+
+`attach_background_agent` then tries, in order: focus a surface already showing this session;
+else, if `pgrep -f "claude attach <short>"` says an attach is already running — the case where
+Claude Code has not titled that young tab yet, which is exactly the tab a second click would
+duplicate — front Ghostty without adding to the pile; else open the tab.
+
+### Why this shape
+
+- **A click is "take me to that session", never "give me another copy of it"** (UI Principle
+  #3). Opening is what you do when there is nothing to go to, so it belongs last.
+- **The pgrep step covers the gap the title cannot.** Title matching needs an `ai-title`, which
+  a just-opened attach does not have yet; its argv names the session regardless.
+- **Nothing new is trusted.** Both signals — the surface title and the attach process's own
+  argv — already existed; neither is inferred.
+
+### Verification
+
+Through `focus_session`, the real click path, with a decoy focus set on an unrelated tab before
+each click so a no-op would be visible as one:
+
+| | surfaces | selected tab |
+|---|---|---|
+| before | 2 | — |
+| **before the fix**, clicks 1–3 | 3, then 4 | one new terminal per click |
+| decoy | 4 | 3 |
+| **after the fix**, click 1 | **4** | **1** (a surface showing the session) |
+| decoy | 4 | 3 |
+| **after the fix**, click 2 | **4** | **1** |
+| decoy | 4 | 3 |
+| **after the fix**, click 3 | **4** | **1** |
+
+`cargo test --release` 2 passed, 11 ignored. New `focus_click_live` test drives
+`focus_session` end to end, which is what caught this in the first place — the earlier
+`focus_terminal_live` exercised a leaf and so could not see a routing bug.
+
+**A false verification, recorded because it nearly shipped.** The first run of the check above
+reported "no new tabs" and looked like a pass. The test binary had failed to compile — the
+signature change above broke `focus_ghostty_live`, and the run was piped to `/dev/null`, so
+the clicks never happened and the unchanged count read as success. Fixed by asserting the test
+actually ran (`grep -q "1 passed"`) before believing a count. A verification that cannot fail
+is not a verification.
+
+### The numbering collision, and how it happened
+
+Three sessions were editing this repository at once. Two effects, both recorded rather than
+quietly cleaned up:
+
+1. **Duplicate numbers.** 056 is both "Re-adding Codex and Gemini" and "A light that names no
+   session does nothing"; 057 is both "Token/cost tracking" and "A finished background agent's
+   light retires". Each session appended after reading the file before the other's append.
+2. **Commits d0d07f8 and 970aa75 swept in another session's uncommitted work**, because they
+   staged with `git add -A` in a shared tree. The other session's decisions 056–059 are in
+   those commits despite being unrelated to them.
+
+Renumbering is deliberately **not** done here: the duplicated entries are referenced from code
+comments and commit messages, and rewriting them while another session is actively editing the
+same files would collide again. It needs a single session with the tree to itself. Until then,
+cite these two by title, not by number.
+
+---
+
+## 062 — A light keeps the slot it arrived in
+
+**Date:** 2026-08-13
+**Status:** Accepted
+
+### Context
+
+Reported live: *"the bug where lightbar lights keep moving around"*, confirmed as lights
+swapping places with each other rather than the strip sliding on screen.
+
+`sortSessions()` re-ordered the whole strip on every 1 s poll. In the default mode the key
+was the session's `cwd`, then its id:
+
+```js
+function byWindow(a, b) {
+  const c = (a.cwd || "").localeCompare(b.cwd || "");
+  if (c) return c;
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+```
+
+Both halves move lights that did nothing:
+
+- **The id is a random uuid.** Every session in the same folder — the normal case, several
+  agents in one repo — is ordered by a random string, so a new session lands at an arbitrary
+  position *among the existing lights* and shoves every later one along.
+- **`cwd` is not fixed for a session.** The hook writes the payload's `cwd` on every event,
+  so an agent that `cd`s changes its own sort key and jumps to another group.
+
+Decisions 056 and 057 made this constant rather than occasional: Claude Code starts a
+background agent per `/stop` and pre-warms spares, so sessions appear and disappear all day.
+The result is a light moving out from under the pointer between seeing it and clicking it,
+which attacks the two properties the bar exists for — glanceability and "the thing you look
+at is the thing you click" (UI Principles #1 and #3).
+
+### Options considered
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| **A. Arrival order, replacing the window mode** (chosen) | A light never moves once placed; a new session always appends; a removal only closes a gap | Folder grouping is gone |
+| **B. Keep folder grouping, stabilize inside it** | Folders stay together | A new session still appends to *its* group, so every light in a later group shifts — the movement is reduced, not removed |
+| **C. Add arrival as a third mode** | Nobody's current behaviour changes | Three ordering modes for a bar of dots, and the reported bug stays reachable |
+
+### Decision
+
+Option A, chosen by the user. `arrivalSeq` (a `Map` of session id → slot) hands each session
+the next free slot the first time a poll sees it and releases it when the session is gone.
+Sessions new in the same poll are numbered in the order the backend delivered them — `label`,
+then id — so the first layout after a launch is deterministic rather than accidental. Urgency
+mode is unchanged in shape and now breaks its ties by arrival instead of by folder.
+
+The settings segment becomes **Stable | Urgency**. A stored `"window"` from an earlier version
+reads as stable, so nobody has to re-pick.
+
+### Reasoning
+
+- **A light is a click target before it is an indicator.** Its position is part of its
+  identity: users learn "the second one is the frontend" and click by memory. Any ordering
+  computed from mutable data breaks that, however sensible the data.
+- **Grouping cost more than it paid.** It never separated the common case (several sessions in
+  one repo all share a `cwd`), it merged two windows on the same folder anyway, and the folder
+  is the first thing in the tooltip. Sorting by a field the hook rewrites every event was the
+  bug, not an implementation detail of it.
+- **Arrival cannot be read off the status file.** `report.sh` writes atomically (temp file +
+  `mv -f`), so the file's birth time resets on every event — checked rather than assumed. The
+  bar tracks arrival itself, which also keeps this frontend-only: no hook, schema, or Rust
+  change.
+- **Slots are released, not remembered.** A returning session is a new arrival and appends,
+  which keeps the map bounded by the number of live lights and avoids a light reappearing in
+  the middle of the strip long after it left.
+
+### Verification
+
+`node app/tests/light-order.mjs` (new; evals the shipped `sortSessions`/`arrivalSeq` out of
+`main.js`): the backend's order is the first layout; a new session with an id that sorts first
+and a folder shared with an existing light still appends; a re-ordered backend list does not
+move anything; a removal closes its gap; a returning session appends rather than reclaiming its
+old slot; the map shrinks to the live count; urgency still leads with error/blocked and breaks
+ties by arrival. `unread-light.mjs` and `tooltip-head.mjs` still pass.
+
+**Left to confirm live:** the reported behaviour itself — the reporter watching the bar through
+a few sessions starting and finishing. The bar's own display cannot be screenshotted from here
+(the terminal has no Screen Recording grant), so this is the user's check.

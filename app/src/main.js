@@ -45,43 +45,57 @@ const CURSOR_RECHECK_MS = 1500;
 // survive restarts without touching the hook-written status files). Right-clicking
 // the bar toggles the settings panel.
 const ORIENT_KEY = "agentstatus.orientation"; // "horizontal" | "vertical"
-const SORT_KEY = "agentstatus.sort"; // "window" | "urgency"
+const SORT_KEY = "agentstatus.sort"; // "stable" | "urgency" ("window" = a pre-062 stable)
 const POS_KEY = "agentstatus.pos"; // last #lights screen anchor {x,y,scale} (physical px), restored on launch
 
-// Light ordering (app-local display pref, like orientation). "window" groups
-// sessions that live in the same IDE window together; "urgency" surfaces the
-// attention states first. Hooks expose no true per-window id (decision 006), so a
-// window is proxied by its workspace folder (the session `cwd`). Sorting by the full
-// cwd path clusters a workspace root with any subfolder a session `cd`'d into, and
-// two windows on the SAME folder merge into one group — the accepted signal-layer
-// limit, not a sort bug.
+// Light ordering (app-local display pref, like orientation). "stable" is arrival
+// order — a session takes the next free slot the first time it is seen and holds it
+// for as long as it exists; "urgency" surfaces the attention states first.
+// A stored "window" is a pre-062 preference and reads as stable.
 function currentSort() {
-  return localStorage.getItem(SORT_KEY) === "urgency" ? "urgency" : "window";
+  return localStorage.getItem(SORT_KEY) === "urgency" ? "urgency" : "stable";
 }
 
 // Most-urgent first (UI Principle #2). Uses the rendered displayState so a finished
 // "done" turn clusters correctly, not the raw idle state.
 const URGENCY_RANK = { error: 0, blocked: 1, done: 2, running: 3, unknown: 4, idle: 5 };
 
-// Group sessions by window: full cwd path (so subfolders sit next to their root),
-// then id as a stable tiebreaker so same-window lights don't reshuffle each poll.
-function byWindow(a, b) {
-  const c = (a.cwd || "").localeCompare(b.cwd || "");
-  if (c) return c;
-  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+// Arrival order (decision 062). Until this, the strip was re-sorted every poll by
+// `cwd` then session id — so a new session in a folder you already had open landed at
+// a position decided by its random uuid and shoved every later light along, and a
+// session that `cd`'d changed groups. Sessions come and go constantly (a background
+// agent per /stop, pre-warmed spares), so lights the user was aiming at kept moving
+// under the pointer. A light is a click target first: it must stay where it was put.
+const arrivalSeq = new Map(); // session id -> the slot it claimed
+let nextArrival = 0;
+
+// Give every session we haven't seen before the next slot. New sessions are numbered
+// in the order the backend delivered them (label, then id — deterministic), so the
+// first poll after a launch lays the bar out the same way every time; after that each
+// arrival simply appends. Sessions that are gone release their slot, which only ever
+// closes a gap — the lights that remain keep their relative order.
+function noteArrivals(sessions) {
+  for (const s of sessions) if (!arrivalSeq.has(s.id)) arrivalSeq.set(s.id, nextArrival++);
+  const live = new Set(sessions.map((s) => s.id));
+  for (const id of arrivalSeq.keys()) if (!live.has(id)) arrivalSeq.delete(id);
+}
+
+function byArrival(a, b) {
+  return (arrivalSeq.get(a.id) ?? 0) - (arrivalSeq.get(b.id) ?? 0);
 }
 
 // Return a new, ordered array for the current sort mode. In urgency mode a light
-// only moves when its own state changes; within a state it stays window-grouped.
+// only moves when its own state changes; within a state it stays in arrival order.
 function sortSessions(sessions) {
+  noteArrivals(sessions);
   const arr = sessions.slice();
   if (currentSort() === "urgency") {
     arr.sort((a, b) => {
       const r = (URGENCY_RANK[displayState(a)] ?? 9) - (URGENCY_RANK[displayState(b)] ?? 9);
-      return r || byWindow(a, b);
+      return r || byArrival(a, b);
     });
   } else {
-    arr.sort(byWindow);
+    arr.sort(byArrival);
   }
   return arr;
 }
@@ -785,7 +799,16 @@ function headFor(s) {
   return label || name || shortId(s.id);
 }
 
-// The hover tooltip: name — state, the task, active subagents, then the activity.
+// Which application the session is running in — "VS Code", "Cursor", "Ghostty" — resolved
+// by the backend, which is the only side that can walk a terminal session to its emulator
+// (decision 060). It qualifies the identity, so it sits right after it and leaves the state
+// at the end of the line where it already was.
+function appTag(s) {
+  const app = (s.app || "").trim();
+  return app ? ` (${app})` : "";
+}
+
+// The hover tooltip: name (app) — state, the task, active subagents, then the activity.
 function titleFor(s, ds) {
   // Say plainly that we have no signal, and why — never imply a state we don't know.
   if (ds === "unknown") {
@@ -795,7 +818,7 @@ function titleFor(s, ds) {
     );
   }
   const stateText = ds === "done" ? "finished — click to acknowledge" : ds;
-  const lines = [`${headFor(s)} — ${stateText}`];
+  const lines = [`${headFor(s)}${appTag(s)} — ${stateText}`];
   if (s.task) lines.push(`↳ ${s.task}`);
   const subs = subSummary(s.subagents);
   if (subs) lines.push(subs);

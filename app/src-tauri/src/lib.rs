@@ -35,6 +35,10 @@ struct SessionStatus {
     /// Host surface ("cursor", "vscode", "cli", or "claude-desktop"), from the hook —
     /// drives click-to-focus and which liveness signal prunes the light (decision 054).
     ide: String,
+    /// The application the session is running in, as the tooltip says it: "VS Code",
+    /// "Cursor", "Claude Desktop", or the terminal emulator hosting a CLI session
+    /// ("Ghostty", "Terminal"). Tooltip only (decision 060).
+    app: String,
     /// agent_type of each currently-running subagent under this session.
     subagents: Vec<String>,
 }
@@ -582,6 +586,10 @@ fn list_sessions() -> Vec<SessionStatus> {
             } else {
                 names.get(&id).cloned().unwrap_or_default()
             };
+            // Which application the user would be taken to — resolved here rather than in
+            // the frontend because only the backend can walk a CLI session's process tree
+            // to the emulator hosting it.
+            let app = host_app(ide, &id, pid, cli_live.as_ref().and_then(|f| f.get(id.as_str())));
             out.push(SessionStatus {
                 id,
                 state,
@@ -592,6 +600,7 @@ fn list_sessions() -> Vec<SessionStatus> {
                 task: v.get("task").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                 detail: v.get("detail").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                 ide: ide.to_string(),
+                app,
                 subagents,
             });
         }
@@ -767,6 +776,64 @@ fn terminal_app_of(pid: i64) -> Option<(String, i64)> {
     None
 }
 
+/// `terminal_app_of` memoized per session. The tooltip names the emulator on every poll
+/// (1 s) while the walk costs one `ps` per process generation, so it is resolved once per
+/// session and reused. Keyed by session id **and** pid: the `claude` process owning a
+/// session never changes, so the only way a cached name could go stale is that pid being
+/// recycled under the same session id, which cannot happen; a differing pid recomputes.
+#[cfg(target_os = "macos")]
+fn terminal_app_cached(session_id: &str, pid: i64) -> Option<String> {
+    type Cache = std::sync::Mutex<std::collections::HashMap<String, (i64, Option<String>)>>;
+    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+    if pid <= 0 {
+        return None;
+    }
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut guard = cache.lock().ok()?;
+    if let Some((cached_pid, name)) = guard.get(session_id) {
+        if *cached_pid == pid {
+            return name.clone();
+        }
+    }
+    let name = terminal_app_of(pid).map(|(app, _)| app);
+    guard.insert(session_id.to_string(), (pid, name.clone()));
+    name
+}
+
+#[cfg(not(target_os = "macos"))]
+fn terminal_app_cached(_session_id: &str, _pid: i64) -> Option<String> {
+    None
+}
+
+/// The application a session is running in, for the tooltip (decision 060). For the IDE
+/// hosts the `ide` field already is the answer and this only spells it the way the app is
+/// named on screen; for a terminal session it is the emulator actually hosting it
+/// ("Ghostty", "Terminal", "iTerm2"), which nothing in the status file records — the `cli`
+/// tag covers every emulator at once.
+///
+/// A detached background agent is named as one rather than by an app: it has no terminal by
+/// construction, and the ancestor walk would find Claude Code's own launcher, so any app
+/// name there would be a lie (UI Principle #4). Interactive-vs-background is decided exactly
+/// as `focus_session` decides where a click goes, so the tooltip and the click agree.
+fn host_app(ide: &str, session_id: &str, pid: i64, fact: Option<&CliFact>) -> String {
+    match ide {
+        "vscode" => "VS Code".to_string(),
+        "cursor" => "Cursor".to_string(),
+        "claude-desktop" => "Claude Desktop".to_string(),
+        "cli" => {
+            let interactive = match fact {
+                Some(f) => f.kind != "background",
+                None => owns_terminal(pid),
+            };
+            if !interactive {
+                return "background agent".to_string();
+            }
+            terminal_app_cached(session_id, pid).unwrap_or_else(|| "terminal".to_string())
+        }
+        other => other.to_string(),
+    }
+}
+
 /// Claude Code's own title for a session — the text it puts in the terminal's title bar,
 /// and the only handle that tells two Ghostty surfaces apart. It is written into the
 /// session transcript as an `ai-title` record and rewritten as the subject of the session
@@ -820,36 +887,40 @@ fn claude_ai_title(session_id: &str) -> Option<String> {
 /// `◑ Fix Ghostty tab focus when clicking light` in Ghostty, the leading glyph being the
 /// activity spinner. Hence `contains`, not equality.
 ///
-/// Only an unambiguous match acts: exactly one surface must contain the title, and an
-/// untitled session (no `ai-title` yet) is not matched at all — its terminal reads the
-/// generic "Claude Code", which names nothing. Everything else returns false and the
-/// caller falls back to fronting the app, which is what every Ghostty click did before.
-/// A wrong tab would be worse than no tab (UI Principle #4).
+/// An untitled session (no `ai-title` yet) is never matched: its terminal reads the generic
+/// "Claude Code", which names nothing.
 ///
-/// Known limit: with two Ghostty *instances* running (a background-agent attach starts
-/// one), AppleScript reaches only one of them and a session in the other simply does not
-/// match — that click degrades to app-level focus.
+/// `require_unique` decides what *several* matching surfaces mean, and the two callers want
+/// opposite things (decision 061):
+///
+/// - **true** — the click on an interactive session's light. Exactly one surface must match,
+///   because the alternative is merely fronting the app, and a wrong tab is worse than no tab
+///   (UI Principle #4).
+/// - **false** — the click on a background agent, where the alternative is *opening another
+///   terminal*. Any surface already showing this session beats creating one more, so the first
+///   hit is taken. Several hits is the normal state there: an attached agent's tab carries the
+///   same session title as every other view of it.
 #[cfg(target_os = "macos")]
-fn focus_ghostty_surface(session_id: &str) -> bool {
+fn focus_ghostty_surface(session_id: &str, require_unique: bool) -> bool {
     let Some(title) = claude_ai_title(session_id) else {
         return false;
     };
     const SCRIPT: &str = r#"on run argv
   set target to item 1 of argv
+  set uniqueOnly to (item 2 of argv) is "1"
   tell application "Ghostty"
     set hits to {}
     repeat with t in terminals
       if (name of t) contains target then set end of hits to t
     end repeat
-    if (count of hits) is 1 then
-      focus (item 1 of hits)
-      return "ok"
-    end if
+    if (count of hits) is 0 then return "no"
+    if uniqueOnly and (count of hits) > 1 then return "no"
+    focus (item 1 of hits)
+    return "ok"
   end tell
-  return "no"
 end run"#;
     std::process::Command::new("osascript")
-        .args(["-e", SCRIPT, &title])
+        .args(["-e", SCRIPT, &title, if require_unique { "1" } else { "0" }])
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "ok")
         .unwrap_or(false)
@@ -891,7 +962,7 @@ end run"#;
             return;
         }
     }
-    if app == "Ghostty" && focus_ghostty_surface(session_id) {
+    if app == "Ghostty" && focus_ghostty_surface(session_id, true) {
         return;
     }
     // Another emulator, or a tab we could not match. Land in the right app — and, when the
@@ -981,6 +1052,26 @@ fn attach_background_agent(session_id: &str) {
         .map(|o| !o.stdout.is_empty())
         .unwrap_or(false);
     if ghostty_up {
+        // Reach the agent where it is already open before opening anywhere new (decision 061).
+        // Without this the light had no memory: every click ran `attach` again, so clicking a
+        // background agent three times left three terminals all attached to it. A click is
+        // "take me to that session", never "give me another copy of it" (UI Principle #3).
+        if focus_ghostty_surface(session_id, false) {
+            return;
+        }
+        // No surface names it — but an attach can be running in one Claude Code has not
+        // titled yet, and that is exactly the young tab a second click would duplicate. Its
+        // argv names the session, so ask for it rather than adding to the pile; landing on
+        // Ghostty with the tab already there beats a second one.
+        let already = std::process::Command::new("pgrep")
+            .args(["-f", &format!("claude attach {short}")])
+            .output()
+            .map(|o| !o.stdout.is_empty())
+            .unwrap_or(false);
+        if already {
+            let _ = std::process::Command::new("open").args(["-a", "Ghostty"]).spawn();
+            return;
+        }
         // The absolute path, not a login shell: the shell a terminal opens for a scripted
         // command carries launchd's bare PATH and cannot find `claude` (see `claude_bin`).
         // Ghostty parses this string shell-style, so the path is quoted.
@@ -1981,6 +2072,27 @@ mod tests {
         println!("(done)");
     }
 
+    /// Click a light, exactly as the bar does — `focus_session` itself, with the routing and
+    /// the guards, not the leaf it happens to pick:
+    ///
+    ///   AGENTSTATUS_TEST_SESSION=<id> cargo test -- --ignored --nocapture focus_click_live
+    ///
+    /// Run it twice against a background session: the second click must reach the terminal the
+    /// first one opened, not open a second (decision 061).
+    #[test]
+    #[ignore]
+    fn focus_click_live() {
+        let sid = std::env::var("AGENTSTATUS_TEST_SESSION").expect("set AGENTSTATUS_TEST_SESSION");
+        let path = super::sessions_dir().join(format!("{sid}.json"));
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("no status file")).unwrap();
+        let cwd = v.get("cwd").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let ide = v.get("ide").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        println!("clicking {} (ide={ide})", &sid[..8.min(sid.len())]);
+        super::focus_session(cwd, ide, sid);
+        println!("(done)");
+    }
+
     /// Print the resolved `claude` binary and what it answers — the query every CLI light
     /// and every CLI click is reconciled against (decisions 054, 056):
     ///
@@ -2020,7 +2132,7 @@ mod tests {
     fn focus_ghostty_live() {
         let sid = std::env::var("AGENTSTATUS_TEST_SESSION").expect("set AGENTSTATUS_TEST_SESSION");
         println!("title   = {:?}", super::claude_ai_title(&sid));
-        println!("focused = {}", super::focus_ghostty_surface(&sid));
+        println!("focused = {}", super::focus_ghostty_surface(&sid, true));
     }
 
     /// Print every row title in Cursor's tray menu without pressing anything — the ground
@@ -2052,6 +2164,18 @@ mod tests {
     fn dump_session_names() {
         for (id, name) in super::claude_session_names() {
             println!("{id} -> {name}");
+        }
+    }
+
+    /// Print the application every current light is attributed to — the exact string the
+    /// tooltip shows, for the sessions actually running right now (decision 060):
+    ///
+    ///   cargo test -- --ignored --nocapture dump_host_apps
+    #[test]
+    #[ignore]
+    fn dump_host_apps() {
+        for s in super::list_sessions() {
+            println!("{} ide={:<15} app={}", &s.id[..8.min(s.id.len())], s.ide, s.app);
         }
     }
 

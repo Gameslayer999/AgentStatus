@@ -42,7 +42,7 @@ own hooks at the first start.
 > AgentStatus is **not signed and not notarized**. Thus macOS Gatekeeper stops it at the
 > first start. Step 3 removes the download quarantine, and the application starts.
 
-1. Download **`AgentStatus_0.6.4_aarch64.dmg`** from the
+1. Download **`AgentStatus_0.7.0_aarch64.dmg`** from the
    [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest).
 2. Open the DMG. Drag **AgentStatus** into **Applications**.
 3. Remove the download quarantine and start the application:
@@ -104,7 +104,7 @@ a Cursor agent.
 
 ![The six light states: green for running, orange for blocked with a pulse, white for done, dim gray for idle, red for error with a pulse, and a hollow gray ring for unknown. Each state has a label.](docs/lightbar-states.svg)
 
-![A green light with a blue subagent badge that shows 2, and its tooltip. The tooltip shows the project name, the state, the task, and the subagents that run.](docs/lightbar-hover.svg)
+![A green light with a blue subagent badge that shows 2, and its tooltip. The tooltip shows the project name, the session name, the application, the state, the task, and the subagents that run.](docs/lightbar-hover.svg)
 
 - **A white light is unread.** That session completed a turn, and you did not look at it.
   A click on the light moves you to the session and makes the light gray. The next
@@ -122,10 +122,13 @@ a Cursor agent.
   more minutes and then goes — long enough to see that it finished, short enough that
   yesterday's agents do not fill the bar. A light waiting on you (orange or red) is never
   removed on a timer.
-- **Put the pointer on a light** to see the project, the session name, the task, and the
-  current operation. The session name is the name the host gives the session — for example
-  `agentstatus-5b` in Claude Code, or the name of the agent conversation in Cursor. This
-  name tells two sessions in the same project folder apart.
+- **Put the pointer on a light** to see the project, the session name, the application the
+  session runs in, the task, and the current operation. The session name is the name the
+  host gives the session — for example `agentstatus-5b` in Claude Code, or the name of the
+  agent conversation in Cursor. This name tells two sessions in the same project folder
+  apart. The application is named as you know it — `VS Code`, `Cursor`, `Claude Desktop`,
+  or, for a terminal session, the terminal itself (`Ghostty`, `Terminal`, `iTerm2`). A
+  detached background agent runs in no application and says `background agent`.
 - **A blue badge** on a light shows the number of subagents in that session. The tooltip
   gives their types.
 - **Click a light** to go to that session. In VS Code, the window comes to the front and
@@ -133,7 +136,9 @@ a Cursor agent.
   For a **terminal** session, Terminal.app and Ghostty come to the front with that
   session's tab selected — in Ghostty, its split too; another terminal application comes to
   the front without tab selection. For a session in **Claude Desktop**, Claude comes to the
-  front.
+  front. A **background agent** has no terminal of its own, so the first click opens it in a
+  Ghostty tab; every click after that goes to the tab that is already open, never to a new
+  one.
 - **Right-click the bar** to open the settings.
 - **Drag the bar** to move it. Hold the bar by the padding, not by a light. The
   application keeps the position.
@@ -151,8 +156,10 @@ a Cursor agent.
 
 ![The same light bar as a horizontal row on the left and as a vertical column on the right.](docs/lightbar-orientation.svg)
 
-- **Sort** — put the lights in groups by window, or move the attention states (blocked and
-  error) to the front.
+- **Sort** — **Stable** (default) keeps each light in the slot it got when its session
+  appeared, so a light never moves while you aim at it and a new session goes to the end of
+  the bar. **Urgency** moves the attention states (error, then blocked, then done) to the
+  front, so a light moves when its own state changes.
 - **Unknown** — **Show** (default) or **Hide** the hollow rings.
 - **Size, padding, and opacity** — change the size of the lights, the space in the bar,
   and the opacity of the bar. The lights stay fully opaque.
@@ -242,7 +249,7 @@ GitHub Actions builds and publishes the releases. Set the new version in
 to `main`. Then push a tag with the same version:
 
 ```bash
-git tag v0.6.4 && git push origin v0.6.4
+git tag v0.7.0 && git push origin v0.7.0
 ```
 
 The workflow builds the arm64 DMG on a macOS runner and publishes it with generated

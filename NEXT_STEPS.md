@@ -349,6 +349,61 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-08-13** — **A light keeps the slot it arrived in (decision 062).** Reported live: the
+  lights kept swapping places. `sortSessions()` re-ordered the whole strip every 1 s poll by
+  `cwd` then session id — a random uuid, so a new session in a folder that already had lights
+  landed in an arbitrary slot *between* them and pushed the rest along, and a session that
+  `cd`'d changed groups mid-life. #056/#057 made it constant rather than occasional (a
+  background agent per `/stop`, plus pre-warmed spares), so a light moved out from under the
+  pointer between seeing it and clicking it. Ordering is now **arrival**: a session takes the
+  next free slot the first time the bar sees it and holds it until it is gone, when the gap
+  closes; the first poll after a launch uses the backend's deterministic (label, id) order.
+  The settings segment is **Stable | Urgency** — folder grouping dropped (it never separated
+  several sessions in one repo, and the folder is in the tooltip), and a stored `window`
+  preference reads as stable. Arrival could not be taken from the status file: `report.sh`
+  writes atomically (temp + `mv -f`), so the file's birth time resets on every event — checked,
+  not assumed. Frontend-only: no hook, schema, or Rust change. New `node app/tests/light-order.mjs`
+  covers 7 cases on the shipped functions. **Left to confirm live:** the reported behaviour, by
+  watching the bar through a few sessions (no Screen Recording grant here to check it directly).
+
+- **2026-08-13** — **A click on a background agent reaches it where it already is (decision
+  061).** Reported live: "the ghostty light kept opening a new tab." A `kind: background`
+  session has no terminal to focus, so decision 054 routes its click to `claude attach`, and
+  nothing ever asked whether that agent was already open somewhere — decision 056 then made it
+  far more visible by turning "a second Ghostty instance" into "a tab in the window you are
+  looking at". Reproduced through `focus_session` itself: **2 → 3 → 4** surfaces, one new
+  terminal per click. Decision 055's matcher could not be reused as-is, because an attached
+  agent's tab carries the same session title as every other view of it — three surfaces matched
+  and 055's exactly-one rule would have declined and attached again. So
+  `focus_ghostty_surface` gains a `require_unique` flag: **true** for an interactive light
+  (the alternative is fronting the app, so a wrong tab is worse than no tab) and **false** for a
+  background one (the alternative is creating another terminal, so any surface already showing
+  the session wins). `attach_background_agent` now tries focus-existing → front Ghostty if
+  `pgrep` finds an attach already running for that id → open a tab, in that order. Verified with
+  a decoy focus set before each click so a no-op would show: three clicks, surfaces held at 4,
+  each landing on a surface showing the session. Also recorded in 061: a **false verification**
+  that nearly shipped — the first check piped a non-compiling test binary to `/dev/null`, so the
+  clicks never ran and the unchanged count read as a pass; the check now asserts the test
+  actually ran before believing a count.
+
+- **2026-08-13** — **The tooltip names the application a session runs in (decision 060).**
+  Requested: a light should say which app its session is in ("ex: vscode, ghostty"). The head
+  line was `folder · session name — state` (#053) — which project, which session, never where,
+  though a light has meant four different applications since #054. `list_sessions` now returns
+  an `app` field and the head reads `AgentStatus · agentstatus-5b (Ghostty) — running`. The IDE
+  hosts are the `ide` field spelled as the app is named on screen; a `cli` session is resolved
+  to its **emulator** by walking the owning `claude` pid up to the first app bundle
+  (`terminal_app_of`, already written for click-to-focus), memoized per session because the
+  tooltip is rebuilt every 1 s poll. A detached background agent reads `background agent`, never
+  the `ClaudeCode` launcher the walk would find — interactive-vs-background is decided exactly
+  as `focus_session` routes a click, so the tooltip and the click agree (UI Principle #4).
+  App-side only: no hook change, no status-file schema change, no new permission. Verified with
+  a new `cargo test -- --ignored --nocapture dump_host_apps` against the four live sessions
+  (two Ghostty, one Claude Desktop, one background agent, all correct) plus two new cases in
+  `node app/tests/tooltip-head.mjs`. **Left to verify live:** the `VS Code` and `Cursor` strings
+  on a real session of each (neither was open), and the tooltip on the packaged app after a
+  rebuild via `./install.sh`.
+
 - **2026-08-13** — **A finished background agent's light now retires (decision 057).** Reported
   live: lights lingering for sessions with "no currently active tab or terminal anywhere". Put
   every light on the bar next to its evidence and the stale ones were exactly the **background**

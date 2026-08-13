@@ -1,4 +1,4 @@
-// Check the tooltip's identifying line — decision 053.
+// Check the tooltip's identifying line — decisions 053, 060.
 //
 //   node app/tests/tooltip-head.mjs
 //
@@ -15,7 +15,8 @@ const grab = (re) => {
 const code = [
   grab(/function shortId\(id\) \{[\s\S]*?\n\}/),
   grab(/function headFor\(s\) \{[\s\S]*?\n\}/),
-  "globalThis.headFor = headFor;",
+  grab(/function appTag\(s\) \{[\s\S]*?\n\}/),
+  "globalThis.headFor = headFor; globalThis.appTag = appTag;",
 ].join("\n");
 new Function(code)();
 
@@ -39,5 +40,17 @@ assert.equal(headFor({ id, label: "", name: "Fix the parser" }), "Fix the parser
 
 // 5. Neither → the short id, as before.
 assert.equal(headFor({ id, label: "", name: "" }), "38d52eeb");
+
+// 6. The host application follows the identity, parenthesized (decision 060).
+assert.equal(appTag({ app: "Ghostty" }), " (Ghostty)");
+assert.equal(
+  headFor({ id, label: "AgentStatus", name: "agentstatus-5b" }) +
+    appTag({ app: "VS Code" }),
+  "AgentStatus · agentstatus-5b (VS Code)"
+);
+
+// 7. No app reported (a status file older than this change) → the line reads as before.
+assert.equal(appTag({ app: "" }), "");
+assert.equal(appTag({}), "");
 
 console.log("all checks passed");
