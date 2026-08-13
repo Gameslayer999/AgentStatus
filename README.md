@@ -259,10 +259,15 @@ notes. The workflow stops if the tag does not agree with the version in
   session Claude has not titled yet, two sessions whose titles do not tell them apart, and
   any other terminal application fall back to bringing the application to the front so you
   pick the tab — as does a refused Automation prompt (see **Automation permission** above).
-- **A background agent opens in a new terminal.** `claude --bg` runs detached from any
-  terminal, so there is no tab to show. A click opens a new terminal window running
-  `claude attach` for that agent instead. Ghostty is used when it runs, otherwise
-  Terminal.app.
+- **A background agent opens in a new terminal tab.** `claude --bg` runs detached from any
+  terminal, so there is no tab to show. A click opens one running `claude attach` for that
+  agent instead — a tab in the Ghostty you already have open, or a Terminal.app window when
+  Ghostty is not running. Ghostty before 1.3 gets a second Ghostty window, since only 1.3
+  and later can be asked for a tab.
+- **A light Claude Code does not recognize does nothing when clicked.** Claude Code
+  pre-warms spare processes that briefly look like sessions; the bar drops such a light as
+  soon as it can tell, and a click on one in the meantime is ignored rather than opening a
+  terminal for a session that does not exist.
 - **Claude Desktop chat threads have no light.** Claude Desktop provides no hook and keeps
   no conversation state on disk, so the bar has nothing to read. Claude Code *inside*
   Claude Desktop is fully supported; ordinary chat conversations are not.

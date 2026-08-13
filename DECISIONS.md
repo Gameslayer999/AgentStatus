@@ -65,6 +65,7 @@
 | 054 | 2026-08-13 | **Claude Code in the terminal (`cli`) and in Claude Desktop (`claude-desktop`) become first-class hosts** — both already ran the hook (all three surfaces read the same `~/.claude/settings.json`), so the signal layer needed nothing; they were invisible because everything non-Cursor was tagged `vscode` and therefore lock-pruned. `report.sh` now tags the host from `$CLAUDE_CODE_ENTRYPOINT` and records the owning `claude` pid; the app prunes those hosts by pid liveness instead of IDE locks, and clicks focus the terminal tab (Terminal.app, by `tty`) or Claude. Claude Desktop's **normal chat threads are out of scope** — no hook mechanism exists and no local state is observable | Accepted |
 | 053 | 2026-08-12 | **Tooltip identifies a light by the host's own session name**, not the project folder alone — the bar's first line was the folder basename, so two sessions in one folder had byte-identical tooltips. Claude Code names every session in `~/.claude/sessions/<pid>.json` (`sessionId`, `name`, `nameSource`); Cursor names every composer in `composerData.name`, already queried by #048. The app joins both by session id and the tooltip head becomes `folder · name` ("AgentStatus · agentstatus-5b"), dropping the name when it is absent or repeats the folder. App-side read only — no hook change, no status-file change, and no transcript is read (Guideline #5). Rejected: an LLM-style session title (no `summary`/`title` entry exists in any transcript on the installed 2.1.200 — nothing to read) and recording the first prompt as a title (a schema change for something the `task` line already covers) | Accepted |
 | 055 | 2026-08-13 | **A Ghostty light focuses the exact tab (and split)** — #054 left Ghostty at app-level focus because it publishes no tty, so a click brought Ghostty forward on whatever tab was last active. Two things changed since: Ghostty 1.3 ships an AppleScript dictionary (`window` → `tab` → `terminal` surface, each with a title, plus a `focus` command that selects the surface and fronts its window), and Claude Code 2.1.231 writes a session title into the terminal title bar, stored as an `ai-title` record in the transcript — which #053 checked for on 2.1.223 and correctly found absent. The app reads the last `ai-title` for the session and runs one `osascript` that focuses the surface whose title **contains** it (the leading glyph is the activity spinner), acting only on an **exactly one** match. No `ai-title`, no hit, several hits, Ghostty < 1.3, or a refused Automation grant all fall back to fronting the app — the old behaviour, never a wrong tab (UI Principle #4). Reading the transcript is a flagged exception to Guideline #5: only the title is extracted, nothing is stored. No hook change, no schema change | Accepted |
+| 056 | 2026-08-13 | **A light that names no session does nothing, and a background agent opens in a tab** — a pre-warmed spare's light was clicked inside #054's 20s grace, and the click ran `open -na Ghostty` (a *second instance*) on `claude attach <spare>`; `attach` on an id with no live job does not fail but lands in Claude Code's **agent view**, so the user got a new window listing every session. Underneath it, a latent defect: `zsh -lc` is non-interactive, never reads `.zshrc`, and that is where `~/.local/bin` is set — so #054's `claude agents --json` returned nothing whenever the bar was launched from Login Items rather than a shell, silently disabling **all** CLI reconciliation (fail-open). Fixes: resolve `claude` by absolute path and run it with no shell; a click on a CLI light Claude Code does not list does nothing; an unlisted light whose pid owns no terminal is dropped on sight (a pid *with* a tty, and a pre-054 file with no pid, keep the 20s grace); and a background agent opens in a **tab of the running Ghostty** via 1.3's scripting dictionary, which also removes #055's two-instances limitation at the source | Accepted |
 | 056 | 2026-08-13 | **Re-adding Codex and Gemini starts with observation, not with restoring the deleted code** — both were removed in #040 as unverified, so a re-add repeats the observe-then-build sequence using the existing logger tooling, and must first gate the #040 cleanup (`install.rs:80-121`, `setup.mjs:73-82`) that would otherwise delete the new entries on the next launch. Codex is verifiable today (the `openai.chatgpt` VS Code extension is installed) at ~2–2.5 days; Gemini is **blocked on which product is meant** — Antigravity IDE, Gemini CLI, or Antigravity CLI are three different config paths and event sets, and only the IDE is installed here. Only Codex can reach orange; **none of the three can reach red** | Proposed — blocked on user |
 | 057 | 2026-08-13 | **Token/cost tracking: data exists for Claude Code only, and the maintenance is the real cost** — transcripts carry per-call `message.usage`/`model`, but hook payloads carry nothing, no aggregated local source exists, and Cursor stores context-window fullness with no cost at all, so any version is Claude-only. Options: (1) defer, (2) last-turn cost in the tooltip ~½–1 day, (3) cumulative cost + settings-panel readout ~2–3 sessions. Constraints: the read goes app-side, never in the hook (reversing #040 / Guideline #3); it is a schema change needing approval; nothing numeric goes on the bar (UI Principle #1); the price table must be hardcoded and rots on every model release | Proposed — awaiting go/no-go |
 | 058 | 2026-08-13 | **A fallback view for high session counts** — the one-light-per-session bar is the project's one unmatched design property (every competitor aggregates to a single icon), but it grows at `8 + 23N` px, so 30 sessions is a 698 px bar. Five options drafted (folder grouping, overflow chip, grid wrap, auto-shrink, attention-only); recommendation is the **overflow chip** bounded by urgency sort with folder grouping as an orthogonal toggle, auto-shrink rejected outright for fighting UI Principle #1. Must be a **threshold, not a mode switch**, so per-session lights stay the default at normal counts | Proposed — awaiting choice |
@@ -3335,3 +3336,125 @@ rather than observation, produced lights that could not be trusted, and were del
 later. The cost of doing it properly is a few days per host; the cost of doing it the fast way has
 already been paid once. Codex is the one to start with — it is verifiable today and is the only
 host that can show an attention state at all.
+
+---
+
+## 056 — A light that names no session does nothing, and a background agent opens in a tab of the Ghostty you already have
+
+**Date:** 2026-08-13
+**Status:** Accepted
+
+### Context
+
+Reported from live use: *"a new light appeared on my bar. it opens a new ghostty window with
+copies of my claude sessions."*
+
+Traced to a **pre-warmed spare**. `1550acaa` had a status file whose recorded pid `4592` was a
+`claude bg-spare` process, and it was absent from `claude agents --json`. Decision 054 already
+knew spares fire `SessionStart` and get a light, and prunes such a light after
+`CLI_UNLISTED_SECS` (20 s). This one was clicked inside that window.
+
+The click then did the worst available thing. In `focus_session`, an unlisted CLI light falls
+through to `attach_background_agent`, which ran `open -na Ghostty` — `-na` starts a **second
+instance of the application** — running `claude attach 1550acaa`. There is no session behind a
+spare, and `attach` on an id with no live job does not fail: it lands in Claude Code's **agent
+view**, a list of every session. Hence a new window full of copies of the user's sessions.
+
+The daemon log dates the whole sequence, including the agent view claiming a spare of its own:
+
+```
+18:28:36  bg claimed-spare 1550acaa (spare)    ← the phantom light appears
+18:28:50  bg claimed-spare a011978b (fleet)    ← "fleet" = the agent view, 14 s later
+18:30:24  bg settled 1550acaa (killed)
+```
+
+Two things were confirmed *not* to be defects: the other new lights (`0e984070`, `fe137997`)
+are real background sessions — Claude Code spawns one per `/stop`, which the daemon log records
+as `bg spawned … (slash)` — and `claude attach` on a settled agent legitimately wakes it
+(observed: `Waking session 0e984070`, followed by a fresh spare).
+
+### The latent defect found underneath it
+
+While verifying the tab work below, a scripted Ghostty tab reported `command not found: claude`.
+The cause is not Ghostty's: **`zsh -lc` is non-interactive**, so it reads `.zshenv` /
+`.zprofile` / `.zlogin` and never `.zshrc` — and `.zshrc` is where Claude Code's installer puts
+`~/.local/bin` on this machine. Decision 054 assumed a login shell was enough to reach `claude`
+from a GUI app, and it is not:
+
+| Environment | `zsh -lc "claude …"` | absolute path |
+|---|---|---|
+| Launched from a shell (`./install.sh` relaunches this way) | works — inherits the developer's PATH | works |
+| Launched from Login Items / Finder (`PATH=/usr/bin:/bin:/usr/sbin:/sbin`) | **command not found** | works |
+
+So `cli_facts_query` — the query decisions 054 and 056 both rest on — returned `None` for every
+user who launches the bar the way the README tells them to, and being fail-open it did so
+silently: no CLI light was ever reconciled, and no spare was ever pruned. It only ever worked
+in development because a shell-launched app inherits the developer's PATH. This is why the
+symptom needed a fix on the *click* as well as on the light: the light-side rule was inert.
+
+### Decision
+
+Four changes, all app-side. No hook change, no status-file schema change.
+
+1. **`claude_bin()` resolves the binary once**, by absolute path: whatever the inherited PATH
+   resolves (correct when the app *was* started from a shell, and honors a non-standard
+   install), then `~/.local/bin/claude`, `/opt/homebrew/bin/claude`, `/usr/local/bin/claude`,
+   then the bare name as a last resort. `cli_facts_query` runs it directly with **no shell at
+   all** — verified to work on a bare `PATH=/usr/bin:/bin` — and every `claude attach` path
+   passes the absolute path too.
+2. **A click on a CLI light Claude Code does not list does nothing.** If the query *answered*
+   and the id is absent, there is no session to reach, so `focus_session` returns rather than
+   attaching. When the query itself fails, the old behaviour stands — fail-open, the #048
+   contract.
+3. **An unlisted light whose pid owns no terminal is dropped on sight**, instead of waiting out
+   the 20 s grace. A spare never has a controlling terminal, so there is nothing to wait for,
+   and the grace was long enough for the phantom to be clicked. A pid *with* a tty is a real
+   session however Claude Code lists it, so that case keeps the full 20 s unchanged — as does a
+   pre-054 status file with no `pid` at all, which says nothing about a terminal either way.
+4. **A background agent opens in a tab of the running Ghostty**, via 1.3's scripting dictionary
+   (`new tab in front window with configuration {command:…}`, or `new window` when Ghostty has
+   none open). Decision 054 had to use `open -na Ghostty` because every scripted way of
+   starting a surface in 1.2.x reported success and started nothing. That second instance is
+   also what put sessions beyond the reach of decision 055's tab focus, so this removes 055's
+   "two Ghostty instances" limitation at the source. Ghostty older than 1.3 falls back to 054's
+   second instance, which still reaches the agent.
+
+### Why this shape
+
+- **The click gets the strict rule, the light gets the lenient one.** A light that turns out to
+  be a spare costs a second of confusion; a click that opens the wrong thing costs a window and
+  a lost train of thought. So the click acts only on positive evidence, while the light keeps
+  its grace period wherever a terminal says a real session is behind it.
+- **No new signal.** Every input already existed — Claude Code's session list, the recorded
+  pid, the tty. What changed is that they are now *reachable*, and that "Claude Code says this
+  is not a session" is treated as an answer rather than as a reason to guess.
+- **Fail-open is preserved throughout.** A failed query still reconciles nothing and suppresses
+  no click.
+
+### Verification
+
+- **`claude_bin` under the real launch method.** `env -i HOME=… PATH=/usr/bin:/bin` →
+  `claude agents --json` through a login shell returns `command not found`, while the resolved
+  absolute path returns the full session list. The new `dump_cli_facts` test prints both and was
+  run under exactly that stripped environment: `claude bin = ~/.local/bin/claude`,
+  `6 session(s)`.
+- **End-to-end, on the packaged app, launched the way users launch it.** The bar was killed and
+  restarted with `env -i HOME=… PATH=/usr/bin:/bin open -a AgentStatus`; `ps -E` confirmed the
+  process really was running on `PATH=/usr/bin:/bin`. A synthetic unlisted CLI light with
+  `pid: 1` (alive, no controlling terminal — a spare's signature) was **pruned within 1 s**.
+  That single observation exercises the whole chain: binary resolved, query answered, rule
+  fired. Before this change the same probe would have survived, because the query could not run.
+- **Negative control, same app:** an unlisted light whose pid *does* own a tty survived 8 s, so
+  the rule discriminates instead of clearing every CLI light.
+- **`cli_liveness_pruning` extended** with a `spare` fixture, and it immediately earned its
+  keep: the first cut of rule 3 pruned a pre-054 file with no `pid`, which 054 requires to fall
+  back to the idle timeout. Fixed by requiring `pid > 0`. The test now models a real session
+  with a pid discovered from `ps` rather than the test process's own, which has no tty when the
+  suite runs under a background agent.
+- **Ghostty tabs, live on 1.3.1.** `new tab in front window with configuration {command:…}`
+  creates the tab, selects it, runs the command, and `activate` fronts Ghostty — checked with a
+  marker command visible in `ps`. Then through the real `attach_background_agent`: window count
+  stayed **1** and `pgrep -x ghostty` stayed **1**, where the old path would have started a
+  second instance.
+- `cargo build --release` clean, no new warnings; `cargo test --release` 2 passed, 10 ignored;
+  both node test suites pass.

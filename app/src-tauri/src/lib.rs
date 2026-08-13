@@ -462,11 +462,20 @@ fn list_sessions() -> Vec<SessionStatus> {
             //       either way). Only applied once the light has been silent a little while,
             //       so a genuinely new session is never raced before Claude registers it, and
             //       only when the query actually answered.
+            //       Dropped **on sight** when the recorded pid also owns no terminal
+            //       (decision 056): a spare never has one, so there is nothing to wait for,
+            //       and the 20s grace was long enough for the phantom to be clicked — which
+            //       is how one came to open Claude Code's agent view in a terminal window of
+            //       its own. A pid *with* a tty is a real session however Claude Code lists
+            //       it, so that case keeps the full grace period unchanged.
             let spare_light = ide == "cli"
-                && now - updated_at >= CLI_UNLISTED_SECS
                 && cli_live
                     .as_ref()
-                    .is_some_and(|facts| !facts.contains_key(id.as_str()));
+                    .is_some_and(|facts| !facts.contains_key(id.as_str()))
+                //       `pid > 0` matters: a status file written before 054 records no pid,
+                //       so nothing is known about a terminal and it must keep the timeout
+                //       (the same upgrade path (e) protects).
+                && (now - updated_at >= CLI_UNLISTED_SECS || (pid > 0 && !owns_terminal(pid)));
             if window_gone || cwd_gone || cursor_gone || host_process_gone || spare_light
                 || now - updated_at > MAX_IDLE_SECS
             {
@@ -689,6 +698,19 @@ fn tty_of(pid: i64) -> Option<String> {
     Some(format!("/dev/{t}"))
 }
 
+/// Whether `pid` has a controlling terminal — the one thing a pre-warmed spare never has
+/// (decision 056). Off macOS there is no `tty_of`, so it answers `true` and the caller keeps
+/// its timeout-only behaviour rather than pruning on an answer this platform cannot give.
+#[cfg(target_os = "macos")]
+fn owns_terminal(pid: i64) -> bool {
+    pid > 0 && tty_of(pid).is_some()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn owns_terminal(_pid: i64) -> bool {
+    true
+}
+
 /// Walk up from `pid` to the first ancestor that is a macOS app bundle and return its name
 /// **and pid** — the terminal emulator hosting this CLI session, and which *instance* of it.
 /// Verified on a live Terminal.app session: `-zsh` → `login` →
@@ -869,6 +891,48 @@ end run"#;
     }
 }
 
+/// Absolute path to the `claude` binary (decision 056).
+///
+/// Nothing may assume `claude` is on a PATH. The bar is a GUI app: launched from Login Items
+/// — the way the README tells users to run it — it inherits launchd's
+/// `/usr/bin:/bin:/usr/sbin:/sbin` and nothing else, and a terminal Ghostty opens for a
+/// scripted command gets the same. Going through a login shell does *not* rescue it, which is
+/// what decision 054 assumed: `zsh -lc` is **non-interactive**, so it reads `.zshenv` /
+/// `.zprofile` / `.zlogin` but never `.zshrc` — and `.zshrc` is where the installer's
+/// `~/.local/bin` lands. Verified both ways: `env -i PATH=/usr/bin:/bin zsh -lc 'claude …'`
+/// gives "command not found", while the same bare environment runs the absolute path fine.
+/// The reason this was never seen is that a shell-launched app (`./install.sh` relaunches it
+/// that way) inherits the developer's full PATH and works — the failure only shows up on the
+/// launch method every real user has.
+///
+/// Order: whatever the inherited PATH resolves (correct when the app *was* started from a
+/// shell, and honors a non-standard install), then the locations Claude Code installs to.
+/// Falls back to the bare name, which is no worse than before.
+fn claude_bin() -> String {
+    static CACHE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            if let Ok(out) = std::process::Command::new("/usr/bin/which").arg("claude").output() {
+                let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !p.is_empty() && std::path::Path::new(&p).is_file() {
+                    return p;
+                }
+            }
+            let home = std::env::var("HOME").unwrap_or_default();
+            for c in [
+                format!("{home}/.local/bin/claude"),
+                "/opt/homebrew/bin/claude".to_string(),
+                "/usr/local/bin/claude".to_string(),
+            ] {
+                if std::path::Path::new(&c).is_file() {
+                    return c;
+                }
+            }
+            "claude".to_string()
+        })
+        .clone()
+}
+
 /// Open a **detached background agent** (`claude --bg`) in a real terminal — the only way
 /// to reach one, since it has no terminal of its own to focus. `claude attach` is Claude
 /// Code"s own verb for this, and it is safe to use on a live agent: "Open the background
@@ -876,6 +940,11 @@ end run"#;
 ///
 /// `attach` takes the **short** id — the session uuid up to the first dash. The full uuid is
 /// rejected ("No job matching ..."), verified live, so the id is truncated here.
+///
+/// Callers must have established that a session actually exists first: `attach` on an id with
+/// no live job lands in Claude Code's agent view — a list of every session — rather than
+/// failing, so calling it speculatively produces a terminal full of the wrong thing
+/// (decision 056).
 #[cfg(target_os = "macos")]
 fn attach_background_agent(session_id: &str) {
     let short = session_id.split('-').next().unwrap_or("");
@@ -889,24 +958,53 @@ fn attach_background_agent(session_id: &str) {
         .map(|o| !o.stdout.is_empty())
         .unwrap_or(false);
     if ghostty_up {
-        // A GUI-launched app has a minimal PATH, and `claude` lives in the user PATH, so go
-        // through a login shell. Ghostty`s `-e` runs the command directly with no shell.
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        // The absolute path, not a login shell: the shell a terminal opens for a scripted
+        // command carries launchd's bare PATH and cannot find `claude` (see `claude_bin`).
+        // Ghostty parses this string shell-style, so the path is quoted.
+        let cmd = format!("\"{}\" attach {short}", claude_bin());
+        // Put the agent in a **tab of the Ghostty already running** (decision 056). Decision
+        // 054 had to use `open -na Ghostty`, which starts a whole second instance of the app:
+        // Ghostty 1.2.x reported success for every scripted way of starting a surface and
+        // started none. Ghostty 1.3 ships a working scripting dictionary, so the tab can be
+        // made where the user is already working — and the second instance is what made
+        // decision 055's tab focus unreachable for anything running in it.
+        const NEW_TAB: &str = r#"on run argv
+  tell application "Ghostty"
+    if (count of windows) is 0 then
+      new window with configuration {command:(item 1 of argv)}
+    else
+      new tab in front window with configuration {command:(item 1 of argv)}
+    end if
+    activate
+  end tell
+  return "ok"
+end run"#;
+        let opened = std::process::Command::new("osascript")
+            .args(["-e", NEW_TAB, &cmd])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "ok")
+            .unwrap_or(false);
+        if opened {
+            return;
+        }
+        // Ghostty older than 1.3 has no dictionary to answer that. Fall back to decision
+        // 054's second instance — clumsy, but it does reach the agent. `-e` takes the command
+        // as argv, so the absolute path goes in as its own argument.
         let _ = std::process::Command::new("open")
-            .args(["-na", "Ghostty", "--args", "-e", &shell, "-lc"])
-            .arg(format!("claude attach {short}"))
+            .args(["-na", "Ghostty", "--args", "-e", &claude_bin(), "attach", short])
             .spawn();
         return;
     }
-    // Terminal.app is always present, and `do script` already runs in a login shell.
+    // Terminal.app is always present. `do script` runs its argument in a shell, so the path
+    // is single-quoted there.
     const SCRIPT: &str = r#"on run argv
   tell application "Terminal"
-    do script ("claude attach " & (item 1 of argv))
+    do script ("'" & (item 1 of argv) & "' attach " & (item 2 of argv))
     activate
   end tell
 end run"#;
     let _ = std::process::Command::new("osascript")
-        .args(["-e", SCRIPT, short])
+        .args(["-e", SCRIPT, &claude_bin(), short])
         .spawn();
 }
 
@@ -930,12 +1028,14 @@ const CLI_UNLISTED_SECS: i64 = 20;
 /// process inspection can separate them. Spares are started by a long-lived daemon, so they
 /// do not inherit `AGENTSTATUS_IGNORE` from anyone and cannot opt themselves out.
 ///
-/// Run through a login shell: the bar is a GUI app with a minimal PATH, and `claude` lives in
-/// the user PATH.
+/// Run by absolute path, with no shell at all (decision 056). The login shell this used to go
+/// through could not find `claude` when the bar was launched the way users launch it, so this
+/// query — and with it every CLI reconciliation decisions 054 and 056 rest on — silently
+/// returned None and reconciled nothing. Verified: the binary runs fine on a bare
+/// `PATH=/usr/bin:/bin`, so no shell is needed to reach it.
 fn cli_facts_query() -> Option<std::collections::HashMap<String, CliFact>> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-    let out = std::process::Command::new(shell)
-        .args(["-lc", "claude agents --json"])
+    let out = std::process::Command::new(claude_bin())
+        .args(["agents", "--json"])
         .env("AGENTSTATUS_IGNORE", "1")
         .output()
         .ok()?;
@@ -1041,14 +1141,27 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
             // session is interactive — inferring from it sent an interactive session down the
             // attach path and opened a redundant terminal tab. Claude Code reports both the
             // kind and the pid that actually owns the session.
-            let fact = cli_facts(now_unix()).and_then(|m| m.get(&session_id).cloned());
+            let listing = cli_facts(now_unix());
+            let fact = listing.as_ref().and_then(|m| m.get(&session_id).cloned());
+            // Claude Code answered and does not know this session: it is a pre-warmed spare
+            // whose light has not been pruned yet (decision 056), or an agent that has since
+            // exited. There is nothing to attach to, and `claude attach` on an id with no live
+            // job does not fail quietly — it drops into Claude Code's **agent view**, which
+            // lists every session, in a terminal window opened for the occasion. Reported live
+            // as "a new light opened a Ghostty window with copies of my sessions". Do nothing
+            // instead: the light is about to disappear, and no action beats a wrong one
+            // (UI Principle #3 — a click leads to *that* session or nowhere).
+            if listing.is_some() && fact.is_none() {
+                return;
+            }
             let pid = match &fact {
                 Some(f) if f.pid > 0 => f.pid,
                 _ => session_pid(&session_id),
             };
             let interactive = match &fact {
                 Some(f) => f.kind == "interactive",
-                // Unlisted (or the query failed): fall back to the terminal it owns, if any.
+                // The query itself failed, so nothing is known: fall back to the terminal it
+                // owns, if any. Fail-open, the same contract as #048.
                 None => tty_of(pid).is_some(),
             };
             match (interactive, tty_of(pid)) {
@@ -1734,11 +1847,25 @@ pub fn run() {
 /// `AXUIElementCopyAttributeValue`.
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
+    /// The first live pid that owns a controlling terminal, or None on a machine with no
+    /// terminal session open at all. Used to model a *real* interactive CLI session, which
+    /// is the thing decision 056's spare rule has to keep telling apart from a spare.
+    fn pid_with_tty() -> Option<i64> {
+        let out = std::process::Command::new("ps").args(["-eo", "pid=,tty="]).output().ok()?;
+        String::from_utf8_lossy(&out.stdout).lines().find_map(|l| {
+            let mut f = l.split_whitespace();
+            let pid: i64 = f.next()?.parse().ok()?;
+            (f.next()? != "??").then_some(pid)
+        })
+    }
+
     /// Decision 054: a CLI light lives and dies with its `claude` process — the liveness
     /// signal that replaces the IDE lock file a terminal session never writes. Also pins
     /// the upgrade path: a status file written before 054 carries no `pid` and must fall
-    /// back to the idle timeout rather than be deleted on sight. Ignored because it sets
-    /// AGENTSTATUS_DIR, which is process-global:
+    /// back to the idle timeout rather than be deleted on sight. And decision 056: an
+    /// unlisted light whose pid owns no terminal is a pre-warmed spare and goes on sight,
+    /// while the same light with a terminal behind it keeps the full grace period.
+    /// Ignored because it sets AGENTSTATUS_DIR, which is process-global:
     ///
     ///   cargo test -- --ignored --nocapture cli_liveness_pruning
     #[test]
@@ -1760,16 +1887,33 @@ mod tests {
             }
             std::fs::write(sessions.join(format!("{id}.json")), v.to_string()).unwrap();
         };
-        // Our own process is certainly alive. macOS caps pids at 99999, so 999999 can
-        // never name a live process — a dead pid without racing a real one.
-        write("alive", Some(std::process::id() as i64));
+        // None of these ids is one Claude Code knows, so every one of them is "unlisted" and
+        // decision 056's rule is what decides between them — exactly the situation a spare
+        // creates. A pid that owns a tty stands in for a real interactive session; pid 1
+        // (launchd) is always alive and never has one, which is a spare's signature.
+        // macOS caps pids at 99999, so 999999 can never name a live process.
+        let real = pid_with_tty();
+        write("alive", Some(real.unwrap_or(std::process::id() as i64)));
+        write("spare", Some(1));
         write("dead", Some(999_999));
         write("legacy", None);
 
         let ids: Vec<String> = super::list_sessions().into_iter().map(|s| s.id).collect();
-        assert!(ids.contains(&"alive".to_string()), "live CLI session pruned: {ids:?}");
         assert!(!ids.contains(&"dead".to_string()), "dead CLI session survived: {ids:?}");
         assert!(ids.contains(&"legacy".to_string()), "pre-054 file pruned: {ids:?}");
+        // The spare rule can only fire when the query actually answered; a machine where
+        // `claude agents --json` fails reconciles nothing, by design (fail-open).
+        if super::cli_facts(now).is_some() {
+            assert!(!ids.contains(&"spare".to_string()), "spare light survived: {ids:?}");
+        } else {
+            println!("`claude agents --json` unavailable — spare assertion skipped");
+        }
+        match real {
+            Some(_) => assert!(ids.contains(&"alive".to_string()), "live CLI pruned: {ids:?}"),
+            // Every process here is detached (a background agent runs the suite this way),
+            // so there is no interactive session to model and nothing to assert.
+            None => println!("no terminal session on this machine — 'alive' assertion skipped"),
+        }
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -1801,6 +1945,31 @@ mod tests {
             }
         }
         println!("(done)");
+    }
+
+    /// Print the resolved `claude` binary and what it answers — the query every CLI light
+    /// and every CLI click is reconciled against (decisions 054, 056):
+    ///
+    ///   cargo test --release -- --ignored --nocapture dump_cli_facts
+    ///
+    /// `query FAILED` means the binary could not be reached, which is fail-open: no CLI light
+    /// is ever pruned and no click is ever suppressed. Run it under a stripped environment to
+    /// reproduce how the app starts from Login Items:
+    ///
+    ///   env -i HOME="$HOME" PATH=/usr/bin:/bin cargo test --release -- --ignored dump_cli_facts
+    #[test]
+    #[ignore]
+    fn dump_cli_facts() {
+        println!("claude bin = {}", super::claude_bin());
+        match super::cli_facts_query() {
+            Some(m) => {
+                println!("{} session(s)", m.len());
+                for (id, f) in m {
+                    println!("  {} kind={} pid={}", &id[..8.min(id.len())], f.kind, f.pid);
+                }
+            }
+            None => println!("query FAILED"),
+        }
     }
 
     /// Resolve a live session to the Ghostty surface a click would focus, and focus it —

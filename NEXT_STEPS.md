@@ -48,7 +48,10 @@
   configuration`, `initial input`, `input text`) is non-functional in 1.2.x — all three report
   success and start nothing — so `-e` plus a second instance is the only working route.
   **CLI lights are now reconciled against `claude agents --json`** (throttled 10s, only when a
-  CLI light exists, fail-open — the #048 pattern). Two reasons: Claude Code 2.1.231 hosts
+  CLI light exists, fail-open — the #048 pattern). **Note (decision 056):** this query ran
+  through a login shell and therefore found nothing whenever the bar was launched from Login
+  Items rather than a shell, so everything in this paragraph was inert for real users until
+  056 resolved `claude` by absolute path. Two reasons: Claude Code 2.1.231 hosts
   sessions inside pre-warmed `claude bg-spare` processes, so the hook's `$PPID` can be a
   helper with no tty even for an *interactive* session (which made a running Ghostty session
   open a redundant tab instead of focusing its window); and `bg-spare` processes fire
@@ -226,6 +229,26 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Now (build queue, in order)
 
+0. **From the 2026-08-13 competitor survey (decisions 056–059).** In priority order:
+   - **a. Add the `jq` guard to `install.rs`** (decision 059). `report.sh` uses `jq` nine times
+     with no availability check; `install.sh:11` guards it but `install.rs` — the **DMG path,
+     which is the primary distribution channel (#024)** — does not. `jq` ships at `/usr/bin/jq`
+     only since **macOS 15**, and the README requires only "Apple Silicon", so a DMG user on
+     macOS 11–14 without Homebrew gets a completely inert app and **no error message at all**.
+     Smallest, highest-value fix on this list.
+   - **b. Check whether a VS Code Claude Code session reports `status`** (decision 059). Verified
+     live that `claude agents --json` and `~/.claude/sessions/<pid>.json` expose
+     `status`/`statusUpdatedAt` for `entrypoint:"cli"` and that both are **absent for
+     `claude-desktop`**. No VS Code session was running, so the core path is **unconfirmed**.
+     This one observation decides whether the guarded reconcile below is worth building — do it
+     before writing any code (Guideline #4).
+   - **c. Then: the guarded state reconcile for Claude Code** (decision 059), mirroring #048's
+     shape — override only a light already silent past a threshold, never a fresh hook write,
+     no-op on a failed read. `CliFact` (`lib.rs:916-919`) currently parses and **discards** the
+     `status` field this needs.
+   - **d. Codex re-add** (decision 056), starting with the event logger — verifiable today via
+     the installed `openai.chatgpt` VS Code extension. Gemini is blocked (see Decisions needed).
+
 1. ✅ **Milestone 1 — Verify hooks.** *Done 2026-07-05.* Verified event→state mapping on
    Claude Code 2.1.201 (DECISIONS.md #006); logger uninstalled; settings clean.
 2. ✅ **Milestone 2 — Signal layer.** *Done 2026-07-05.* Built [hooks/report.sh](hooks/report.sh)
@@ -325,6 +348,67 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 ---
 
 ## Recently completed
+
+- **2026-08-13** — **Phantom-spare light fixed, and the CLI reconciliation it depends on made
+  to actually run (decision 056).** Reported live: "a new light appeared on my bar. it opens a
+  new ghostty window with copies of my claude sessions." It was a **pre-warmed spare** —
+  `1550acaa`, whose recorded pid `4592` was a `claude bg-spare` process absent from
+  `claude agents --json` — clicked inside decision 054's 20s grace. The click fell through to
+  `attach_background_agent`, which ran `open -na Ghostty` (a *second instance* of the app) on
+  `claude attach 1550acaa`; `attach` on an id with no live job does not fail, it lands in
+  Claude Code's **agent view**, i.e. a window listing every session. The daemon log dates the
+  whole sequence, including the agent view claiming a spare of its own 14s later. **Underneath
+  it sat a latent defect that made half the fix pointless:** `zsh -lc` is non-interactive, so
+  it never reads `.zshrc` — which is where `~/.local/bin` is set — meaning 054's
+  `claude agents --json` returned nothing whenever the bar was launched from **Login Items**
+  instead of a shell, silently disabling *all* CLI reconciliation (it is fail-open). It only
+  ever worked in development because `./install.sh` relaunches the app from a shell that
+  already has the PATH. Four changes, all app-side, no hook or schema change: `claude_bin()`
+  resolves the binary by absolute path and it is run with no shell at all; a click on a CLI
+  light Claude Code does not list does nothing; an unlisted light whose pid owns no terminal is
+  dropped on sight (a pid *with* a tty, and a pre-054 file with no pid, keep the full 20s); and
+  a background agent now opens in a **tab of the running Ghostty** via 1.3's scripting
+  dictionary, which also removes decision 055's two-instances limitation at the source.
+  Verified end-to-end on the packaged app relaunched with `env -i PATH=/usr/bin:/bin`
+  (`ps -E` confirming the bare PATH): a synthetic unlisted CLI light with `pid: 1` was pruned
+  **within 1s**, exercising binary → query → rule in one observation, while the negative
+  control (an unlisted light whose pid owns a tty) survived 8s. Also: the extended
+  `cli_liveness_pruning` test caught the first cut pruning pre-054 files with no `pid`, fixed
+  by requiring `pid > 0`. Two things confirmed *not* to be bugs: the other new lights are real
+  background sessions (Claude Code spawns one per `/stop`), and `claude attach` legitimately
+  wakes a settled agent.
+
+- **2026-08-13** — **Competitor survey, and four decisions from it (056–059).** Researched what
+  else exists in this space and compared it against AgentStatus. Findings that changed the
+  build queue:
+  **(1) The one-light-per-session bar is genuinely unmatched** — `claude-status-bar` and
+  `gmr/claude-status` both collapse every session into a single aggregate menu-bar icon with a
+  dropdown, so aggregating by default would trade away the differentiator. But the bar grows at
+  `8 + 23N` px (confirmed against #051's measured `37 × 123` for five lights), so 30 sessions is
+  a 698 px bar. Five fallback designs drafted (decision 058); recommendation is a threshold-based
+  overflow chip, not a mode switch.
+  **(2) Cost/usage analytics is the most common missing feature** — `AgentsView` (60+ agents,
+  SQLite, spend charts), `usage` (burn rate, quota), `claude-statistics`. Scoped it (decision
+  057): the data exists in Claude Code transcripts (`message.usage`/`message.model`, verified on
+  a real 3.7 MB transcript) but **not in hook payloads** (all 246 captured events checked) and
+  **not in Cursor at all** — Cursor stores context-window fullness, `usageData` is empty `{}` on
+  every row. So it is Claude-only by construction and needs a hardcoded price table.
+  **(3) Competitors run redundant signal channels** — `gmr/claude-status` runs three
+  (Darwin push + filesystem watch + 5s poll); `so-agentbar` and `marmonitor` skip hooks entirely.
+  Assessed the hook-only risk (decision 059) and found the project has **already built a second
+  channel for Cursor** (#048/#052) and existence checks for CLI/Desktop (#054) — but the **core
+  Claude Code path has no state reconcile at all**, and `claude agents --json` /
+  `~/.claude/sessions/<pid>.json` both carry a `status` field the app already reads and throws
+  away (`CliFact`, `lib.rs:916-919`). Also surfaced a concrete shipping gap: **`install.rs` never
+  checks for `jq`** though `install.sh:11` does, and `jq` only ships with macOS 15+, so a DMG user
+  on an older macOS gets a silently inert app.
+  **(4) Codex and Gemini were already built and removed** (#040, as unverified), so the re-add is
+  scoped as observe-then-build (decision 056), and it must first gate the #040 cleanup
+  (`install.rs:80-121`, `setup.mjs:73-82`) that would delete new entries on the next launch.
+  Verified locally: Codex's VS Code extension is installed (so **Codex is verifiable today**),
+  while the Gemini CLI and Antigravity CLI are **not installed** — and "Gemini" now means three
+  different products. Neither Gemini nor Antigravity can show orange or red.
+  Research only — **no code changed**; all four are logged as `Proposed`, awaiting the user.
 
 - **2026-08-13** — **A Ghostty light focuses the exact tab and split (decision 055).** Reported
   from live use: clicking a Ghostty CLI light opened Ghostty but left the previously active tab
