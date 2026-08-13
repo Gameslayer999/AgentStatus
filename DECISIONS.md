@@ -66,6 +66,7 @@
 | 053 | 2026-08-12 | **Tooltip identifies a light by the host's own session name**, not the project folder alone — the bar's first line was the folder basename, so two sessions in one folder had byte-identical tooltips. Claude Code names every session in `~/.claude/sessions/<pid>.json` (`sessionId`, `name`, `nameSource`); Cursor names every composer in `composerData.name`, already queried by #048. The app joins both by session id and the tooltip head becomes `folder · name` ("AgentStatus · agentstatus-5b"), dropping the name when it is absent or repeats the folder. App-side read only — no hook change, no status-file change, and no transcript is read (Guideline #5). Rejected: an LLM-style session title (no `summary`/`title` entry exists in any transcript on the installed 2.1.200 — nothing to read) and recording the first prompt as a title (a schema change for something the `task` line already covers) | Accepted |
 | 055 | 2026-08-13 | **A Ghostty light focuses the exact tab (and split)** — #054 left Ghostty at app-level focus because it publishes no tty, so a click brought Ghostty forward on whatever tab was last active. Two things changed since: Ghostty 1.3 ships an AppleScript dictionary (`window` → `tab` → `terminal` surface, each with a title, plus a `focus` command that selects the surface and fronts its window), and Claude Code 2.1.231 writes a session title into the terminal title bar, stored as an `ai-title` record in the transcript — which #053 checked for on 2.1.223 and correctly found absent. The app reads the last `ai-title` for the session and runs one `osascript` that focuses the surface whose title **contains** it (the leading glyph is the activity spinner), acting only on an **exactly one** match. No `ai-title`, no hit, several hits, Ghostty < 1.3, or a refused Automation grant all fall back to fronting the app — the old behaviour, never a wrong tab (UI Principle #4). Reading the transcript is a flagged exception to Guideline #5: only the title is extracted, nothing is stored. No hook change, no schema change | Accepted |
 | 056 | 2026-08-13 | **A light that names no session does nothing, and a background agent opens in a tab** — a pre-warmed spare's light was clicked inside #054's 20s grace, and the click ran `open -na Ghostty` (a *second instance*) on `claude attach <spare>`; `attach` on an id with no live job does not fail but lands in Claude Code's **agent view**, so the user got a new window listing every session. Underneath it, a latent defect: `zsh -lc` is non-interactive, never reads `.zshrc`, and that is where `~/.local/bin` is set — so #054's `claude agents --json` returned nothing whenever the bar was launched from Login Items rather than a shell, silently disabling **all** CLI reconciliation (fail-open). Fixes: resolve `claude` by absolute path and run it with no shell; a click on a CLI light Claude Code does not list does nothing; an unlisted light whose pid owns no terminal is dropped on sight (a pid *with* a tty, and a pre-054 file with no pid, keep the 20s grace); and a background agent opens in a **tab of the running Ghostty** via 1.3's scripting dictionary, which also removes #055's two-instances limitation at the source | Accepted |
+| 057 | 2026-08-13 | **A finished background agent's light retires after 5 minutes** — lights lingered for sessions with "no currently active tab or terminal anywhere". A `--bg` job has no terminal by construction and Claude Code keeps its process alive and listed after the work is done, so #054's pid-liveness rule never fired and #056's unlisted rule never applied; the lights sat until the two-hour backstop. New rule (g): retire a `cli` light once Claude Code reports it `kind: background` + `status: idle` (a new `status` field on `CliFact`) **and** it has been hook-silent for `CLI_BG_DONE_SECS` = 5 min — a clock rather than a category, so "just finished" stays readable while an abandoned job stops taking a slot. Never applied to a `blocked` or `error` light: those are the states the user must act on and both go quiet by nature, so a silence timer would delete exactly the wrong ones. Interactive sessions are untouched — verified live that an idle-38-minute terminal session in an open tab keeps its light while two background ghosts went within one poll | Accepted |
 | 056 | 2026-08-13 | **Re-adding Codex and Gemini starts with observation, not with restoring the deleted code** — both were removed in #040 as unverified, so a re-add repeats the observe-then-build sequence using the existing logger tooling, and must first gate the #040 cleanup (`install.rs:80-121`, `setup.mjs:73-82`) that would otherwise delete the new entries on the next launch. Codex is verifiable today (the `openai.chatgpt` VS Code extension is installed) at ~2–2.5 days; Gemini is **blocked on which product is meant** — Antigravity IDE, Gemini CLI, or Antigravity CLI are three different config paths and event sets, and only the IDE is installed here. Only Codex can reach orange; **none of the three can reach red** | Proposed — blocked on user |
 | 057 | 2026-08-13 | **Token/cost tracking: data exists for Claude Code only, and the maintenance is the real cost** — transcripts carry per-call `message.usage`/`model`, but hook payloads carry nothing, no aggregated local source exists, and Cursor stores context-window fullness with no cost at all, so any version is Claude-only. Options: (1) defer, (2) last-turn cost in the tooltip ~½–1 day, (3) cumulative cost + settings-panel readout ~2–3 sessions. Constraints: the read goes app-side, never in the hook (reversing #040 / Guideline #3); it is a schema change needing approval; nothing numeric goes on the bar (UI Principle #1); the price table must be hardcoded and rots on every model release | Proposed — awaiting go/no-go |
 | 058 | 2026-08-13 | **A fallback view for high session counts** — the one-light-per-session bar is the project's one unmatched design property (every competitor aggregates to a single icon), but it grows at `8 + 23N` px, so 30 sessions is a 698 px bar. Five options drafted (folder grouping, overflow chip, grid wrap, auto-shrink, attention-only); recommendation is the **overflow chip** bounded by urgency sort with folder grouping as an orthogonal toggle, auto-shrink rejected outright for fighting UI Principle #1. Must be a **threshold, not a mode switch**, so per-session lights stay the default at normal counts | Proposed — awaiting choice |
@@ -3458,3 +3459,81 @@ Four changes, all app-side. No hook change, no status-file schema change.
   second instance.
 - `cargo build --release` clean, no new warnings; `cargo test --release` 2 passed, 10 ignored;
   both node test suites pass.
+
+---
+
+## 057 — A finished background agent's light retires; a session with a terminal keeps its own
+
+**Date:** 2026-08-13
+**Status:** Accepted
+
+### Context
+
+Reported live: *"i am still able to see lights for sessions where i ran stop… those should
+disappear from my lightbar once that command goes through"*, clarified as *"stopped processes
+(that just finished working and are now idle) can stay, but processes that exited or quit
+(sessions that we typed exit or have no currently active tab or terminal anywhere) should
+disappear."*
+
+The bar at that moment, with each light checked against whether anything could still be
+reached through it:
+
+| light | host | kind | terminal | quiet |
+|---|---|---|---|---|
+| `0e984070` | cli | background | — | 30 min |
+| `a011978b` | cli | background | — | 32 min |
+| `bbfb4f32` | cli | interactive | ttys005 | 9 s |
+| `ccbaa786` | cli | interactive | ttys001 | 38 min |
+| `6fb0bb46` | claude-desktop | interactive | — | 86 min |
+| `74dbc1ee` | cli | background | — | busy |
+
+The two stale lights are exactly the **background** jobs. Nothing in decision 054 could
+retire them: (e) prunes on the owning pid dying, and Claude Code keeps a finished `--bg` job's
+process alive and still listed in `claude agents --json` indefinitely; (f) only prunes what
+Claude Code does *not* list. So they sat until the two-hour `MAX_IDLE_SECS` backstop. A `--bg`
+job also has no terminal by construction, which is why the user's "no active tab or terminal
+anywhere" describes them precisely.
+
+The interactive half already worked, and was confirmed rather than assumed: `bbfb4f32` was a
+session the user had typed `exit` in — its `claude` process was gone while the shell on
+`ttys005` remained, Claude Code had dropped it from its list, and its light was gone within
+seconds.
+
+### Decision
+
+A seventh prune rule (g): a `cli` light is retired when **Claude Code reports it as a
+background job that is idle** (`kind: "background"`, `status: "idle"` — a new `status` field on
+`CliFact`, straight from `claude agents --json`) **and** it has been hook-silent for
+`CLI_BG_DONE_SECS` (5 minutes).
+
+Never applied when the light is `blocked` or `error`. Those are the two states the user has to
+act on, and both go quiet by their nature — waiting on a permission prompt emits no further
+events — so a silence timer is exactly the wrong thing to point at them (UI Principle #2).
+
+### Why this shape
+
+- **It reconciles both halves of the request.** "Just finished and idle can stay" and
+  "abandoned should disappear" are the same light at different ages, so the answer is a clock,
+  not a category. Five minutes keeps the finished-agent signal readable — the light is the only
+  place it appears — while a job left overnight stops occupying a slot.
+- **Hook silence, not wall-clock age**, so a background job that picks work back up resets its
+  own timer and never vanishes mid-run.
+- **Claude Code's own word for the verdict**, the #048 pattern: the bar does not infer that a
+  job is done, it asks. A failed query reconciles nothing.
+- **Interactive sessions are untouched.** The rule tests `kind == "background"`, so a terminal
+  session idling in an open tab keeps its light however long it sits there — which is what the
+  user asked for, and what the `ccbaa786` line above would otherwise have lost.
+
+### Verification
+
+Live, on the packaged app, before and after installing the change: the two background ghosts
+(`0e984070`, `a011978b`) were **gone within one poll**, while `ccbaa786` (interactive, idle
+38 minutes, live tab), `6fb0bb46` (Claude Desktop) and the busy background job running this
+work all survived — so the rule discriminates on `kind` and `status` rather than clearing
+anything quiet. `cargo build --release` clean with no new warnings; `cargo test --release`
+2 passed, 10 ignored; `cli_liveness_pruning` still passes.
+
+**Caveat on the reproduction:** `0e984070` was still alive partly because a diagnostic
+`claude attach` run during decision 056's investigation woke it (`Waking session 0e984070` in
+the daemon log). The rule was therefore verified against `a011978b` as well, which no
+diagnostic ever touched, and against the general shape rather than that one light.

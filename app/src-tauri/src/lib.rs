@@ -476,7 +476,30 @@ fn list_sessions() -> Vec<SessionStatus> {
                 //       so nothing is known about a terminal and it must keep the timeout
                 //       (the same upgrade path (e) protects).
                 && (now - updated_at >= CLI_UNLISTED_SECS || (pid > 0 && !owns_terminal(pid)));
+            //   (g) a background agent that finished and was left behind (decision 057).
+            //       Reported live: lights for sessions with "no currently active tab or
+            //       terminal anywhere". A `--bg` job has no terminal by construction, and
+            //       Claude Code keeps its process alive and still listed once the work is
+            //       done — so (e)'s pid liveness never fires and (f) never applies, and the
+            //       light sat there for the two-hour backstop. Retired on Claude Code's own
+            //       word (`kind: background` + `status: idle`) once it has also been silent
+            //       for CLI_BG_DONE_SECS, so "just finished" is still visible for a while.
+            //       Never applied to a light the user has to act on: `blocked` waits on a
+            //       permission prompt and `error` on being read, and both go quiet by nature,
+            //       which is exactly when a timeout would delete them (UI Principle #2).
+            let waiting = matches!(
+                v.get("state").and_then(|x| x.as_str()).unwrap_or(""),
+                "blocked" | "error"
+            );
+            let bg_abandoned = ide == "cli"
+                && !waiting
+                && now - updated_at >= CLI_BG_DONE_SECS
+                && cli_live
+                    .as_ref()
+                    .and_then(|facts| facts.get(id.as_str()))
+                    .is_some_and(|f| f.kind == "background" && f.status == "idle");
             if window_gone || cwd_gone || cursor_gone || host_process_gone || spare_light
+                || bg_abandoned
                 || now - updated_at > MAX_IDLE_SECS
             {
                 let _ = std::fs::remove_file(&path);
@@ -1014,12 +1037,22 @@ end run"#;
 struct CliFact {
     kind: String,
     pid: i64,
+    /// Claude Code's own word on whether this session is working right now — `busy` or
+    /// `idle`. Absent for a host that reports none (Claude Desktop), which reads as neither.
+    status: String,
 }
 
 /// How long a `claude agents --json` answer is reused, and how long an unlisted CLI light is
 /// tolerated before it is treated as a pre-warmed spare rather than a session.
 const CLI_FACTS_TTL: i64 = 10;
 const CLI_UNLISTED_SECS: i64 = 20;
+
+/// How long a finished background agent keeps its light (decision 057). A `--bg` job's process
+/// stays alive and listed after its work is done, so nothing in decision 054 ever retires it.
+/// Long enough that "it just finished" is still readable on the bar — the light is the only
+/// place that shows it — and short enough that an abandoned job stops occupying a slot. The
+/// clock is hook silence, so a job that picks work back up resets it.
+const CLI_BG_DONE_SECS: i64 = 5 * 60;
 
 /// Ask Claude Code to enumerate its own live sessions. This is the only way to tell a real
 /// session from a **pre-warmed spare**: a spare is a `claude bg-spare` process that fires
@@ -1053,6 +1086,7 @@ fn cli_facts_query() -> Option<std::collections::HashMap<String, CliFact>> {
             CliFact {
                 kind: a.get("kind").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                 pid: a.get("pid").and_then(|x| x.as_i64()).unwrap_or(0),
+                status: a.get("status").and_then(|x| x.as_str()).unwrap_or("").to_string(),
             },
         );
     }

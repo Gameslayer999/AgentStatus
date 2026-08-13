@@ -349,6 +349,25 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-08-13** — **A finished background agent's light now retires (decision 057).** Reported
+  live: lights lingering for sessions with "no currently active tab or terminal anywhere". Put
+  every light on the bar next to its evidence and the stale ones were exactly the **background**
+  jobs: a `--bg` job has no terminal by construction, and Claude Code keeps its process alive
+  and still listed in `claude agents --json` after the work is done — so decision 054's rule (e)
+  (owning pid died) never fired and 056's rule (f) (Claude Code does not list it) never applied,
+  leaving them until the two-hour `MAX_IDLE_SECS` backstop. The interactive half already worked
+  and was confirmed rather than assumed: a session the user had typed `exit` in had its light
+  gone within seconds, with the shell still sitting on `ttys005` and no `claude` process on it.
+  New prune rule (g): retire a `cli` light once Claude Code reports it `kind: background` +
+  `status: idle` (a new `status` field on `CliFact`) **and** it has been hook-silent for
+  `CLI_BG_DONE_SECS` = 5 min. A clock rather than a category, which is what reconciles "just
+  finished and idle can stay" with "abandoned should disappear" — they are the same light at
+  different ages. Never applied to a `blocked` or `error` light: those are the two states the
+  user must act on and both go quiet by nature, so a silence timer points at exactly the wrong
+  ones (UI Principle #2). Verified live on the packaged app: both background ghosts gone within
+  one poll, while an interactive session idle for 38 minutes in an open tab, the Claude Desktop
+  light, and the busy background job doing this work all survived.
+
 - **2026-08-13** — **Phantom-spare light fixed, and the CLI reconciliation it depends on made
   to actually run (decision 056).** Reported live: "a new light appeared on my bar. it opens a
   new ghostty window with copies of my claude sessions." It was a **pre-warmed spare** —

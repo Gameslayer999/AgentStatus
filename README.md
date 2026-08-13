@@ -116,6 +116,12 @@ a Cursor agent.
   rings off the bar.
 - **A ring pip** at the end of the bar counts the Cursor agents that wait for you and have
   no light of their own. Click the pip to open the next one in the queue.
+- **A light goes away when the session does.** Close the tab, quit the editor, or type
+  `exit`, and the light goes on the next check. A **background agent** has no terminal to
+  close and Claude Code keeps it running after it finishes, so its light stays for five
+  more minutes and then goes — long enough to see that it finished, short enough that
+  yesterday's agents do not fill the bar. A light waiting on you (orange or red) is never
+  removed on a timer.
 - **Put the pointer on a light** to see the project, the session name, the task, and the
   current operation. The session name is the name the host gives the session — for example
   `agentstatus-5b` in Claude Code, or the name of the agent conversation in Cursor. This
