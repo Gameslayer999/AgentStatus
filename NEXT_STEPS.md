@@ -335,9 +335,16 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   `title = None / focused = false`; titled → `focused = true`); `focus_terminal_live` extended
   with the session id, resolving `tty=/dev/ttys001`, `terminal app=("Ghostty", 32265)` and the
   right title; `cargo build --release` clean with no new warnings; `cargo test --release`
-  2 passed, 9 ignored. **Left to verify live:** the packaged app doing it, which needs the
-  Automation grant for AgentStatus.app → Ghostty (a new, separate grant from the Terminal.app
-  and Accessibility ones; macOS prompts once on the first click).
+  2 passed, 9 ignored. **Verified live on the packaged app**, two sessions as two splits of
+  one Ghostty tab, with a background recorder sampling the focused surface twice a second so
+  the result could not be corrupted by whatever was clicked afterwards: with split
+  `6F2668F6` set as a decoy and Ghostty in the background, the `agentstatus-e0` light fronted
+  Ghostty **and** moved focus to `EB362C00`, and the `agentstatus-3c` light — clicked while
+  Ghostty was *already* frontmost — moved focus back to `6F2668F6`. That second transition
+  can only come from the AppleScript `focus` (fronting an app cannot change which split is
+  focused inside it), which also settles the Automation grant for AgentStatus.app → Ghostty
+  without reading the protected TCC database: a refused grant falls through to
+  activate-by-pid, which would have left the focused split untouched.
 - **2026-08-13** — **Terminal CLI and Claude Desktop became first-class hosts (decision 054).**
   Investigated first (Guideline #4): an isolated `--settings` probe showed the **terminal CLI
   fires the full lifecycle with payload keys byte-identical to the VS Code extension**, and

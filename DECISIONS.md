@@ -3005,3 +3005,19 @@ session's tab.
 - **Survey of `ai-title` across `~/.claude/projects`**: present in 6 of the 12 most recent
   transcripts, 1–56 records each, absent in every transcript of a session that had not yet
   produced a turn — matching the fallback the code takes.
+- **The packaged app, clicked for real.** Two sessions running as two splits of one Ghostty
+  tab, with the installed `/Applications/AgentStatus.app`. A background recorder sampled
+  `focused terminal` and the frontmost app twice a second so the result could not be
+  corrupted by whatever was clicked afterwards. The decoy put split `6F2668F6`
+  ("Plan AI model support…") in front and Ghostty in the background; clicking the
+  `agentstatus-e0` light fronted Ghostty **and** moved focus to `EB362C00`
+  ("Fix Ghostty tab focus…"), and clicking `agentstatus-3c` 38 s later — with Ghostty
+  **already** frontmost and `EB362C00` focused — moved focus to `6F2668F6`.
+
+  That second transition is the decisive one: fronting an application cannot change which
+  split is focused inside it, so it can only have come from the AppleScript `focus`. It also
+  settles the Automation grant without needing to read the TCC database (which is itself
+  protected): a refused grant makes `focus_ghostty_surface` return false and the click falls
+  through to the activate-by-pid path, which fronts Ghostty and leaves the focused split
+  alone — the split change could not have happened. Both directions, on the real app, from a
+  real click.
