@@ -42,7 +42,7 @@ own hooks at the first start.
 > AgentStatus is **not signed and not notarized**. Thus macOS Gatekeeper stops it at the
 > first start. Step 3 removes the download quarantine, and the application starts.
 
-1. Download **`AgentStatus_0.7.0_aarch64.dmg`** from the
+1. Download **`AgentStatus_0.7.1_aarch64.dmg`** from the
    [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest).
 2. Open the DMG. Drag **AgentStatus** into **Applications**.
 3. Remove the download quarantine and start the application:
@@ -260,7 +260,7 @@ GitHub Actions builds and publishes the releases. Set the new version in
 to `main`. Then push a tag with the same version:
 
 ```bash
-git tag v0.7.0 && git push origin v0.7.0
+git tag v0.7.1 && git push origin v0.7.1
 ```
 
 The workflow builds the arm64 DMG on a macOS runner and publishes it with generated
