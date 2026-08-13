@@ -72,10 +72,11 @@
 | 056 | 2026-08-13 | **Re-adding Codex and Gemini starts with observation, not with restoring the deleted code** — both were removed in #040 as unverified, so a re-add repeats the observe-then-build sequence using the existing logger tooling, and must first gate the #040 cleanup (`install.rs:80-121`, `setup.mjs:73-82`) that would otherwise delete the new entries on the next launch. Codex is verifiable today (the `openai.chatgpt` VS Code extension is installed) at ~2–2.5 days; Gemini is **blocked on which product is meant** — Antigravity IDE, Gemini CLI, or Antigravity CLI are three different config paths and event sets, and only the IDE is installed here. Only Codex can reach orange; **none of the three can reach red** | Proposed — blocked on user |
 | 057 | 2026-08-13 | **Token/cost tracking: data exists for Claude Code only, and the maintenance is the real cost** — transcripts carry per-call `message.usage`/`model`, but hook payloads carry nothing, no aggregated local source exists, and Cursor stores context-window fullness with no cost at all, so any version is Claude-only. Options: (1) defer, (2) last-turn cost in the tooltip ~½–1 day, (3) cumulative cost + settings-panel readout ~2–3 sessions. Constraints: the read goes app-side, never in the hook (reversing #040 / Guideline #3); it is a schema change needing approval; nothing numeric goes on the bar (UI Principle #1); the price table must be hardcoded and rots on every model release | Proposed — awaiting go/no-go |
 | 058 | 2026-08-13 | **A fallback view for high session counts** — the one-light-per-session bar is the project's one unmatched design property (every competitor aggregates to a single icon), but it grows at `8 + 23N` px, so 30 sessions is a 698 px bar. Five options drafted (folder grouping, overflow chip, grid wrap, auto-shrink, attention-only); recommendation is the **overflow chip** bounded by urgency sort with folder grouping as an orthogonal toggle, auto-shrink rejected outright for fighting UI Principle #1. Must be a **threshold, not a mode switch**, so per-session lights stay the default at normal counts | Proposed — awaiting choice |
-| 059 | 2026-08-13 | **Hook-only is a real risk for the core path, but the fix is one guarded reconcile, not a second architecture** — six *observed* failures (hooks not executing at all, events that never fire, dropped end-of-life events, a 95-minute stuck green light), plus two silent undetectable ones (hook registration disappearing; `jq` missing on the DMG path, which `install.sh:11` guards and `install.rs` does not). Cursor already has a state reconcile (#048/#052) and CLI/Desktop have pid liveness, but **Claude Code has no state reconcile at all** — while `claude agents --json` and `~/.claude/sessions/<pid>.json` both carry `status`/`statusUpdatedAt` that the app already reads and discards. Fix mirrors #048's guarded shape. **Unverified: whether a VS Code session reports `status`** — confirm before writing code | Proposed — needs live check |
+| 059 | 2026-08-13 | **Hook-only is a real risk for the core path, but the fix is one guarded reconcile, not a second architecture** — six *observed* failures (hooks not executing at all, events that never fire, dropped end-of-life events, a 95-minute stuck green light), plus two silent undetectable ones (hook registration disappearing; `jq` missing on the DMG path, which `install.sh:11` guards and `install.rs` does not). Cursor already has a state reconcile (#048/#052) and CLI/Desktop have pid liveness, but **Claude Code has no state reconcile at all** — while `claude agents --json` and `~/.claude/sessions/<pid>.json` both carry `status`/`statusUpdatedAt` that the app already reads and discards. Fix mirrors #048's guarded shape. **Unverified: whether a VS Code session reports `status`** — confirm before writing code | Implemented by #067 for the turn-state half; the install-integrity half (hook registration vanishing, missing `jq` on the DMG path) is still open |
 | 060 | 2026-08-13 | **The tooltip names the application a session runs in** — a light said which project and which session but never which app, so a user reading `AgentStatus · agentstatus-5b` could not tell a VS Code tab from a Ghostty split from Claude Desktop before clicking it. `list_sessions` now returns an `app` string and the tooltip head becomes `folder · name (app)`. For the IDE hosts it is the `ide` field spelled the way the app is named on screen; for a terminal session it is the **emulator**, walked from the owning `claude` pid up to the first app bundle (`terminal_app_of`, already written for click-to-focus) and memoized per session because the tooltip is rebuilt every 1 s poll. A detached background agent is named `background agent`, never by the `ClaudeCode` launcher the walk would find — decided the same way `focus_session` routes a click, so the tooltip and the click agree (UI Principle #4). App-side only: no hook change, no status-file change | Accepted |
 | 062 | 2026-08-13 | **A light keeps the slot it arrived in** — reported live: the lights kept swapping places. The strip was re-sorted on every 1 s poll by `cwd`, then by session id, so a new session in a folder that already had lights landed at a position decided by its random uuid and pushed every later light along, and a session that `cd`'d changed groups mid-life. With a background agent per `/stop` and pre-warmed spares appearing and vanishing (#064, #065), the bar reshuffled constantly and a light moved out from under the pointer between seeing it and clicking it. Ordering is now **arrival**: a session takes the next free slot the first time the bar sees it and holds it until it is gone, when the gap closes; the first poll after a launch is laid out in the backend's deterministic (label, id) order. The settings segment becomes **Stable | Urgency** (a stored `window` reads as stable), so folder grouping is dropped — it never separated the common case of several sessions in one repo, and the folder is in the tooltip. Frontend-only: no hook change, no status-file change, no Rust change | Accepted |
 | 063 | 2026-08-13 | **A background agent's light says what Claude Code says: green while it works, orange while it waits** — a `--bg` job that stops to ask a question fires `Stop`, not `PermissionRequest`, so the hook writes `idle` and #065's "never retire a `blocked` or `error` light" guard never matched the case it was written for: a waiting agent lost its light after five minutes and got it back only when the answer arrived. Claude Code's own job record carries `state` (`working`/`done`/`blocked`) next to the `status` (`busy`/`idle`) #065 already reads, so a bg light whose hook last wrote `idle` is reconciled from it — `status: busy` → green, `state: blocked` → orange — and a `blocked` job is never retired. Only an `idle` light is touched, so anything the hook actually observed still wins; `done` and stale `working` jobs still retire at five minutes | Accepted |
+| 067 | 2026-08-13 | **An interrupted turn greys its own light** — "when I stop a session manually the light still shows up as green". Structural, not a one-path bug: `report.sh` maps hook *events* and has one route to `idle` (a `Stop`), and an interrupted turn fires none — so the light keeps the `running` its last tool event wrote, forever. Implements #059, closing its live check: sampling `~/.claude/sessions/<pid>.json` every 2 s caught a real Ctrl+C (`status` → `idle` **3.84 s after** the light's last hook event, light still green) and mapped the vocabulary, which matches the bar one for one — `busy`→green, `waiting`→orange, `idle`→gray, absent on **every Claude Desktop session**. Preferred over `claude agents --json`, which costs a subprocess (hence 10 s, not "immediately") and *loses* information — it called a `shell` session `busy` for ten minutes — while the per-pid file is already read every poll for #053's tooltip name. Greys only on positive evidence (`status == "idle"`) whose `statusUpdatedAt` falls in a **strictly later second** than the light, so the hook always wins a tie; also **clears `detail`**, or #014/#050 would render the result as the white "finished, unread" light on a session the user is already looking at. Background jobs excluded (their `idle` means something else — #063/#065); `shell` left alone as unconfirmed. No hook change, no schema change | Accepted |
 
 ---
 
@@ -3998,3 +3999,128 @@ untouched by both halves (`kind == "background"` gates them).
   `fe137997` (idle/working, never started) → unchanged and still retirable; all five
   interactive sessions untouched.
 - `cargo build --release` clean, no new warnings; `cargo test --release` 3 passed, 11 ignored.
+
+---
+
+## 067 — An interrupted turn greys its own light, because Claude Code says the turn is over
+
+**Date:** 2026-08-13
+**Status:** Accepted (implements decision 059, whose live check this closes)
+
+### Context
+
+Reported live: *"when I stop a session manually, the light still shows up as green but I want
+it to go to gray immediately."* Clarified by the user to mean **Ctrl+C on a running session**
+(and Esc, if it behaves the same), with one boundary attached: *"closing the tab should
+continue to show the green light if it is actually still working in the background."*
+
+The cause is structural, not a bug in any one path. `report.sh` maps hook **events**, and it
+has exactly one route to `idle`: a `Stop` event (or `SessionStart`). An interrupted turn does
+not fire `Stop` — the turn is abandoned, the session returns to its prompt, and nothing is
+emitted. So the light keeps whatever the last `PreToolUse`/`PostToolUse` wrote, which is
+`running`, **forever**. Decision 059 already catalogued this family (dropped end-of-life
+events, an observed 95-minute stuck green light) and proposed a guarded reconcile, but was
+parked as *"needs live check"* on one unverified precondition: whether an interactive Claude
+Code session reports a `status` at all.
+
+Measured, not assumed (Guideline #4). Sampling `~/.claude/sessions/<pid>.json` against the
+lights every 2 s across the user's own sessions caught the exact event:
+
+| time | Claude Code `status` | light the hook wrote | |
+| --- | --- | --- | --- |
+| 16:42:41 | `busy` | `running` | prompt submitted — the two agree within 0.1 s |
+| 16:42:47 → 16:43:02 | `busy` | `running` | turn runs; hook events keep the light fresh |
+| **16:43:04** | **`idle`** | **`running`** | **Ctrl+C — no `Stop`, and the light stays green** |
+
+`statusUpdatedAt` on that last row is `1786653783840`; the light's last hook event was
+`1786653780`. Claude Code's answer is **3.84 s newer than the light**, and that gap is the
+whole fix.
+
+The same sampling mapped the vocabulary, which turns out to line up with the bar's states one
+for one — and answered 059's open question in the affirmative (`f548b1eb`, `kind:
+interactive`, `status: idle`):
+
+| `status` | what the hook independently wrote | seen on |
+| --- | --- | --- |
+| `busy` | `running` | interactive + background |
+| `waiting` | `blocked` | interactive |
+| `idle` | `idle` | interactive + background |
+| `shell` | `idle` | interactive (one session, 10 min unbroken) |
+| *key absent* | — | **every Claude Desktop session** |
+
+Two sources carry this. `claude agents --json` was rejected in favour of the per-pid file:
+it costs a subprocess (hence its 10 s cache, which is not "immediately"), it **loses**
+information — it reported session `c6caa7f3` as `busy` for ten straight minutes while the
+per-pid file correctly said `shell` — and the app already reads that same directory every
+poll for tooltip names (#053), so the status is one extra field on a read that happens anyway.
+
+### Decision
+
+`claude_session_names` becomes `claude_session_facts`, returning `name` + `status` +
+`statusUpdatedAt`, and a light is greyed when Claude Code says the turn is over:
+
+```
+ide != cursor  &&  hook wrote running  &&  not a background job
+               &&  status == "idle"
+               &&  statusUpdatedAt >= (light updated_at + 1) * 1000
+                                        →  idle, and detail cleared
+```
+
+The name-map TTL drops from 5 s to 1 s (poll rate). It was 5 s because a name never changes;
+a status changes at every turn boundary, and "immediately" is the requirement.
+
+### Why this shape
+
+- **Positive evidence only, the #048/#052 pattern.** The session must actually say `idle`. An
+  absent status (every Claude Desktop session), an unreadable record, or a session Claude Code
+  does not list all reconcile nothing — the failure mode is exactly the pre-067 behaviour, so
+  this can never invent a grey light (UI Principle #4).
+- **The answer must outrank the light.** `statusUpdatedAt` must fall in a **strictly later
+  second** than the hook event the light was drawn from, so anything the hook actually observed
+  wins over a stale answer. Strictly later, not merely greater: the hook stamps whole seconds
+  (`date +%s`), so within one shared second the two clocks cannot be ordered and the tie goes
+  to the hook. Costs up to 1 s of latency to guarantee a starting turn is never grey for a poll.
+- **It clears `detail`, and that is not incidental.** The frontend renders an idle light
+  carrying a `detail` as the white *"finished — click to acknowledge"* light (#014/#050). At an
+  interrupt the last `detail` is a tool line (`$ sleep 90`), so flipping state alone would have
+  raised an **attention light on a session the user is by definition already looking at**,
+  captioned with a tool call that was cancelled. `detail` means one thing — the wrap-up message
+  from `Stop` — and an interrupted turn has none, so the honest value is empty. The `task` line
+  (the prompt) survives.
+- **The user's boundary is honoured by the data, not by a special case.** A session still
+  working after its tab closes reports `busy`, so nothing greys it; if its process is gone,
+  #054's pid liveness removes the light entirely. Neither path needed touching.
+- **Background jobs are excluded.** Their `status` is `idle` between turns *while the job is
+  alive and working* (`fe137997`: `status: idle`, `state: working`), so it does not mean the
+  same thing there — a `--bg` light is decided by #063 and #065 from `state`, untouched.
+- **`shell` is deliberately not treated as idle.** It was observed on a live session for ten
+  unbroken minutes and plainly is not a running turn, but what produces it is unconfirmed on
+  2.1.227, and Guideline #4 does not spend a lying light on a guess. Revisit if a stuck green
+  light ever shows `status: shell`; `dump_turn_reconcile` prints exactly that.
+- **No hook change and no schema change.** The signal layer is untouched, so nothing new runs
+  inside the user's sessions (Guideline #3), and the fix covers every missing-`Stop` case —
+  including 059's 95-minute stuck light — not just interrupts.
+
+### Verification
+
+- `interrupted_turn_greys_its_light` (new unit test, not live-gated) pins both guards using
+  **the real timestamps measured off the Ctrl+C above**, plus the declines: `busy`, `waiting`,
+  `shell`, empty status, no record, a stale answer, and the same-second tie.
+- `dump_turn_reconcile` (new, `cargo test -- --ignored --nocapture dump_turn_reconcile`) is the
+  re-runnable diagnostic for the next "stuck green light" report: it prints, per light, what
+  the hook wrote, what Claude Code says, both timestamps, and whether the reconcile fires. Run
+  live against the two open sessions, it correctly declined on both (one genuinely `busy`, one
+  already `idle`).
+- **Confirmed live on the installed build**, user-reported gray on screen. Session `e7041031`:
+  `16:58:48 hook=running claude=busy` (turn starts) → `16:58:56` the hook's last write is still
+  `running`, **no `Stop` ever arrived**, and Claude Code says `idle` — the reconcile fires and
+  the light greys on the next poll. This landed on the *tight* case rather than a comfortable
+  one: only **1.5 s** separated the hook event (`…734`) from Claude Code's answer (`…735546`),
+  barely over the strictly-later-second threshold, so the guard held without swallowing the fix.
+- A second sighting of `status: shell` on an idle session (`93037335`, `hook=idle` +
+  `claude=shell`, twice) — two observations now point the same way, still not proof of cause,
+  so it stays excluded.
+- Rejected as a route: driving the TUI under `expect` to synthesise an interrupt. Claude Code
+  rendered nothing on the pty across four attempts (sandboxed and not, `TERM` set and not) and
+  never accepted the prompt — `SessionStart` fired and `UserPromptSubmit` never did. The
+  measurement above came from sampling a real session instead.

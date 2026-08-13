@@ -119,6 +119,12 @@ a Cursor agent.
 - **An orange light always means one thing: that session waits for you to decide.** It is a
   permission prompt, a question, or a **background agent** that stopped to ask you something
   and now waits for the answer. Click it to go there.
+- **Stop a turn and the light goes gray.** Interrupt a running session with Ctrl+C or Esc and
+  its light turns gray within about a second. The bar does not wait to be told — it reads
+  Claude Code's own report that the session is back at its prompt, which is also what clears
+  a light left green by an event that never arrived. It turns gray, not white: nothing
+  finished, so there is nothing waiting for you to read. A session that keeps working after
+  you close its tab keeps its green light.
 - **A light goes away when the session does.** Close the tab, quit the editor, or type
   `exit`, and the light goes on the next check. A **background agent** has no terminal to
   close and Claude Code keeps it running after it finishes, so its light stays for five

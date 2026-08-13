@@ -7,6 +7,16 @@
 
 ## Current state
 
+- **Claude Code lights now have a state reconcile of their own (decision 067).** Until this,
+  Cursor had one (#048/#052) and background jobs had one (#063), but a Claude Code light was
+  pure hook output — and the hook can only reach `idle` through a `Stop` event, so any turn
+  that ends without one (an interrupt, a dropped event) left a green light forever. The app now
+  reads `status`/`statusUpdatedAt` from `~/.claude/sessions/<pid>.json` — the same per-pid
+  record it already reads every poll for the tooltip name — and greys a green light when Claude
+  Code reports the session `idle` in a strictly later second than the hook event behind that
+  light. Positive evidence only, so Claude Desktop (which writes no `status`) and any failed
+  read keep exactly the old behaviour. **Still unobserved: whether a VS Code session writes
+  that record at all**, and what `status: "shell"` means.
 - **Four hosts now, not two (decision 054).** Claude Code in **VS Code**, in a **terminal**
   (`ide:"cli"`), and in **Claude Desktop** (`ide:"claude-desktop"`), plus **Cursor**. The two
   new ones needed no signal-layer work at all — all three Claude Code surfaces read the same
@@ -236,16 +246,17 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
      only since **macOS 15**, and the README requires only "Apple Silicon", so a DMG user on
      macOS 11–14 without Homebrew gets a completely inert app and **no error message at all**.
      Smallest, highest-value fix on this list.
-   - **b. Check whether a VS Code Claude Code session reports `status`** (decision 059). Verified
-     live that `claude agents --json` and `~/.claude/sessions/<pid>.json` expose
-     `status`/`statusUpdatedAt` for `entrypoint:"cli"` and that both are **absent for
-     `claude-desktop`**. No VS Code session was running, so the core path is **unconfirmed**.
-     This one observation decides whether the guarded reconcile below is worth building — do it
-     before writing any code (Guideline #4).
-   - **c. Then: the guarded state reconcile for Claude Code** (decision 059), mirroring #048's
-     shape — override only a light already silent past a threshold, never a fresh hook write,
-     no-op on a failed read. `CliFact` (`lib.rs:916-919`) currently parses and **discards** the
-     `status` field this needs.
+   - **b. ✅ Done 2026-08-13 (decision 067)** — an interactive session *does* report `status`,
+     and the reconcile is built and installed. Still open from this item: **no VS Code session
+     has ever been observed**, so whether one writes `~/.claude/sessions/<pid>.json` is
+     unconfirmed. Nothing depends on the answer — a host that writes no record reconciles
+     nothing and keeps its pre-067 behaviour — but confirm it before claiming VS Code coverage.
+     Also unresolved: what produces `status: "shell"`, deliberately excluded as unverified.
+   - **c. ✅ Done 2026-08-13 (decision 067)** — the reconcile shipped, from
+     `~/.claude/sessions/<pid>.json` rather than `CliFact`: it is already read every poll for
+     the tooltip name (#053), costs no subprocess, and is strictly more accurate (`agents --json`
+     called a `shell` session `busy` for ten minutes). Guarded by `statusUpdatedAt` outranking
+     the light's own timestamp rather than by a silence threshold.
    - **d. Codex re-add** (decision 056), starting with the event logger — verifiable today via
      the installed `openai.chatgpt` VS Code extension. Gemini is blocked (see Decisions needed).
 
@@ -349,6 +360,28 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-08-13** — **An interrupted turn greys its own light (decision 067).** Reported live:
+  "when I stop a session manually, the light still shows up as green." Structural: `report.sh`
+  maps hook *events* and reaches `idle` only via a `Stop`, which an interrupted turn never
+  fires — so the light kept the `running` its last tool event wrote, indefinitely. This is
+  decision 059's proposed reconcile, built after its live check finally landed: sampling
+  `~/.claude/sessions/<pid>.json` against the lights every 2 s caught a real Ctrl+C
+  (`status` → `idle` **3.84 s after** the light's last hook event, light still green) and
+  mapped the vocabulary — `busy`→green, `waiting`→orange, `idle`→gray, and **absent on every
+  Claude Desktop session**. `claude_session_names` → `claude_session_facts` now carries
+  `status`/`statusUpdatedAt` (TTL 5 s → 1 s, since a status changes every turn where a name
+  never does), and a green light greys when Claude Code says `idle` in a **strictly later
+  second** than the hook event behind the light — so the hook always wins a tie and a starting
+  turn is never grey for a poll. It also **clears `detail`**, or #014/#050 would have rendered
+  the result as the white "finished, unread" light on a session the user is already looking at.
+  Background jobs excluded (their `idle` means something else — #063/#065); `shell` left alone
+  as unconfirmed. No hook change, no schema change. New unit test pinned to the real measured
+  timestamps, new `dump_turn_reconcile` diagnostic for the next stuck-green report, built and
+  installed live via `./install.sh`. **Verified live** on the installed build and confirmed gray
+  on screen by the user: session `e7041031` went `hook=running`/`claude=busy` → no `Stop` ever
+  arrived → Claude Code said `idle` **1.5 s** later and the light greyed on the next poll. That
+  is the tight case, barely over the strictly-later-second threshold, so the guard held without
+  swallowing the fix.
 - **2026-08-13** — **A background agent that waits for you keeps its light, and one that works
   is green (decision 063).** Traced from "which session is `agentstatus-6e`": a `--bg` job that
   stops to ask a question fires `Stop`, so the hook writes `idle`, so the 5-minute retirement

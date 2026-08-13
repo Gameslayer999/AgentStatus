@@ -185,10 +185,31 @@ fn read_subagents(dir: &std::path::Path, id: &str) -> Vec<String> {
     out
 }
 
-/// How long the session-name map is reused (seconds). A name is fixed for the life of
-/// a session (it changes only when one starts, ends, or is renamed), so re-reading the
-/// directory on every ~1 s poll would be pointless I/O.
-const SESSION_NAMES_TTL: i64 = 5;
+/// How long the session-fact map is reused (seconds). This was 5 s when it carried only
+/// the name — a name is fixed for the life of a session, so re-reading the directory every
+/// poll would have been pointless I/O. Decision 067 added `status` to the same record, and
+/// that changes on every turn boundary: the whole point is that an interrupted turn greys
+/// its light *immediately*, so the read now happens at poll rate. It is a handful of small
+/// JSON files in one directory — the same shape of read the bar already does every second
+/// for the status files themselves.
+const SESSION_FACTS_TTL: i64 = 1;
+
+/// What Claude Code records about one of its own live sessions, in the per-process file it
+/// keeps at `~/.claude/sessions/<pid>.json`.
+#[derive(Clone, Debug, Default)]
+struct ClaudeFact {
+    /// The host's own name for the session ("agentstatus-5b"), for the tooltip (decision 053).
+    name: String,
+    /// What the session is doing *right now*, as Claude Code itself sees it. Observed values
+    /// on 2.1.227: `busy` (burning a turn), `waiting` (stopped to ask the user), `idle` (at
+    /// the prompt), `shell` (dropped to a shell). Empty when the key is absent, which is the
+    /// case for every Claude Desktop session — those report no status at all.
+    status: String,
+    /// When `status` was last written, in **milliseconds**. This is what makes the reconcile
+    /// safe: it says whether Claude Code's answer is newer than the hook event the light was
+    /// drawn from, so a stale answer can never overrule an observed one.
+    status_updated_ms: i64,
+}
 
 /// Claude Code's own name for each session, from the per-process record it writes at
 /// startup (~/.claude/sessions/<pid>.json — `sessionId`, `name`, `nameSource`). A
@@ -197,7 +218,7 @@ const SESSION_NAMES_TTL: i64 = 5;
 /// own name instead. Verified present for every live session on Claude Code 2.1.200
 /// and 2.1.223. Returns empty when the directory is missing or unreadable — the
 /// tooltip then just shows the folder, as before.
-fn claude_session_names() -> std::collections::HashMap<String, String> {
+fn claude_session_facts() -> std::collections::HashMap<String, ClaudeFact> {
     let home = std::env::var("HOME").unwrap_or_default();
     let dir = std::path::PathBuf::from(home).join(".claude").join("sessions");
     let mut map = std::collections::HashMap::new();
@@ -208,26 +229,65 @@ fn claude_session_names() -> std::collections::HashMap<String, String> {
         let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
         let id = v.get("sessionId").and_then(|x| x.as_str()).unwrap_or("");
-        let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("");
-        if !id.is_empty() && !name.is_empty() {
-            map.insert(id.to_string(), name.to_string());
+        if id.is_empty() {
+            continue;
         }
+        map.insert(
+            id.to_string(),
+            ClaudeFact {
+                name: v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                status: v.get("status").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                status_updated_ms: v
+                    .get("statusUpdatedAt")
+                    .and_then(|x| x.as_i64())
+                    .unwrap_or(0),
+            },
+        );
     }
     map
 }
 
-/// `claude_session_names` behind a TTL cache (same pattern as `cursor_facts`).
-fn session_names(now: i64) -> std::collections::HashMap<String, String> {
-    type Cache = std::sync::Mutex<(i64, std::collections::HashMap<String, String>)>;
+/// `claude_session_facts` behind a TTL cache (same pattern as `cursor_facts`).
+fn session_facts(now: i64) -> std::collections::HashMap<String, ClaudeFact> {
+    type Cache = std::sync::Mutex<(i64, std::collections::HashMap<String, ClaudeFact>)>;
     static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(|| std::sync::Mutex::new((0, Default::default())));
     let Ok(mut guard) = cache.lock() else {
         return Default::default();
     };
-    if now - guard.0 >= SESSION_NAMES_TTL {
-        *guard = (now, claude_session_names());
+    if now - guard.0 >= SESSION_FACTS_TTL {
+        *guard = (now, claude_session_facts());
     }
     guard.1.clone()
+}
+
+/// Whether a green light should be forced grey because Claude Code itself says the session
+/// is no longer working (decision 067).
+///
+/// The hook can only write `idle` from a `Stop` event, so **any** turn that ends without one
+/// leaves the light green forever — a turn the user interrupted with Ctrl-C or Esc being the
+/// everyday case, a dropped end-of-life event (the observed 95-minute stuck green light) the
+/// pathological one. Claude Code tracks the same fact independently, so the bar asks instead
+/// of inferring — the #048 / #063 shape, applied to Claude Code's own hosts.
+///
+/// Two guards keep it from ever inventing a grey light (UI Principle #4):
+///   * **positive evidence only** — the session must actually say `idle`. An absent status
+///     (every Claude Desktop session), an unreadable record, or a session Claude Code does
+///     not list changes nothing, so the failure mode is the pre-067 behaviour.
+///   * **the answer must be newer than the light** — `statusUpdatedAt` (ms) has to fall in a
+///     strictly later second than the hook event that drew the light, so anything the hook
+///     actually observed wins over a stale answer. Strictly later, not merely greater,
+///     because the hook stamps whole seconds (`date +%s`): within one shared second the two
+///     clocks cannot be ordered, and the tie has to go to the hook. Costs up to 1 s of extra
+///     latency to be sure a green light is never grey for a poll at the start of a turn.
+///
+/// `shell` is deliberately **not** treated as idle. It was observed on a live session for ten
+/// unbroken minutes and plainly is not a running turn, but what produces it has not been
+/// confirmed on this version, and Guideline #4 does not spend a lying light on a guess.
+fn turn_ended(fact: Option<&ClaudeFact>, light_updated_at: i64) -> bool {
+    fact.is_some_and(|f| {
+        f.status == "idle" && f.status_updated_ms >= (light_updated_at + 1) * 1000
+    })
 }
 
 /// Whether the Cursor app is alive. Cursor sessions are NOT tracked by the
@@ -416,7 +476,7 @@ fn list_sessions() -> Vec<SessionStatus> {
     } else {
         cursor_facts(&cursor_ids, now)
     };
-    let names = session_names(now);
+    let claude = session_facts(now);
     // Claude Code's own view of its live CLI sessions, consulted only when the bar actually
     // has one — it costs a subprocess, so a machine with no terminal sessions never pays.
     let cli_live = if files
@@ -516,6 +576,7 @@ fn list_sessions() -> Vec<SessionStatus> {
                 continue;
             }
             let mut state = v.get("state").and_then(|x| x.as_str()).unwrap_or("idle").to_string();
+            let mut detail = v.get("detail").and_then(|x| x.as_str()).unwrap_or("").to_string();
             // Reconcile a background agent's light against Claude Code's own job state
             // (decision 063), the #048 pattern applied to `--bg` jobs: the bar does not infer
             // what a silent job is doing, it asks. Only an `idle` light is touched, so
@@ -530,6 +591,37 @@ fn list_sessions() -> Vec<SessionStatus> {
                 {
                     state = next.to_string();
                 }
+            }
+            // Grey a green light whose turn Claude Code says is over (decision 067). The
+            // everyday case is a turn the user interrupted with Ctrl-C or Esc: the turn ends,
+            // the session returns to the prompt, and no `Stop` fires — so the hook, whose only
+            // route to `idle` is `Stop`, leaves the light green indefinitely. See `turn_ended`
+            // for the two guards that keep this from ever inventing a grey light.
+            //
+            // Background agents are excluded: their `status` is `idle` between turns even
+            // while the job is alive and working, so it does not mean the same thing there —
+            // what a `--bg` light shows is decided by decisions 063 and 065 from `state`.
+            // Claude Desktop is excluded by the data rather than by a rule: it writes no
+            // `status`, so `turn_ended` reads no evidence and changes nothing.
+            let is_background = cli_live
+                .as_ref()
+                .and_then(|facts| facts.get(id.as_str()))
+                .is_some_and(|f| f.kind == "background");
+            if ide != "cursor"
+                && state == "running"
+                && !is_background
+                && turn_ended(claude.get(&id), updated_at)
+            {
+                state = "idle".to_string();
+                // Grey, and specifically *not* the white "done" light. The frontend reads an
+                // idle light carrying a `detail` as a finished turn with output to review
+                // (decisions 014/050), and `detail` here is whatever the last tool event wrote
+                // ("$ sleep 90") — so leaving it would raise an attention light on a session
+                // the user is by definition already looking at, describing a tool call that was
+                // cancelled. `detail` means one thing, the wrap-up message from `Stop`, and an
+                // interrupted turn has none, so the honest value is empty. The `task` line (the
+                // prompt) survives, which is the part still worth reading.
+                detail.clear();
             }
             let mut cursor_subs: Option<Vec<String>> = None;
             // Reconcile Cursor lights against Cursor's own record (decision 048). Cursor's
@@ -604,7 +696,7 @@ fn list_sessions() -> Vec<SessionStatus> {
             let name = if ide == "cursor" {
                 facts.as_ref().and_then(|f| f.get(&id)).map(|f| f.name.clone()).unwrap_or_default()
             } else {
-                names.get(&id).cloned().unwrap_or_default()
+                claude.get(&id).map(|f| f.name.clone()).unwrap_or_default()
             };
             // Which application the user would be taken to — resolved here rather than in
             // the frontend because only the backend can walk a CLI session's process tree
@@ -618,7 +710,7 @@ fn list_sessions() -> Vec<SessionStatus> {
                 name,
                 updated_at,
                 task: v.get("task").and_then(|x| x.as_str()).unwrap_or("").to_string(),
-                detail: v.get("detail").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                detail,
                 ide: ide.to_string(),
                 app,
                 subagents,
@@ -2281,9 +2373,78 @@ mod tests {
     #[test]
     #[ignore]
     fn dump_session_names() {
-        for (id, name) in super::claude_session_names() {
-            println!("{id} -> {name}");
+        for (id, f) in super::claude_session_facts() {
+            println!("{id} -> name={} status={} statusUpdatedAt={}", f.name, f.status, f.status_updated_ms);
         }
+    }
+
+    /// For a "the light is stuck green" report: print, per light, what the hook wrote, what
+    /// Claude Code says, and whether decision 067's reconcile fires. A stuck green light shows
+    /// as `hook=running` + `status=idle` + `reconcile=GREY`; if it says `reconcile=-` while
+    /// `status=idle`, the guard declined and the two timestamps printed say why.
+    ///
+    ///   cargo test -- --ignored --nocapture dump_turn_reconcile
+    #[test]
+    #[ignore]
+    fn dump_turn_reconcile() {
+        let facts = super::claude_session_facts();
+        let dir = super::sessions_dir();
+        let Ok(entries) = std::fs::read_dir(&dir) else { return };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+            let hook = v.get("state").and_then(|x| x.as_str()).unwrap_or("-");
+            let upd = v.get("updated_at").and_then(|x| x.as_i64()).unwrap_or(0);
+            let f = facts.get(id);
+            let greys = hook == "running" && super::turn_ended(f, upd);
+            println!(
+                "{:.8}  hook={:<8} at={}  status={:<7} at={}  reconcile={}",
+                id,
+                hook,
+                upd,
+                f.map(|f| f.status.as_str()).unwrap_or("(none)"),
+                f.map(|f| f.status_updated_ms).unwrap_or(0),
+                if greys { "GREY" } else { "-" },
+            );
+        }
+    }
+
+    fn cfact(status: &str, ms: i64) -> super::ClaudeFact {
+        super::ClaudeFact { name: String::new(), status: status.into(), status_updated_ms: ms }
+    }
+
+    /// Decision 067: the two guards on greying a green light from Claude Code's own status.
+    #[test]
+    fn interrupted_turn_greys_its_light() {
+        // The case this exists for, in the numbers actually measured off the live Ctrl-C that
+        // motivated it (session b7a8404f): last hook event at 1786653780, user interrupts, and
+        // Claude Code writes `idle` 3.84 s later. No `Stop` ever fires.
+        assert!(super::turn_ended(Some(&cfact("idle", 1_786_653_783_840)), 1_786_653_780));
+        // The same turn 20 s earlier, mid-run: the light must stay green.
+        assert!(!super::turn_ended(Some(&cfact("busy", 1_786_653_761_098)), 1_786_653_773));
+        // Positive evidence only. `busy` and `waiting` are the session still working or still
+        // asking; an absent status is every Claude Desktop session; no record at all is a host
+        // that reports nothing. None of them may grey a light.
+        assert!(!super::turn_ended(Some(&cfact("busy", 104_000)), 100));
+        assert!(!super::turn_ended(Some(&cfact("waiting", 104_000)), 100));
+        assert!(!super::turn_ended(Some(&cfact("", 104_000)), 100));
+        assert!(!super::turn_ended(None, 100));
+        // `shell` is not idle here — observed live, but its cause is unconfirmed (Guideline #4).
+        assert!(!super::turn_ended(Some(&cfact("shell", 104_000)), 100));
+        // The answer must be newer than the light, or a turn that has just started would be
+        // grey for a poll: the prompt lands at t=100 and Claude Code's last word is still the
+        // `idle` it wrote at t=97.
+        assert!(!super::turn_ended(Some(&cfact("idle", 97_000)), 100));
+        // Same second = not newer. The hook stamps whole seconds, so an `idle` written at
+        // t=100.9 cannot be ordered against a hook event stamped t=100, and the tie goes to
+        // the hook — the light stays green until Claude Code says so in a later second.
+        assert!(!super::turn_ended(Some(&cfact("idle", 100_900)), 100));
+        assert!(super::turn_ended(Some(&cfact("idle", 101_000)), 100));
     }
 
     /// Print the application every current light is attributed to — the exact string the
