@@ -65,16 +65,17 @@
 | 054 | 2026-08-13 | **Claude Code in the terminal (`cli`) and in Claude Desktop (`claude-desktop`) become first-class hosts** — both already ran the hook (all three surfaces read the same `~/.claude/settings.json`), so the signal layer needed nothing; they were invisible because everything non-Cursor was tagged `vscode` and therefore lock-pruned. `report.sh` now tags the host from `$CLAUDE_CODE_ENTRYPOINT` and records the owning `claude` pid; the app prunes those hosts by pid liveness instead of IDE locks, and clicks focus the terminal tab (Terminal.app, by `tty`) or Claude. Claude Desktop's **normal chat threads are out of scope** — no hook mechanism exists and no local state is observable | Accepted |
 | 053 | 2026-08-12 | **Tooltip identifies a light by the host's own session name**, not the project folder alone — the bar's first line was the folder basename, so two sessions in one folder had byte-identical tooltips. Claude Code names every session in `~/.claude/sessions/<pid>.json` (`sessionId`, `name`, `nameSource`); Cursor names every composer in `composerData.name`, already queried by #048. The app joins both by session id and the tooltip head becomes `folder · name` ("AgentStatus · agentstatus-5b"), dropping the name when it is absent or repeats the folder. App-side read only — no hook change, no status-file change, and no transcript is read (Guideline #5). Rejected: an LLM-style session title (no `summary`/`title` entry exists in any transcript on the installed 2.1.200 — nothing to read) and recording the first prompt as a title (a schema change for something the `task` line already covers) | Accepted |
 | 055 | 2026-08-13 | **A Ghostty light focuses the exact tab (and split)** — #054 left Ghostty at app-level focus because it publishes no tty, so a click brought Ghostty forward on whatever tab was last active. Two things changed since: Ghostty 1.3 ships an AppleScript dictionary (`window` → `tab` → `terminal` surface, each with a title, plus a `focus` command that selects the surface and fronts its window), and Claude Code 2.1.231 writes a session title into the terminal title bar, stored as an `ai-title` record in the transcript — which #053 checked for on 2.1.223 and correctly found absent. The app reads the last `ai-title` for the session and runs one `osascript` that focuses the surface whose title **contains** it (the leading glyph is the activity spinner), acting only on an **exactly one** match. No `ai-title`, no hit, several hits, Ghostty < 1.3, or a refused Automation grant all fall back to fronting the app — the old behaviour, never a wrong tab (UI Principle #4). Reading the transcript is a flagged exception to Guideline #5: only the title is extracted, nothing is stored. No hook change, no schema change | Accepted |
-| 056 | 2026-08-13 | **A light that names no session does nothing, and a background agent opens in a tab** — a pre-warmed spare's light was clicked inside #054's 20s grace, and the click ran `open -na Ghostty` (a *second instance*) on `claude attach <spare>`; `attach` on an id with no live job does not fail but lands in Claude Code's **agent view**, so the user got a new window listing every session. Underneath it, a latent defect: `zsh -lc` is non-interactive, never reads `.zshrc`, and that is where `~/.local/bin` is set — so #054's `claude agents --json` returned nothing whenever the bar was launched from Login Items rather than a shell, silently disabling **all** CLI reconciliation (fail-open). Fixes: resolve `claude` by absolute path and run it with no shell; a click on a CLI light Claude Code does not list does nothing; an unlisted light whose pid owns no terminal is dropped on sight (a pid *with* a tty, and a pre-054 file with no pid, keep the 20s grace); and a background agent opens in a **tab of the running Ghostty** via 1.3's scripting dictionary, which also removes #055's two-instances limitation at the source | Accepted |
-| 057 | 2026-08-13 | **A finished background agent's light retires after 5 minutes** — lights lingered for sessions with "no currently active tab or terminal anywhere". A `--bg` job has no terminal by construction and Claude Code keeps its process alive and listed after the work is done, so #054's pid-liveness rule never fired and #056's unlisted rule never applied; the lights sat until the two-hour backstop. New rule (g): retire a `cli` light once Claude Code reports it `kind: background` + `status: idle` (a new `status` field on `CliFact`) **and** it has been hook-silent for `CLI_BG_DONE_SECS` = 5 min — a clock rather than a category, so "just finished" stays readable while an abandoned job stops taking a slot. Never applied to a `blocked` or `error` light: those are the states the user must act on and both go quiet by nature, so a silence timer would delete exactly the wrong ones. Interactive sessions are untouched — verified live that an idle-38-minute terminal session in an open tab keeps its light while two background ghosts went within one poll | Accepted |
+| 064 | 2026-08-13 | **A light that names no session does nothing, and a background agent opens in a tab** — a pre-warmed spare's light was clicked inside #054's 20s grace, and the click ran `open -na Ghostty` (a *second instance*) on `claude attach <spare>`; `attach` on an id with no live job does not fail but lands in Claude Code's **agent view**, so the user got a new window listing every session. Underneath it, a latent defect: `zsh -lc` is non-interactive, never reads `.zshrc`, and that is where `~/.local/bin` is set — so #054's `claude agents --json` returned nothing whenever the bar was launched from Login Items rather than a shell, silently disabling **all** CLI reconciliation (fail-open). Fixes: resolve `claude` by absolute path and run it with no shell; a click on a CLI light Claude Code does not list does nothing; an unlisted light whose pid owns no terminal is dropped on sight (a pid *with* a tty, and a pre-054 file with no pid, keep the 20s grace); and a background agent opens in a **tab of the running Ghostty** via 1.3's scripting dictionary, which also removes #055's two-instances limitation at the source | Accepted |
+| 065 | 2026-08-13 | **A finished background agent's light retires after 5 minutes** — lights lingered for sessions with "no currently active tab or terminal anywhere". A `--bg` job has no terminal by construction and Claude Code keeps its process alive and listed after the work is done, so #054's pid-liveness rule never fired and #064's unlisted rule never applied; the lights sat until the two-hour backstop. New rule (g): retire a `cli` light once Claude Code reports it `kind: background` + `status: idle` (a new `status` field on `CliFact`) **and** it has been hook-silent for `CLI_BG_DONE_SECS` = 5 min — a clock rather than a category, so "just finished" stays readable while an abandoned job stops taking a slot. Never applied to a `blocked` or `error` light: those are the states the user must act on and both go quiet by nature, so a silence timer would delete exactly the wrong ones. Interactive sessions are untouched — verified live that an idle-38-minute terminal session in an open tab keeps its light while two background ghosts went within one poll | Accepted |
 | 061 | 2026-08-13 | **A click reaches a background agent where it already is** — "the ghostty light kept opening a new tab": a background session has no terminal to focus, so the click attaches, and nothing asked whether that agent was already open. Reproduced through `focus_session` itself: 2 -> 3 -> 4 surfaces, one per click. #055's matcher could not be reused — an attached agent's tab carries the same session title as every other view of it, so three surfaces matched and #055's exactly-one rule would have declined and attached again. `focus_ghostty_surface` gains `require_unique`, set **true** for an interactive light (the alternative is fronting the app, so a wrong tab is worse than no tab) and **false** for a background one (the alternative is creating another terminal, so any existing surface wins). `attach_background_agent` now focuses an existing surface, else fronts Ghostty when `pgrep` finds an attach already running for that id, else opens the tab. Also records a **false verification** that nearly shipped: the first check piped a non-compiling test to /dev/null, so the clicks never ran and the unchanged surface count read as a pass | Accepted |
-| 062 | 2026-08-13 | **A surface whose title *ends with* the session title beats one that merely contains it** — "sometimes clicking the light for a ghostty session does nothing". Measured every light through `focus_session` with a decoy focus set first: a click lands exactly when #055's title match finds its surface, and does nothing when it declines — the fallback is `activate Ghostty`, which changes nothing on screen when Ghostty is already frontmost, so a declined match and a dead click look identical. #055 matched with `contains` **and** required uniqueness, so an unrelated surface whose title merely spanned the session title counted as a second hit and killed the click. Claude Code writes the title as a trailing run (`◑ <title>`), so matching now has two grades: **strong** (ends with — several such surfaces are several views of the same session, so the first is right by construction) and **weak** (contains — may be something else, so still must be unambiguous). Not fixable: a terminal used only to start a background agent has no `ai-title` of its own and is titled with that agent's title; `working directory` is identical across all surfaces, `parkedJobId` is stale, and Ghostty exposes no tty/pid per surface — the README now states this plainly | Accepted |
+| 066 | 2026-08-13 | **A surface whose title *ends with* the session title beats one that merely contains it** — "sometimes clicking the light for a ghostty session does nothing". Measured every light through `focus_session` with a decoy focus set first: a click lands exactly when #055's title match finds its surface, and does nothing when it declines — the fallback is `activate Ghostty`, which changes nothing on screen when Ghostty is already frontmost, so a declined match and a dead click look identical. #055 matched with `contains` **and** required uniqueness, so an unrelated surface whose title merely spanned the session title counted as a second hit and killed the click. Claude Code writes the title as a trailing run (`◑ <title>`), so matching now has two grades: **strong** (ends with — several such surfaces are several views of the same session, so the first is right by construction) and **weak** (contains — may be something else, so still must be unambiguous). Not fixable: a terminal used only to start a background agent has no `ai-title` of its own and is titled with that agent's title; `working directory` is identical across all surfaces, `parkedJobId` is stale, and Ghostty exposes no tty/pid per surface — the README now states this plainly | Accepted |
 | 056 | 2026-08-13 | **Re-adding Codex and Gemini starts with observation, not with restoring the deleted code** — both were removed in #040 as unverified, so a re-add repeats the observe-then-build sequence using the existing logger tooling, and must first gate the #040 cleanup (`install.rs:80-121`, `setup.mjs:73-82`) that would otherwise delete the new entries on the next launch. Codex is verifiable today (the `openai.chatgpt` VS Code extension is installed) at ~2–2.5 days; Gemini is **blocked on which product is meant** — Antigravity IDE, Gemini CLI, or Antigravity CLI are three different config paths and event sets, and only the IDE is installed here. Only Codex can reach orange; **none of the three can reach red** | Proposed — blocked on user |
 | 057 | 2026-08-13 | **Token/cost tracking: data exists for Claude Code only, and the maintenance is the real cost** — transcripts carry per-call `message.usage`/`model`, but hook payloads carry nothing, no aggregated local source exists, and Cursor stores context-window fullness with no cost at all, so any version is Claude-only. Options: (1) defer, (2) last-turn cost in the tooltip ~½–1 day, (3) cumulative cost + settings-panel readout ~2–3 sessions. Constraints: the read goes app-side, never in the hook (reversing #040 / Guideline #3); it is a schema change needing approval; nothing numeric goes on the bar (UI Principle #1); the price table must be hardcoded and rots on every model release | Proposed — awaiting go/no-go |
 | 058 | 2026-08-13 | **A fallback view for high session counts** — the one-light-per-session bar is the project's one unmatched design property (every competitor aggregates to a single icon), but it grows at `8 + 23N` px, so 30 sessions is a 698 px bar. Five options drafted (folder grouping, overflow chip, grid wrap, auto-shrink, attention-only); recommendation is the **overflow chip** bounded by urgency sort with folder grouping as an orthogonal toggle, auto-shrink rejected outright for fighting UI Principle #1. Must be a **threshold, not a mode switch**, so per-session lights stay the default at normal counts | Proposed — awaiting choice |
 | 059 | 2026-08-13 | **Hook-only is a real risk for the core path, but the fix is one guarded reconcile, not a second architecture** — six *observed* failures (hooks not executing at all, events that never fire, dropped end-of-life events, a 95-minute stuck green light), plus two silent undetectable ones (hook registration disappearing; `jq` missing on the DMG path, which `install.sh:11` guards and `install.rs` does not). Cursor already has a state reconcile (#048/#052) and CLI/Desktop have pid liveness, but **Claude Code has no state reconcile at all** — while `claude agents --json` and `~/.claude/sessions/<pid>.json` both carry `status`/`statusUpdatedAt` that the app already reads and discards. Fix mirrors #048's guarded shape. **Unverified: whether a VS Code session reports `status`** — confirm before writing code | Proposed — needs live check |
 | 060 | 2026-08-13 | **The tooltip names the application a session runs in** — a light said which project and which session but never which app, so a user reading `AgentStatus · agentstatus-5b` could not tell a VS Code tab from a Ghostty split from Claude Desktop before clicking it. `list_sessions` now returns an `app` string and the tooltip head becomes `folder · name (app)`. For the IDE hosts it is the `ide` field spelled the way the app is named on screen; for a terminal session it is the **emulator**, walked from the owning `claude` pid up to the first app bundle (`terminal_app_of`, already written for click-to-focus) and memoized per session because the tooltip is rebuilt every 1 s poll. A detached background agent is named `background agent`, never by the `ClaudeCode` launcher the walk would find — decided the same way `focus_session` routes a click, so the tooltip and the click agree (UI Principle #4). App-side only: no hook change, no status-file change | Accepted |
-| 062 | 2026-08-13 | **A light keeps the slot it arrived in** — reported live: the lights kept swapping places. The strip was re-sorted on every 1 s poll by `cwd`, then by session id, so a new session in a folder that already had lights landed at a position decided by its random uuid and pushed every later light along, and a session that `cd`'d changed groups mid-life. With a background agent per `/stop` and pre-warmed spares appearing and vanishing (#056, #057), the bar reshuffled constantly and a light moved out from under the pointer between seeing it and clicking it. Ordering is now **arrival**: a session takes the next free slot the first time the bar sees it and holds it until it is gone, when the gap closes; the first poll after a launch is laid out in the backend's deterministic (label, id) order. The settings segment becomes **Stable | Urgency** (a stored `window` reads as stable), so folder grouping is dropped — it never separated the common case of several sessions in one repo, and the folder is in the tooltip. Frontend-only: no hook change, no status-file change, no Rust change | Accepted |
+| 062 | 2026-08-13 | **A light keeps the slot it arrived in** — reported live: the lights kept swapping places. The strip was re-sorted on every 1 s poll by `cwd`, then by session id, so a new session in a folder that already had lights landed at a position decided by its random uuid and pushed every later light along, and a session that `cd`'d changed groups mid-life. With a background agent per `/stop` and pre-warmed spares appearing and vanishing (#064, #065), the bar reshuffled constantly and a light moved out from under the pointer between seeing it and clicking it. Ordering is now **arrival**: a session takes the next free slot the first time the bar sees it and holds it until it is gone, when the gap closes; the first poll after a launch is laid out in the backend's deterministic (label, id) order. The settings segment becomes **Stable | Urgency** (a stored `window` reads as stable), so folder grouping is dropped — it never separated the common case of several sessions in one repo, and the folder is in the tooltip. Frontend-only: no hook change, no status-file change, no Rust change | Accepted |
+| 063 | 2026-08-13 | **A background agent's light says what Claude Code says: green while it works, orange while it waits** — a `--bg` job that stops to ask a question fires `Stop`, not `PermissionRequest`, so the hook writes `idle` and #065's "never retire a `blocked` or `error` light" guard never matched the case it was written for: a waiting agent lost its light after five minutes and got it back only when the answer arrived. Claude Code's own job record carries `state` (`working`/`done`/`blocked`) next to the `status` (`busy`/`idle`) #065 already reads, so a bg light whose hook last wrote `idle` is reconciled from it — `status: busy` → green, `state: blocked` → orange — and a `blocked` job is never retired. Only an `idle` light is touched, so anything the hook actually observed still wins; `done` and stale `working` jobs still retire at five minutes | Accepted |
 
 ---
 
@@ -945,7 +946,7 @@ scripted (TCC is user-controlled); it's documented in `install.sh` output as opt
 
 ---
 
-### 022 — Bar position persistence, all-monitor drag clamp + magnetism, Reload button, installer auto-restart (2026-07-06)
+## 022 — Bar position persistence, all-monitor drag clamp + magnetism, Reload button, installer auto-restart (2026-07-06)
 
 **Context.** Four display/workflow gaps surfaced while iterating: (a) even padding — the `+4px`
 side padding that pills-out a horizontal row left the sides fatter than the top/bottom in vertical
@@ -1004,7 +1005,7 @@ quit/relaunch. Multi-monitor crossing/magnetism not yet observed on a real multi
 
 ---
 
-### Decision 023 — Bar opacity slider
+## 023 — Bar opacity slider
 
 **Date:** 2026-07-06 · **Status:** Accepted
 
@@ -1270,7 +1271,7 @@ vanish within one poll.
 
 ---
 
-### Decision 028 — Quit button in the settings panel
+## 028 — Quit button in the settings panel
 
 **Context.** AgentStatus runs as a macOS **Accessory** app (`ActivationPolicy::Accessory`)
 so it has no Dock icon and no application menu — the two places macOS normally puts a Quit
@@ -3344,7 +3345,7 @@ host that can show an attention state at all.
 
 ---
 
-## 056 — A light that names no session does nothing, and a background agent opens in a tab of the Ghostty you already have
+## 064 — A light that names no session does nothing, and a background agent opens in a tab of the Ghostty you already have
 
 **Date:** 2026-08-13
 **Status:** Accepted
@@ -3391,7 +3392,7 @@ from a GUI app, and it is not:
 | Launched from a shell (`./install.sh` relaunches this way) | works — inherits the developer's PATH | works |
 | Launched from Login Items / Finder (`PATH=/usr/bin:/bin:/usr/sbin:/sbin`) | **command not found** | works |
 
-So `cli_facts_query` — the query decisions 054 and 056 both rest on — returned `None` for every
+So `cli_facts_query` — the query decisions 054 and 064 both rest on — returned `None` for every
 user who launches the bar the way the README tells them to, and being fail-open it did so
 silently: no CLI light was ever reconciled, and no spare was ever pruned. It only ever worked
 in development because a shell-launched app inherits the developer's PATH. This is why the
@@ -3466,7 +3467,7 @@ Four changes, all app-side. No hook change, no status-file schema change.
 
 ---
 
-## 057 — A finished background agent's light retires; a session with a terminal keeps its own
+## 065 — A finished background agent's light retires; a session with a terminal keeps its own
 
 **Date:** 2026-08-13
 **Status:** Accepted
@@ -3538,7 +3539,7 @@ anything quiet. `cargo build --release` clean with no new warnings; `cargo test 
 2 passed, 10 ignored; `cli_liveness_pruning` still passes.
 
 **Caveat on the reproduction:** `0e984070` was still alive partly because a diagnostic
-`claude attach` run during decision 056's investigation woke it (`Waking session 0e984070` in
+`claude attach` run during decision 064's investigation woke it (`Waking session 0e984070` in
 the daemon log). The rule was therefore verified against `a011978b` as well, which no
 diagnostic ever touched, and against the general shape rather than that one light.
 
@@ -3628,10 +3629,11 @@ Option C. `list_sessions` returns a new `app` field and the tooltip head becomes
 **Date:** 2026-08-13
 **Status:** Accepted
 
-> **Numbering note.** This log currently has **two 056s and two 057s**: decisions written by
-> concurrent sessions in the same repository, each picking "the next number" from a file the
-> other had not written to yet. This entry takes 061 because 060 was the highest in the file.
-> The duplicates are recorded, not silently renumbered — see the end of this entry.
+> **Numbering note.** This entry took 061 because 060 was the highest number in the file when
+> it was written. Three numbers were duplicated by concurrent sessions around this point —
+> 056, 057 and 062 each named two decisions. That was resolved afterwards by renumbering this
+> session's three entries to **064**, **065** and **066**; the other session's kept the
+> original numbers. See the end of this entry.
 
 ### Context
 
@@ -3644,7 +3646,7 @@ terminal per click.
 
 The cause is that the attach path had no memory. A `kind: background` session has no terminal
 to focus, so decision 054 routes its click to `claude attach`, and nothing ever asked whether
-that agent was *already* open somewhere. Decision 056 made this far more visible by turning
+that agent was *already* open somewhere. Decision 064 made this far more visible by turning
 "a whole second Ghostty instance" into "a tab in the window you are looking at" — the same
 defect, now stacking up in front of the user.
 
@@ -3707,17 +3709,25 @@ is not a verification.
 Three sessions were editing this repository at once. Two effects, both recorded rather than
 quietly cleaned up:
 
-1. **Duplicate numbers.** 056 is both "Re-adding Codex and Gemini" and "A light that names no
-   session does nothing"; 057 is both "Token/cost tracking" and "A finished background agent's
-   light retires". Each session appended after reading the file before the other's append.
+1. **Duplicate numbers.** Three of them, in the end: 056 was both "Re-adding Codex and Gemini"
+   and "A light that names no session does nothing"; 057 was both "Token/cost tracking" and
+   "A finished background agent's light retires"; 062 was both "A light keeps the slot it
+   arrived in" and "A surface whose title ends with the session title". Each session appended
+   after reading the file before the other's append, so each honestly believed it had taken
+   the next free number.
 2. **Commits d0d07f8 and 970aa75 swept in another session's uncommitted work**, because they
    staged with `git add -A` in a shared tree. The other session's decisions 056–059 are in
-   those commits despite being unrelated to them.
+   those commits despite being unrelated to them — and the reverse happened too: 5a6cef1
+   swallowed this session's 061. `git add -A` is the wrong verb in a shared tree; stage
+   explicit paths.
 
-Renumbering is deliberately **not** done here: the duplicated entries are referenced from code
-comments and commit messages, and rewriting them while another session is actively editing the
-same files would collide again. It needs a single session with the tree to itself. Until then,
-cite these two by title, not by number.
+**Resolved.** The duplicates were renumbered in a single coordinated pass: the entries written
+by *this* session became **064**, **065** and **066**, and the other session's kept 056, 057
+and 062, since those appear first in the file in all three cases. The sessions agreed the
+split over the peer-messaging channel first, which is also how the in-flight 063 got its
+references updated in the same pass instead of being broken by it. Every reference — in this
+log, in `NEXT_STEPS.md`, and in `lib.rs` comments — was rewritten with it. Commit messages
+still cite the old numbers; they are immutable history and are left alone.
 
 ---
 
@@ -3750,7 +3760,7 @@ Both halves move lights that did nothing:
 - **`cwd` is not fixed for a session.** The hook writes the payload's `cwd` on every event,
   so an agent that `cd`s changes its own sort key and jumps to another group.
 
-Decisions 056 and 057 made this constant rather than occasional: Claude Code starts a
+Decisions 064 and 065 made this constant rather than occasional: Claude Code starts a
 background agent per `/stop` and pre-warms spares, so sessions appear and disappear all day.
 The result is a light moving out from under the pointer between seeing it and clicking it,
 which attacks the two properties the bar exists for — glanceability and "the thing you look
@@ -3807,7 +3817,7 @@ a few sessions starting and finishing. The bar's own display cannot be screensho
 
 ---
 
-## 062 — A surface whose title *ends with* the session title beats one that merely contains it
+## 066 — A surface whose title *ends with* the session title beats one that merely contains it
 
 **Date:** 2026-08-13
 **Status:** Accepted
@@ -3886,3 +3896,105 @@ leaving it as a surprise.
 - `cargo build --release` clean, no new warnings; `cargo test --release` 2 passed, 11 ignored.
 - Every surface created for these experiments was removed; Ghostty was returned to the three
   real session surfaces it started with.
+
+---
+
+## 063 — A background agent's light says what Claude Code says: green while it works, orange while it waits
+
+**Date:** 2026-08-13
+**Status:** Accepted
+
+### Context
+
+Investigating "which session is `agentstatus-6e`" turned up a light that was missing rather
+than mislabelled, and the trail ended in decision 065.
+
+A `--bg` job keeps its own record in `~/.claude/jobs/<id>/state.json`, with every transition
+logged to `timeline.jsonl`. For `74dbc1ee`:
+
+```
+14:28:25  working  something happened and a new light appeared on my bar…
+15:08:00  done     diagnosed phantom lights: stale bg jobs, fixed pruning rules
+15:17:07  working  Inspecting Ghostty tabs after the user's clicks
+15:30:42  blocked  bug fixed & verified; awaiting sequencing decision on concurrent edits
+```
+
+So Claude Code has three words for a background job — `working`, `done`, `blocked` — and
+`blocked` means *it stopped and the ball is in the user's court*. `claude agents --json`
+carries it as `state`, next to the `status` (`busy`/`idle`) decision 065 already reads.
+
+`report.sh` cannot see any of that. It maps **hook events**, and `blocked` has exactly one
+source there: `PermissionRequest`. A background job that ends a turn to ask a question fires
+`Stop`, which writes `idle`. Decision 065's guard — "never retire a `blocked` or `error`
+light" — therefore never matched the case it was written for, because for a `--bg` job that
+case does not arrive as `blocked`.
+
+Measured live rather than reasoned about:
+
+| time | event | source |
+| --- | --- | --- |
+| 15:30:42 | job → `blocked`, awaiting the user's decision | `jobs/74dbc1ee/timeline.jsonl` |
+| 15:30:42 | `Stop` hook writes `state: "idle"` | `report.sh` event map |
+| ~15:35:42 | rule (g) matches → status file deleted, light gone | `CLI_BG_DONE_SECS` |
+| 15:41:33 | `agents --json` says `status: idle, state: blocked` — **no status file** | measured |
+| 15:42:59 | the user answers | timeline |
+| 15:45:31 | light returns, `running` | status file |
+
+**Seven minutes with no light on an agent that was waiting for an answer** — the exact miss
+UI Principle #2 exists to prevent, and it also took away the click target: a background
+light's click opens the session in a Ghostty tab (#064/#061), so no light means no way in.
+
+A second question from the same session — *"if these two are in a working state, why are they
+not green?"* — has a different answer, and it constrains the fix. `a011978b` and `fe137997`
+both reported `state: working` while doing nothing at all:
+
+| agent | started | CPU used | transcript last grew | job `tempo` | `status` |
+| --- | --- | --- | --- | --- | --- |
+| `74dbc1ee` | 14:22 | 6:13 | 15:58, 2.5 MB | `active` | **busy** |
+| `a011978b` | 14:28 | 1:00 | 14:28 — frozen 1h31m | `idle` | idle |
+| `fe137997` | 15:51 | — | 15:51, 2.4 KB — never used | `idle` | idle |
+
+`state` is what the job last *declared*: it is written `running` at spawn and only advances
+when something updates it, so a job that never starts sits at `working` forever. `status` is
+live. Driving the light off `state` alone would have put green on two dead jobs (UI Principle
+#4); driving retirement off `status` alone is what deleted the waiting one.
+
+### Decision
+
+Read both, and let each answer the question it can. `CliFact` gains `job_state` (the `state`
+field, already in the JSON the app fetches every 10 s), and two small pure functions decide:
+
+| `status` | `state` | light | retired by the 5-min timer? |
+| --- | --- | --- | --- |
+| `busy` | any | **running** (green) | no |
+| `idle` | `blocked` | **blocked** (orange) | **no** |
+| `idle` | `done` | as the hook wrote it | yes |
+| `idle` | `working` | as the hook wrote it | yes |
+
+Only a light whose own hook last wrote `idle` is reconciled, so `running`, `blocked` and
+`error` — anything a hook actually observed — always win, and interactive sessions are
+untouched by both halves (`kind == "background"` gates them).
+
+### Why this shape
+
+- **Orange keeps meaning one thing.** The invariant the user set for this change: an orange
+  light always says *this session is waiting on a decision from you*. `blocked` is the only
+  pair that produces it — `done` and `working` never do — and it is Claude Code's own word for
+  a job that stopped to ask, the same category as the permission prompt orange already means.
+  The one `blocked` that is *not* a wait is the instant a prompt is submitted, and that cannot
+  reach the bar: `UserPromptSubmit` writes `running`, and only an `idle` light is reconciled.
+- **Green is the live signal, not the declared one.** `status: busy` is computed per process;
+  it was the half that stayed true on all three jobs in the table above.
+- **065's cleanup survives intact.** `done` and stale `working` jobs still retire at five
+  minutes — verified against `fe137997`, which the new rule still marks retirable.
+- **The bar asks rather than infers**, the #048 pattern: a failed query reconciles nothing.
+
+### Verification
+
+- `bg_job_state_reconciliation` (new unit test, not live-gated) pins all four pairs plus the
+  interactive cases in both directions.
+- `dump_cli_facts` now prints the resolved light and retirability per session. Live, against
+  the seven sessions open at the time: `74dbc1ee` (busy/working) → `running`, not retirable;
+  `fe137997` (idle/working, never started) → unchanged and still retirable; all five
+  interactive sessions untouched.
+- `cargo build --release` clean, no new warnings; `cargo test --release` 3 passed, 11 ignored.

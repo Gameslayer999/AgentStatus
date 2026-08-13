@@ -116,12 +116,17 @@ a Cursor agent.
   rings off the bar.
 - **A ring pip** at the end of the bar counts the Cursor agents that wait for you and have
   no light of their own. Click the pip to open the next one in the queue.
+- **An orange light always means one thing: that session waits for you to decide.** It is a
+  permission prompt, a question, or a **background agent** that stopped to ask you something
+  and now waits for the answer. Click it to go there.
 - **A light goes away when the session does.** Close the tab, quit the editor, or type
   `exit`, and the light goes on the next check. A **background agent** has no terminal to
   close and Claude Code keeps it running after it finishes, so its light stays for five
   more minutes and then goes — long enough to see that it finished, short enough that
   yesterday's agents do not fill the bar. A light waiting on you (orange or red) is never
-  removed on a timer.
+  removed on a timer, so a background agent that waits for an answer keeps its light — and
+  its click — until you answer it. A background agent that works keeps a green light for as
+  long as it works, however quiet it is.
 - **Put the pointer on a light** to see the project, the session name, the application the
   session runs in, the task, and the current operation. The session name is the name the
   host gives the session — for example `agentstatus-5b` in Claude Code, or the name of the

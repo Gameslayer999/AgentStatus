@@ -48,7 +48,7 @@
   configuration`, `initial input`, `input text`) is non-functional in 1.2.x — all three report
   success and start nothing — so `-e` plus a second instance is the only working route.
   **CLI lights are now reconciled against `claude agents --json`** (throttled 10s, only when a
-  CLI light exists, fail-open — the #048 pattern). **Note (decision 056):** this query ran
+  CLI light exists, fail-open — the #048 pattern). **Note (decision 064):** this query ran
   through a login shell and therefore found nothing whenever the bar was launched from Login
   Items rather than a shell, so everything in this paragraph was inert for real users until
   056 resolved `claude` by absolute path. Two reasons: Claude Code 2.1.231 hosts
@@ -349,8 +349,21 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-08-13** — **A background agent that waits for you keeps its light, and one that works
+  is green (decision 063).** Traced from "which session is `agentstatus-6e`": a `--bg` job that
+  stops to ask a question fires `Stop`, so the hook writes `idle`, so the 5-minute retirement
+  guard ("never a `blocked` light") never matched — measured live, `74dbc1ee` sat waiting on an
+  answer with **no light at all for seven minutes**, which also removed the click that opens it
+  in a Ghostty tab. `CliFact` now also reads Claude Code's `state` (`working`/`done`/`blocked`),
+  which the JSON already carried: `status: busy` → green whatever the last hook said,
+  `state: blocked` → orange and never retired on a timer, `done` and stale `working` unchanged
+  and still retired at five minutes. Only a light whose hook last wrote `idle` is reconciled, so
+  orange still means exactly one thing — this session waits on your decision. Verified by a new
+  unit test over all four (`status`, `state`) pairs plus the interactive cases, and live against
+  the seven open sessions via `dump_cli_facts`, which now prints the resolved light.
+
 - **2026-08-13** — **Why a Ghostty light sometimes did nothing, and the half of it that is
-  fixable (decision 062).** Measured instead of guessed: every CLI light driven through
+  fixable (decision 066).** Measured instead of guessed: every CLI light driven through
   `focus_session` with a decoy focus set on an unrelated surface first, so a dead click showed
   as one. The pattern was exact — a click lands when decision 055's title match finds its
   surface and does nothing when it declines, because the fallback is `activate Ghostty`, which
@@ -376,7 +389,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   lights kept swapping places. `sortSessions()` re-ordered the whole strip every 1 s poll by
   `cwd` then session id — a random uuid, so a new session in a folder that already had lights
   landed in an arbitrary slot *between* them and pushed the rest along, and a session that
-  `cd`'d changed groups mid-life. #056/#057 made it constant rather than occasional (a
+  `cd`'d changed groups mid-life. #064/#065 made it constant rather than occasional (a
   background agent per `/stop`, plus pre-warmed spares), so a light moved out from under the
   pointer between seeing it and clicking it. Ordering is now **arrival**: a session takes the
   next free slot the first time the bar sees it and holds it until it is gone, when the gap
@@ -392,7 +405,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 - **2026-08-13** — **A click on a background agent reaches it where it already is (decision
   061).** Reported live: "the ghostty light kept opening a new tab." A `kind: background`
   session has no terminal to focus, so decision 054 routes its click to `claude attach`, and
-  nothing ever asked whether that agent was already open somewhere — decision 056 then made it
+  nothing ever asked whether that agent was already open somewhere — decision 064 then made it
   far more visible by turning "a second Ghostty instance" into "a tab in the window you are
   looking at". Reproduced through `focus_session` itself: **2 → 3 → 4** surfaces, one new
   terminal per click. Decision 055's matcher could not be reused as-is, because an attached
@@ -427,7 +440,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   on a real session of each (neither was open), and the tooltip on the packaged app after a
   rebuild via `./install.sh`.
 
-- **2026-08-13** — **A finished background agent's light now retires (decision 057).** Reported
+- **2026-08-13** — **A finished background agent's light now retires (decision 065).** Reported
   live: lights lingering for sessions with "no currently active tab or terminal anywhere". Put
   every light on the bar next to its evidence and the stale ones were exactly the **background**
   jobs: a `--bg` job has no terminal by construction, and Claude Code keeps its process alive
@@ -447,7 +460,7 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
   light, and the busy background job doing this work all survived.
 
 - **2026-08-13** — **Phantom-spare light fixed, and the CLI reconciliation it depends on made
-  to actually run (decision 056).** Reported live: "a new light appeared on my bar. it opens a
+  to actually run (decision 064).** Reported live: "a new light appeared on my bar. it opens a
   new ghostty window with copies of my claude sessions." It was a **pre-warmed spare** —
   `1550acaa`, whose recorded pid `4592` was a `claude bg-spare` process absent from
   `claude agents --json` — clicked inside decision 054's 20s grace. The click fell through to

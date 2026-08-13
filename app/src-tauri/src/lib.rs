@@ -467,7 +467,7 @@ fn list_sessions() -> Vec<SessionStatus> {
             //       so a genuinely new session is never raced before Claude registers it, and
             //       only when the query actually answered.
             //       Dropped **on sight** when the recorded pid also owns no terminal
-            //       (decision 056): a spare never has one, so there is nothing to wait for,
+            //       (decision 064): a spare never has one, so there is nothing to wait for,
             //       and the 20s grace was long enough for the phantom to be clicked — which
             //       is how one came to open Claude Code's agent view in a terminal window of
             //       its own. A pid *with* a tty is a real session however Claude Code lists
@@ -480,7 +480,7 @@ fn list_sessions() -> Vec<SessionStatus> {
                 //       so nothing is known about a terminal and it must keep the timeout
                 //       (the same upgrade path (e) protects).
                 && (now - updated_at >= CLI_UNLISTED_SECS || (pid > 0 && !owns_terminal(pid)));
-            //   (g) a background agent that finished and was left behind (decision 057).
+            //   (g) a background agent that finished and was left behind (decision 065).
             //       Reported live: lights for sessions with "no currently active tab or
             //       terminal anywhere". A `--bg` job has no terminal by construction, and
             //       Claude Code keeps its process alive and still listed once the work is
@@ -488,9 +488,14 @@ fn list_sessions() -> Vec<SessionStatus> {
             //       light sat there for the two-hour backstop. Retired on Claude Code's own
             //       word (`kind: background` + `status: idle`) once it has also been silent
             //       for CLI_BG_DONE_SECS, so "just finished" is still visible for a while.
-            //       Never applied to a light the user has to act on: `blocked` waits on a
-            //       permission prompt and `error` on being read, and both go quiet by nature,
-            //       which is exactly when a timeout would delete them (UI Principle #2).
+            //       Never applied to a light the user has to act on: `blocked` and `error` go
+            //       quiet by nature, which is exactly when a timeout would delete them
+            //       (UI Principle #2). The hook can only say `blocked` for a permission
+            //       prompt, and a `--bg` job stopping to ask the user a question fires `Stop`
+            //       instead — so the light it wrote reads `idle` and this guard missed the
+            //       case it exists for. Claude Code's own `state: blocked` covers it
+            //       (decision 063); measured live, a job waiting on an answer lost its light
+            //       five minutes in and got it back only when the answer arrived.
             let waiting = matches!(
                 v.get("state").and_then(|x| x.as_str()).unwrap_or(""),
                 "blocked" | "error"
@@ -501,7 +506,7 @@ fn list_sessions() -> Vec<SessionStatus> {
                 && cli_live
                     .as_ref()
                     .and_then(|facts| facts.get(id.as_str()))
-                    .is_some_and(|f| f.kind == "background" && f.status == "idle");
+                    .is_some_and(bg_retirable);
             if window_gone || cwd_gone || cursor_gone || host_process_gone || spare_light
                 || bg_abandoned
                 || now - updated_at > MAX_IDLE_SECS
@@ -511,6 +516,21 @@ fn list_sessions() -> Vec<SessionStatus> {
                 continue;
             }
             let mut state = v.get("state").and_then(|x| x.as_str()).unwrap_or("idle").to_string();
+            // Reconcile a background agent's light against Claude Code's own job state
+            // (decision 063), the #048 pattern applied to `--bg` jobs: the bar does not infer
+            // what a silent job is doing, it asks. Only an `idle` light is touched, so
+            // anything the hook actually observed — `running`, `blocked`, `error` — always
+            // wins, and a job the user has just replied to is green from its own next event
+            // rather than orange from a stale answer.
+            if ide == "cli" && state == "idle" {
+                if let Some(next) = cli_live
+                    .as_ref()
+                    .and_then(|facts| facts.get(id.as_str()))
+                    .and_then(bg_light_state)
+                {
+                    state = next.to_string();
+                }
+            }
             let mut cursor_subs: Option<Vec<String>> = None;
             // Reconcile Cursor lights against Cursor's own record (decision 048). Cursor's
             // bridged hooks are lossy at the end of a life: archiving an agent fires no
@@ -731,7 +751,7 @@ fn tty_of(pid: i64) -> Option<String> {
 }
 
 /// Whether `pid` has a controlling terminal — the one thing a pre-warmed spare never has
-/// (decision 056). Off macOS there is no `tty_of`, so it answers `true` and the caller keeps
+/// (decision 064). Off macOS there is no `tty_of`, so it answers `true` and the caller keeps
 /// its timeout-only behaviour rather than pruning on an answer this platform cannot give.
 #[cfg(target_os = "macos")]
 fn owns_terminal(pid: i64) -> bool {
@@ -905,7 +925,7 @@ fn focus_ghostty_surface(session_id: &str, require_unique: bool) -> bool {
     let Some(title) = claude_ai_title(session_id) else {
         return false;
     };
-    // Two grades of match (decision 062). Claude Code writes the title as a trailing run —
+    // Two grades of match (decision 066). Claude Code writes the title as a trailing run —
     // "◑ Fix Ghostty tab focus", the glyph being the activity spinner — so a surface whose
     // title **ends with** the session title is showing that session, and several such
     // surfaces are several views of the *same* session; taking the first is right by
@@ -1006,7 +1026,7 @@ end run"#;
     }
 }
 
-/// Absolute path to the `claude` binary (decision 056).
+/// Absolute path to the `claude` binary (decision 064).
 ///
 /// Nothing may assume `claude` is on a PATH. The bar is a GUI app: launched from Login Items
 /// — the way the README tells users to run it — it inherits launchd's
@@ -1059,7 +1079,7 @@ fn claude_bin() -> String {
 /// Callers must have established that a session actually exists first: `attach` on an id with
 /// no live job lands in Claude Code's agent view — a list of every session — rather than
 /// failing, so calling it speculatively produces a terminal full of the wrong thing
-/// (decision 056).
+/// (decision 064).
 #[cfg(target_os = "macos")]
 fn attach_background_agent(session_id: &str) {
     let short = session_id.split('-').next().unwrap_or("");
@@ -1097,7 +1117,7 @@ fn attach_background_agent(session_id: &str) {
         // command carries launchd's bare PATH and cannot find `claude` (see `claude_bin`).
         // Ghostty parses this string shell-style, so the path is quoted.
         let cmd = format!("\"{}\" attach {short}", claude_bin());
-        // Put the agent in a **tab of the Ghostty already running** (decision 056). Decision
+        // Put the agent in a **tab of the Ghostty already running** (decision 064). Decision
         // 054 had to use `open -na Ghostty`, which starts a whole second instance of the app:
         // Ghostty 1.2.x reported success for every scripted way of starting a surface and
         // started none. Ghostty 1.3 ships a working scripting dictionary, so the tab can be
@@ -1152,6 +1172,39 @@ struct CliFact {
     /// Claude Code's own word on whether this session is working right now — `busy` or
     /// `idle`. Absent for a host that reports none (Claude Desktop), which reads as neither.
     status: String,
+    /// A background job's own lifecycle word — `working`, `done` or `blocked` (decision 063).
+    /// Independent of `status`: `status` is live (is it burning a turn right now), `job_state`
+    /// is what the job last declared about itself, and only `blocked` means it stopped to ask
+    /// the user something. Empty for interactive sessions, which report none.
+    job_state: String,
+}
+
+/// Whether a background job's light may be retired by the silence timer: Claude Code says the
+/// job is idle and it is not waiting on the user. `blocked` is the one answer that must keep a
+/// light — the job stopped to ask something, so it goes silent by nature, and its light is the
+/// only place that question is visible (UI Principle #2).
+fn bg_retirable(f: &CliFact) -> bool {
+    f.kind == "background" && f.status == "idle" && f.job_state != "blocked"
+}
+
+/// The state a background agent's light should show when its own hook last wrote `idle`
+/// (decision 063), or None to leave the light as the hook wrote it. Hooks describe *turns*, so
+/// a turn that ended because the job finished and one that ended because it stopped to ask the
+/// user both land on `idle`; Claude Code separates them and this asks it which happened.
+fn bg_light_state(f: &CliFact) -> Option<&'static str> {
+    if f.kind != "background" {
+        return None;
+    }
+    match (f.status.as_str(), f.job_state.as_str()) {
+        // Working right now, whatever the last hook said — a job between tool calls is still
+        // running, and its light is green (requested live).
+        ("busy", _) => Some("running"),
+        // Stopped, and waiting on the user: that is what orange means everywhere else on the
+        // bar (a permission prompt, a question), and it is what this is.
+        (_, "blocked") => Some("blocked"),
+        // `done` and `working` both read as the hook wrote them: finished, or stale.
+        _ => None,
+    }
 }
 
 /// How long a `claude agents --json` answer is reused, and how long an unlisted CLI light is
@@ -1159,7 +1212,7 @@ struct CliFact {
 const CLI_FACTS_TTL: i64 = 10;
 const CLI_UNLISTED_SECS: i64 = 20;
 
-/// How long a finished background agent keeps its light (decision 057). A `--bg` job's process
+/// How long a finished background agent keeps its light (decision 065). A `--bg` job's process
 /// stays alive and listed after its work is done, so nothing in decision 054 ever retires it.
 /// Long enough that "it just finished" is still readable on the bar — the light is the only
 /// place that shows it — and short enough that an abandoned job stops occupying a slot. The
@@ -1173,9 +1226,9 @@ const CLI_BG_DONE_SECS: i64 = 5 * 60;
 /// process inspection can separate them. Spares are started by a long-lived daemon, so they
 /// do not inherit `AGENTSTATUS_IGNORE` from anyone and cannot opt themselves out.
 ///
-/// Run by absolute path, with no shell at all (decision 056). The login shell this used to go
+/// Run by absolute path, with no shell at all (decision 064). The login shell this used to go
 /// through could not find `claude` when the bar was launched the way users launch it, so this
-/// query — and with it every CLI reconciliation decisions 054 and 056 rest on — silently
+/// query — and with it every CLI reconciliation decisions 054 and 064 rest on — silently
 /// returned None and reconciled nothing. Verified: the binary runs fine on a bare
 /// `PATH=/usr/bin:/bin`, so no shell is needed to reach it.
 fn cli_facts_query() -> Option<std::collections::HashMap<String, CliFact>> {
@@ -1199,6 +1252,7 @@ fn cli_facts_query() -> Option<std::collections::HashMap<String, CliFact>> {
                 kind: a.get("kind").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                 pid: a.get("pid").and_then(|x| x.as_i64()).unwrap_or(0),
                 status: a.get("status").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                job_state: a.get("state").and_then(|x| x.as_str()).unwrap_or("").to_string(),
             },
         );
     }
@@ -1290,7 +1344,7 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
             let listing = cli_facts(now_unix());
             let fact = listing.as_ref().and_then(|m| m.get(&session_id).cloned());
             // Claude Code answered and does not know this session: it is a pre-warmed spare
-            // whose light has not been pruned yet (decision 056), or an agent that has since
+            // whose light has not been pruned yet (decision 064), or an agent that has since
             // exited. There is nothing to attach to, and `claude attach` on an id with no live
             // job does not fail quietly — it drops into Claude Code's **agent view**, which
             // lists every session, in a terminal window opened for the occasion. Reported live
@@ -1993,9 +2047,44 @@ pub fn run() {
 /// `AXUIElementCopyAttributeValue`.
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
+    fn fact(kind: &str, status: &str, job_state: &str) -> super::CliFact {
+        super::CliFact {
+            kind: kind.to_string(),
+            pid: 1,
+            status: status.to_string(),
+            job_state: job_state.to_string(),
+        }
+    }
+
+    /// Decision 063, both halves, against the four (`status`, `state`) pairs Claude Code
+    /// actually reports for a `--bg` job — measured from live jobs while writing it:
+    /// busy+working (running), idle+blocked (stopped, asking the user), idle+done (finished),
+    /// idle+working (spawned and never advanced — the stale job 065 exists to clear).
+    #[test]
+    fn bg_job_state_reconciliation() {
+        // Orange means one thing on this bar: this session is waiting on you. So `blocked` is
+        // the only pair that produces it, and the only pair the silence timer must not touch.
+        assert_eq!(super::bg_light_state(&fact("background", "idle", "blocked")), Some("blocked"));
+        assert!(!super::bg_retirable(&fact("background", "idle", "blocked")));
+        // Working: green, whatever the last hook wrote, and never retirable (status is busy).
+        assert_eq!(super::bg_light_state(&fact("background", "busy", "working")), Some("running"));
+        assert!(!super::bg_retirable(&fact("background", "busy", "working")));
+        // Finished, and stale-and-never-started: the light stays as the hook wrote it and the
+        // 5-minute timer still clears both, so decision 065's phantom lights do not come back.
+        assert_eq!(super::bg_light_state(&fact("background", "idle", "done")), None);
+        assert_eq!(super::bg_light_state(&fact("background", "idle", "working")), None);
+        assert!(super::bg_retirable(&fact("background", "idle", "done")));
+        assert!(super::bg_retirable(&fact("background", "idle", "working")));
+        // Interactive sessions are untouched by either half (decision 065's own promise): a
+        // terminal session idling in an open tab keeps its own light and its own state.
+        assert_eq!(super::bg_light_state(&fact("interactive", "busy", "")), None);
+        assert_eq!(super::bg_light_state(&fact("interactive", "idle", "blocked")), None);
+        assert!(!super::bg_retirable(&fact("interactive", "idle", "")));
+    }
+
     /// The first live pid that owns a controlling terminal, or None on a machine with no
     /// terminal session open at all. Used to model a *real* interactive CLI session, which
-    /// is the thing decision 056's spare rule has to keep telling apart from a spare.
+    /// is the thing decision 064's spare rule has to keep telling apart from a spare.
     fn pid_with_tty() -> Option<i64> {
         let out = std::process::Command::new("ps").args(["-eo", "pid=,tty="]).output().ok()?;
         String::from_utf8_lossy(&out.stdout).lines().find_map(|l| {
@@ -2008,7 +2097,7 @@ mod tests {
     /// Decision 054: a CLI light lives and dies with its `claude` process — the liveness
     /// signal that replaces the IDE lock file a terminal session never writes. Also pins
     /// the upgrade path: a status file written before 054 carries no `pid` and must fall
-    /// back to the idle timeout rather than be deleted on sight. And decision 056: an
+    /// back to the idle timeout rather than be deleted on sight. And decision 064: an
     /// unlisted light whose pid owns no terminal is a pre-warmed spare and goes on sight,
     /// while the same light with a terminal behind it keeps the full grace period.
     /// Ignored because it sets AGENTSTATUS_DIR, which is process-global:
@@ -2034,7 +2123,7 @@ mod tests {
             std::fs::write(sessions.join(format!("{id}.json")), v.to_string()).unwrap();
         };
         // None of these ids is one Claude Code knows, so every one of them is "unlisted" and
-        // decision 056's rule is what decides between them — exactly the situation a spare
+        // decision 064's rule is what decides between them — exactly the situation a spare
         // creates. A pid that owns a tty stands in for a real interactive session; pid 1
         // (launchd) is always alive and never has one, which is a spare's signature.
         // macOS caps pids at 99999, so 999999 can never name a live process.
@@ -2115,7 +2204,7 @@ mod tests {
     }
 
     /// Print the resolved `claude` binary and what it answers — the query every CLI light
-    /// and every CLI click is reconciled against (decisions 054, 056):
+    /// and every CLI click is reconciled against (decisions 054, 064):
     ///
     ///   cargo test --release -- --ignored --nocapture dump_cli_facts
     ///
@@ -2132,7 +2221,16 @@ mod tests {
             Some(m) => {
                 println!("{} session(s)", m.len());
                 for (id, f) in m {
-                    println!("  {} kind={} pid={}", &id[..8.min(id.len())], f.kind, f.pid);
+                    println!(
+                        "  {} kind={} pid={} status={} state={} -> light={:?} retirable={}",
+                        &id[..8.min(id.len())],
+                        f.kind,
+                        f.pid,
+                        f.status,
+                        f.job_state,
+                        super::bg_light_state(&f),
+                        super::bg_retirable(&f)
+                    );
                 }
             }
             None => println!("query FAILED"),
