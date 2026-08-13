@@ -272,6 +272,10 @@ notes. The workflow stops if the tag does not agree with the version in
   session Claude has not titled yet, two sessions whose titles do not tell them apart, and
   any other terminal application fall back to bringing the application to the front so you
   pick the tab — as does a refused Automation prompt (see **Automation permission** above).
+  When the terminal is already the front application, that fallback has nothing left to do,
+  so the click looks like it did nothing. The common cause is a session that has never
+  produced a titled turn — for example a terminal you used only to start a background agent,
+  which then shows that agent's title rather than one of its own.
 - **A background agent opens in a new terminal tab.** `claude --bg` runs detached from any
   terminal, so there is no tab to show. A click opens one running `claude attach` for that
   agent instead — a tab in the Ghostty you already have open, or a Terminal.app window when

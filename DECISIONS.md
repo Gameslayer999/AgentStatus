@@ -68,6 +68,7 @@
 | 056 | 2026-08-13 | **A light that names no session does nothing, and a background agent opens in a tab** — a pre-warmed spare's light was clicked inside #054's 20s grace, and the click ran `open -na Ghostty` (a *second instance*) on `claude attach <spare>`; `attach` on an id with no live job does not fail but lands in Claude Code's **agent view**, so the user got a new window listing every session. Underneath it, a latent defect: `zsh -lc` is non-interactive, never reads `.zshrc`, and that is where `~/.local/bin` is set — so #054's `claude agents --json` returned nothing whenever the bar was launched from Login Items rather than a shell, silently disabling **all** CLI reconciliation (fail-open). Fixes: resolve `claude` by absolute path and run it with no shell; a click on a CLI light Claude Code does not list does nothing; an unlisted light whose pid owns no terminal is dropped on sight (a pid *with* a tty, and a pre-054 file with no pid, keep the 20s grace); and a background agent opens in a **tab of the running Ghostty** via 1.3's scripting dictionary, which also removes #055's two-instances limitation at the source | Accepted |
 | 057 | 2026-08-13 | **A finished background agent's light retires after 5 minutes** — lights lingered for sessions with "no currently active tab or terminal anywhere". A `--bg` job has no terminal by construction and Claude Code keeps its process alive and listed after the work is done, so #054's pid-liveness rule never fired and #056's unlisted rule never applied; the lights sat until the two-hour backstop. New rule (g): retire a `cli` light once Claude Code reports it `kind: background` + `status: idle` (a new `status` field on `CliFact`) **and** it has been hook-silent for `CLI_BG_DONE_SECS` = 5 min — a clock rather than a category, so "just finished" stays readable while an abandoned job stops taking a slot. Never applied to a `blocked` or `error` light: those are the states the user must act on and both go quiet by nature, so a silence timer would delete exactly the wrong ones. Interactive sessions are untouched — verified live that an idle-38-minute terminal session in an open tab keeps its light while two background ghosts went within one poll | Accepted |
 | 061 | 2026-08-13 | **A click reaches a background agent where it already is** — "the ghostty light kept opening a new tab": a background session has no terminal to focus, so the click attaches, and nothing asked whether that agent was already open. Reproduced through `focus_session` itself: 2 -> 3 -> 4 surfaces, one per click. #055's matcher could not be reused — an attached agent's tab carries the same session title as every other view of it, so three surfaces matched and #055's exactly-one rule would have declined and attached again. `focus_ghostty_surface` gains `require_unique`, set **true** for an interactive light (the alternative is fronting the app, so a wrong tab is worse than no tab) and **false** for a background one (the alternative is creating another terminal, so any existing surface wins). `attach_background_agent` now focuses an existing surface, else fronts Ghostty when `pgrep` finds an attach already running for that id, else opens the tab. Also records a **false verification** that nearly shipped: the first check piped a non-compiling test to /dev/null, so the clicks never ran and the unchanged surface count read as a pass | Accepted |
+| 062 | 2026-08-13 | **A surface whose title *ends with* the session title beats one that merely contains it** — "sometimes clicking the light for a ghostty session does nothing". Measured every light through `focus_session` with a decoy focus set first: a click lands exactly when #055's title match finds its surface, and does nothing when it declines — the fallback is `activate Ghostty`, which changes nothing on screen when Ghostty is already frontmost, so a declined match and a dead click look identical. #055 matched with `contains` **and** required uniqueness, so an unrelated surface whose title merely spanned the session title counted as a second hit and killed the click. Claude Code writes the title as a trailing run (`◑ <title>`), so matching now has two grades: **strong** (ends with — several such surfaces are several views of the same session, so the first is right by construction) and **weak** (contains — may be something else, so still must be unambiguous). Not fixable: a terminal used only to start a background agent has no `ai-title` of its own and is titled with that agent's title; `working directory` is identical across all surfaces, `parkedJobId` is stale, and Ghostty exposes no tty/pid per surface — the README now states this plainly | Accepted |
 | 056 | 2026-08-13 | **Re-adding Codex and Gemini starts with observation, not with restoring the deleted code** — both were removed in #040 as unverified, so a re-add repeats the observe-then-build sequence using the existing logger tooling, and must first gate the #040 cleanup (`install.rs:80-121`, `setup.mjs:73-82`) that would otherwise delete the new entries on the next launch. Codex is verifiable today (the `openai.chatgpt` VS Code extension is installed) at ~2–2.5 days; Gemini is **blocked on which product is meant** — Antigravity IDE, Gemini CLI, or Antigravity CLI are three different config paths and event sets, and only the IDE is installed here. Only Codex can reach orange; **none of the three can reach red** | Proposed — blocked on user |
 | 057 | 2026-08-13 | **Token/cost tracking: data exists for Claude Code only, and the maintenance is the real cost** — transcripts carry per-call `message.usage`/`model`, but hook payloads carry nothing, no aggregated local source exists, and Cursor stores context-window fullness with no cost at all, so any version is Claude-only. Options: (1) defer, (2) last-turn cost in the tooltip ~½–1 day, (3) cumulative cost + settings-panel readout ~2–3 sessions. Constraints: the read goes app-side, never in the hook (reversing #040 / Guideline #3); it is a schema change needing approval; nothing numeric goes on the bar (UI Principle #1); the price table must be hardcoded and rots on every model release | Proposed — awaiting go/no-go |
 | 058 | 2026-08-13 | **A fallback view for high session counts** — the one-light-per-session bar is the project's one unmatched design property (every competitor aggregates to a single icon), but it grows at `8 + 23N` px, so 30 sessions is a 698 px bar. Five options drafted (folder grouping, overflow chip, grid wrap, auto-shrink, attention-only); recommendation is the **overflow chip** bounded by urgency sort with folder grouping as an orthogonal toggle, auto-shrink rejected outright for fighting UI Principle #1. Must be a **threshold, not a mode switch**, so per-session lights stay the default at normal counts | Proposed — awaiting choice |
@@ -3803,3 +3804,85 @@ ties by arrival. `unread-light.mjs` and `tooltip-head.mjs` still pass.
 **Left to confirm live:** the reported behaviour itself — the reporter watching the bar through
 a few sessions starting and finishing. The bar's own display cannot be screenshotted from here
 (the terminal has no Screen Recording grant), so this is the user's check.
+
+---
+
+## 062 — A surface whose title *ends with* the session title beats one that merely contains it
+
+**Date:** 2026-08-13
+**Status:** Accepted
+
+### Context
+
+Reported live: *"sometimes the click into ghostty works, but sometimes clicking the light for a
+ghostty session does nothing."*
+
+Measured rather than guessed. Every CLI light was driven through `focus_session` itself with a
+decoy focus set on an unrelated surface first, so a click that did nothing would show as one:
+
+| light | ai-title | unique surface match | click |
+|---|---|---|---|
+| `1616d3bb` | yes | yes | lands |
+| `c6caa7f3` | yes | yes | lands |
+| `ca4462c5` | yes | yes | lands |
+| `74dbc1ee` | yes | yes | lands |
+| `ccbaa786` | **none** | — | **no-op** |
+
+The pattern is exact: a click lands when decision 055's title match finds its surface, and does
+nothing when it declines. Nothing is silently *failing* — the fallback is `activate Ghostty`,
+and when Ghostty is already the front application, activating it changes nothing on screen. A
+declined match and a dead click are the same event to the user.
+
+*(Two earlier readings of this table were wrong and were thrown out: one probe read
+`window 1` while Ghostty had two windows, and one used the session's own surface as the decoy,
+so a correct focus registered as "no change". Both were re-measured.)*
+
+### The part that is fixable
+
+055 matched with `contains`, and required the match to be unique. So an unrelated surface whose
+title merely *spans* the session title counted as a second hit and the match declined —
+a dead click caused by a bystander. Reproduced by giving a surface the title
+`Working on Check agent status 6e location in lightbar right now` while a live session was
+titled `Check agent status 6e location in lightbar`: `contains-hits=2` (declines),
+`ends-with-hits=1`.
+
+Claude Code writes the title as a **trailing** run — `◑ <title>`, the glyph being the activity
+spinner. So the match now has two grades:
+
+- **strong** — the surface title *ends with* the session title. Several strong hits are several
+  views of the *same* session, so the first is right by construction and no uniqueness test is
+  needed. This is what an attached background agent produces alongside its own view.
+- **weak** — the title merely appears somewhere inside. It may belong to something else, so
+  this grade still has to be unambiguous to act on (and still honours 061's `require_unique`).
+
+### The part that is not fixable
+
+`ccbaa786` has no `ai-title` at all — no transcript was ever written for it, because it is a
+terminal the user only ever used to start a background agent. Worse, its tab is titled with
+*that agent's* title, so no title of its own could ever match it. Every other key Ghostty
+exposes was checked and none identifies it:
+
+| key | result |
+|---|---|
+| `ai-title` | absent, and permanently so for a parked terminal |
+| `working directory` | identical (`…/agentstatus`) across **all five** surfaces |
+| tty / pid per surface | not in the dictionary, and not in the environment either — 1.3.1 exports only `GHOSTTY_RESOURCES_DIR`, `GHOSTTY_BIN_DIR`, `GHOSTTY_SHELL_FEATURES`, `TERM_PROGRAM*` |
+| `parkedJobId` in `~/.claude/sessions/<pid>.json` | present but **stale** — it named a job that had already finished, while the tab showed a different one |
+| elimination (the surface no other session claims) | actively wrong: this session *shares* its tab with the agent it displays, so elimination points at an unrelated shell |
+| `+list-actions` | `set_surface_title` could stamp an identity, but writing to the user's terminal to find it is not acceptable |
+
+So this class of click cannot be made to land, and the README now says so plainly rather than
+leaving it as a surprise.
+
+### Verification
+
+- **The collision, before and after.** With the bystander surface present: the old rule counted
+  2 and declined; the new rule counts 1 strong hit. Driven through `focus_session` twice, the
+  click landed on the session's own surface (`8F47B31F`) both times.
+- **No regression.** Full sweep afterwards, decoy before each click: `c6caa7f3` → its surface,
+  `ca4462c5` → its surface, `74dbc1ee` → its surface (re-run with an independent decoy after
+  the first attempt used its own surface), `ccbaa786` → still a no-op, as the limit above
+  predicts.
+- `cargo build --release` clean, no new warnings; `cargo test --release` 2 passed, 11 ignored.
+- Every surface created for these experiments was removed; Ghostty was returned to the three
+  real session surfaces it started with.

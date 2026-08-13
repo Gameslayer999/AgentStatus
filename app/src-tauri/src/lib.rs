@@ -905,17 +905,38 @@ fn focus_ghostty_surface(session_id: &str, require_unique: bool) -> bool {
     let Some(title) = claude_ai_title(session_id) else {
         return false;
     };
+    // Two grades of match (decision 062). Claude Code writes the title as a trailing run —
+    // "◑ Fix Ghostty tab focus", the glyph being the activity spinner — so a surface whose
+    // title **ends with** the session title is showing that session, and several such
+    // surfaces are several views of the *same* session; taking the first is right by
+    // construction. A surface that merely *contains* it may be showing something else whose
+    // title happens to span it, so that grade still has to be unambiguous to act on.
+    //
+    // The distinction is what stops one session's title being a substring of another's from
+    // silently killing the click: on `contains` alone a bystander surface counted as a second
+    // hit, the match declined, and the fallback (front Ghostty) is invisible when Ghostty is
+    // already frontmost — the click simply appeared dead.
     const SCRIPT: &str = r#"on run argv
   set target to item 1 of argv
   set uniqueOnly to (item 2 of argv) is "1"
   tell application "Ghostty"
-    set hits to {}
+    set strong to {}
+    set weak to {}
     repeat with t in terminals
-      if (name of t) contains target then set end of hits to t
+      set n to (name of t)
+      if n ends with target then
+        set end of strong to t
+      else if n contains target then
+        set end of weak to t
+      end if
     end repeat
-    if (count of hits) is 0 then return "no"
-    if uniqueOnly and (count of hits) > 1 then return "no"
-    focus (item 1 of hits)
+    if (count of strong) > 0 then
+      focus (item 1 of strong)
+      return "ok"
+    end if
+    if (count of weak) is 0 then return "no"
+    if uniqueOnly and (count of weak) > 1 then return "no"
+    focus (item 1 of weak)
     return "ok"
   end tell
 end run"#;

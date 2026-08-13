@@ -349,6 +349,29 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-08-13** — **Why a Ghostty light sometimes did nothing, and the half of it that is
+  fixable (decision 062).** Measured instead of guessed: every CLI light driven through
+  `focus_session` with a decoy focus set on an unrelated surface first, so a dead click showed
+  as one. The pattern was exact — a click lands when decision 055's title match finds its
+  surface and does nothing when it declines, because the fallback is `activate Ghostty`, which
+  changes nothing on screen when Ghostty is already frontmost. **Fixed:** 055 matched with
+  `contains` *and* demanded uniqueness, so an unrelated surface whose title merely spanned the
+  session title counted as a second hit and killed the click. Matching now has two grades —
+  **strong** (title *ends with* the session title, which is how Claude Code writes it, `◑
+  <title>`; several strong hits are several views of the same session, so the first is right by
+  construction) and **weak** (merely contains, so still must be unambiguous). Reproduced with a
+  bystander surface: `contains-hits=2` → declined; `ends-with-hits=1` → lands, confirmed twice
+  through the real click path plus a no-regression sweep. **Not fixable:** a terminal used only
+  to start a background agent has no `ai-title` of its own and is titled with *that agent's*
+  title. Every other key was checked and rejected — `working directory` identical across all
+  five surfaces, `parkedJobId` stale (named a finished job while the tab showed another),
+  elimination actively wrong (such a session shares its tab with the agent it displays), and
+  Ghostty 1.3.1 exposes no tty or pid per surface in the dictionary or the environment. The
+  README now states this plainly instead of leaving it as a surprise. Two earlier readings of
+  the results were thrown out and re-measured: one probe read `window 1` while Ghostty had two
+  windows, and one used the session's own surface as the decoy so a correct focus registered as
+  "no change".
+
 - **2026-08-13** — **A light keeps the slot it arrived in (decision 062).** Reported live: the
   lights kept swapping places. `sortSessions()` re-ordered the whole strip every 1 s poll by
   `cwd` then session id — a random uuid, so a new session in a folder that already had lights
