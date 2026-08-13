@@ -28,8 +28,11 @@
   **Follow-up from live use:** a Ghostty CLI light activates Ghostty but cannot select the
   tab — verified against the live app that Ghostty publishes no per-tab identifier that joins
   to a process (working directory is identical across tabs in one project, the title is a
-  stale previous prompt, the ids are opaque handles unrelated to the pty). Terminal.app stays
-  the only tab-precise host. Also fixed there: **background agents** (`claude --bg`, real
+  stale previous prompt, the ids are opaque handles unrelated to the pty). **Superseded by
+  decision 055** — on Ghostty **1.3.1** the title is not stale: Claude Code 2.1.231 keeps the
+  terminal title bar set to its own session title, and Ghostty 1.3 ships a scripting
+  dictionary whose `terminal` surfaces expose that title plus a `focus` command, so a Ghostty
+  light now lands on the exact tab *and* split. Also fixed there: **background agents** (`claude --bg`, real
   sessions that Claude names) run detached under `ClaudeCode.app`, so the ancestor walk called
   that their "terminal" and a click would have activated an unrelated app. A detached agent is
   now **opened in a new terminal** via `claude attach` (Claude Code's own verb, safe on a live
@@ -304,6 +307,37 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Recently completed
 
+- **2026-08-13** — **A Ghostty light focuses the exact tab and split (decision 055).** Reported
+  from live use: clicking a Ghostty CLI light opened Ghostty but left the previously active tab
+  in front. Decision 054's finding — Ghostty publishes no per-tab identifier — was re-checked
+  and had gone out of date twice over. Ghostty **1.3.1** ships `Ghostty.sdef`, a full scripting
+  dictionary (`window` → `tab` → `terminal` surface, each with a title, and a `focus` command
+  that selects the surface and fronts its window), and Claude Code **2.1.231** writes a session
+  title into the terminal title bar, persisted as an `ai-title` record in the transcript —
+  which decision 053 had checked for on 2.1.223 and correctly found absent. The two join on
+  that title: `claude_ai_title()` reads the last `ai-title` for the session (transcript found
+  by globbing `~/.claude/projects/*/<id>.jsonl`, files past 16 MB skipped), and
+  `focus_ghostty_surface()` runs one `osascript` that focuses the surface whose title
+  **contains** it — `contains` because Ghostty shows the title with the activity spinner glyph
+  prepended (`◑ Fix Ghostty tab focus…`). It acts only on an **exactly one** match; no
+  `ai-title` yet, no hit, several hits, Ghostty older than 1.3, or a refused Automation grant
+  all fall back to fronting the app, which is exactly what every Ghostty click did before, so
+  the worst case is never a wrong tab (UI Principle #4). Rejected on the way: matching by
+  working directory (identical for two agents in one repo — the reported case), recording a
+  surface id in the hook (Ghostty exports none into the session environment, and querying it
+  from a hook would put an `osascript` spawn on the user's turn), and asking Claude Code
+  (`claude agents --json` and `~/.claude/sessions/<pid>.json` carry no tty or title). Reading
+  the transcript is a **flagged exception to Guideline #5**: only the title is extracted, lines
+  are substring-filtered before any JSON parsing, and nothing is stored. No hook change, no
+  status-file schema change. Verified: the shipped AppleScript run standalone against two live
+  splits with focus read back in both directions (fabricated title → `no`; each real title →
+  `ok` and the right split focused); a new `focus_ghostty_live` test (untitled session →
+  `title = None / focused = false`; titled → `focused = true`); `focus_terminal_live` extended
+  with the session id, resolving `tty=/dev/ttys001`, `terminal app=("Ghostty", 32265)` and the
+  right title; `cargo build --release` clean with no new warnings; `cargo test --release`
+  2 passed, 9 ignored. **Left to verify live:** the packaged app doing it, which needs the
+  Automation grant for AgentStatus.app → Ghostty (a new, separate grant from the Terminal.app
+  and Accessibility ones; macOS prompts once on the first click).
 - **2026-08-13** — **Terminal CLI and Claude Desktop became first-class hosts (decision 054).**
   Investigated first (Guideline #4): an isolated `--settings` probe showed the **terminal CLI
   fires the full lifecycle with payload keys byte-identical to the VS Code extension**, and

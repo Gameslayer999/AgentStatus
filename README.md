@@ -117,9 +117,10 @@ a Cursor agent.
   gives their types.
 - **Click a light** to go to that session. In VS Code, the window comes to the front and
   shows the tab of the session. In Cursor, the application opens that agent conversation.
-  For a **terminal** session, Terminal.app comes to the front with that session's tab
-  selected; another terminal application comes to the front without tab selection. For a
-  session in **Claude Desktop**, Claude comes to the front.
+  For a **terminal** session, Terminal.app and Ghostty come to the front with that
+  session's tab selected — in Ghostty, its split too; another terminal application comes to
+  the front without tab selection. For a session in **Claude Desktop**, Claude comes to the
+  front.
 - **Right-click the bar** to open the settings.
 - **Drag the bar** to move it. Hold the bar by the padding, not by a light. The
   application keeps the position.
@@ -245,11 +246,12 @@ notes. The workflow stops if the tag does not agree with the version in
 - **Cursor needs the Accessibility permission** for click-to-focus and to keep its lights
   correct. Without it, a click only brings Cursor to the front, and a long-silent agent
   can go gray while it still works.
-- **Only Terminal.app gets tab-precise focus.** It publishes a tty for each tab, which is
-  what identifies the tab a session runs in. Ghostty publishes no such identifier — only a
-  title and a working directory, and neither tells two agents in one project apart — so a
-  Ghostty light brings the right Ghostty window to the front and you pick the tab. macOS asks
-  once for permission to control the terminal application.
+- **Terminal.app and Ghostty get tab-precise focus; other terminals do not.** Terminal.app
+  publishes a tty for each tab. Ghostty 1.3 and later publish a title for each tab and
+  split, which the bar matches against the session title Claude Code writes there. A
+  session Claude has not titled yet, two sessions whose titles do not tell them apart, and
+  any other terminal application fall back to bringing the application to the front so you
+  pick the tab. macOS asks once for permission to control the terminal application.
 - **A background agent opens in a new terminal.** `claude --bg` runs detached from any
   terminal, so there is no tab to show. A click opens a new terminal window running
   `claude attach` for that agent instead. Ghostty is used when it runs, otherwise

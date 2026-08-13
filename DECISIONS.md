@@ -64,6 +64,7 @@
 | 052 | 2026-08-12 | **Cursor's tray row vetoes the finished-turn reconcile** — #048 greys a silent Cursor light when `composerData.status` is terminal, guarded only by 60s of hook silence. But 60s of silence isn't evidence an agent stopped: one writing a large file went **107s** between hook events while its `status` still held the value flushed at the end of its *previous* turn, so its light was forced to `idle` mid-turn — and #050, which derives Cursor's done light from a watched non-idle→idle transition, rendered that as a white **"finished, unread"** light on an agent that was still working (it also swallowed the real unread light 47s later, an idle→idle no-op). Fixed by adding a fourth condition: Cursor's tray row for that composer must not read `"<name>, Running"` (#049), the one live status signal Cursor exposes. Reuses #045/#047's AX walk with a record-and-decline predicate, cached at the same 5s TTL, read lazily; the name is one extra column on #048's existing query. Positive evidence only — an empty tray read (no Accessibility grant, composer off the recents list) never causes a veto, so it can only keep a light green, never light one up | Accepted |
 | 054 | 2026-08-13 | **Claude Code in the terminal (`cli`) and in Claude Desktop (`claude-desktop`) become first-class hosts** — both already ran the hook (all three surfaces read the same `~/.claude/settings.json`), so the signal layer needed nothing; they were invisible because everything non-Cursor was tagged `vscode` and therefore lock-pruned. `report.sh` now tags the host from `$CLAUDE_CODE_ENTRYPOINT` and records the owning `claude` pid; the app prunes those hosts by pid liveness instead of IDE locks, and clicks focus the terminal tab (Terminal.app, by `tty`) or Claude. Claude Desktop's **normal chat threads are out of scope** — no hook mechanism exists and no local state is observable | Accepted |
 | 053 | 2026-08-12 | **Tooltip identifies a light by the host's own session name**, not the project folder alone — the bar's first line was the folder basename, so two sessions in one folder had byte-identical tooltips. Claude Code names every session in `~/.claude/sessions/<pid>.json` (`sessionId`, `name`, `nameSource`); Cursor names every composer in `composerData.name`, already queried by #048. The app joins both by session id and the tooltip head becomes `folder · name` ("AgentStatus · agentstatus-5b"), dropping the name when it is absent or repeats the folder. App-side read only — no hook change, no status-file change, and no transcript is read (Guideline #5). Rejected: an LLM-style session title (no `summary`/`title` entry exists in any transcript on the installed 2.1.200 — nothing to read) and recording the first prompt as a title (a schema change for something the `task` line already covers) | Accepted |
+| 055 | 2026-08-13 | **A Ghostty light focuses the exact tab (and split)** — #054 left Ghostty at app-level focus because it publishes no tty, so a click brought Ghostty forward on whatever tab was last active. Two things changed since: Ghostty 1.3 ships an AppleScript dictionary (`window` → `tab` → `terminal` surface, each with a title, plus a `focus` command that selects the surface and fronts its window), and Claude Code 2.1.231 writes a session title into the terminal title bar, stored as an `ai-title` record in the transcript — which #053 checked for on 2.1.223 and correctly found absent. The app reads the last `ai-title` for the session and runs one `osascript` that focuses the surface whose title **contains** it (the leading glyph is the activity spinner), acting only on an **exactly one** match. No `ai-title`, no hit, several hits, Ghostty < 1.3, or a refused Automation grant all fall back to fronting the app — the old behaviour, never a wrong tab (UI Principle #4). Reading the transcript is a flagged exception to Guideline #5: only the title is extracted, nothing is stored. No hook change, no schema change | Accepted |
 
 ---
 
@@ -2889,3 +2890,118 @@ the working tree matches what a package would produce.
   Terminal.app, separate from the existing Accessibility grant; decision 039's stable signing
   should make it persist across rebuilds); and the extension change, which takes effect only
   on the next VS Code window reload.
+
+---
+
+## 055 — A Ghostty light focuses the exact tab (and split) via Ghostty's own scripting dictionary
+
+**Date:** 2026-08-13
+**Status:** Accepted
+
+### Context
+
+Decision 054 gave terminal sessions tab-precise focus only in Terminal.app, which publishes
+a `tty` per tab. Ghostty was left at app-level focus, and that is what the user hit: clicking
+a Ghostty light brought Ghostty forward but left whichever tab was last active in front, so
+a bar with several Ghostty sessions could not lead to any of them. That breaks UI Principle
+#3 — the thing you look at to see a problem must be the thing you click to go fix it.
+
+054 recorded that Ghostty "exposes no tty (only a working directory, which is ambiguous
+across tabs)". Two facts have changed since:
+
+- **Ghostty 1.3 ships an AppleScript dictionary** (`Ghostty.app/Contents/Resources/Ghostty.sdef`,
+  installed version 1.3.1). It defines `window` → `tab` → `terminal` (a surface, i.e. a tab
+  *or* a split), each with a title, and a `focus` command documented as "Focus a terminal,
+  bringing its window to the front". Neither a tty nor a pid is exposed.
+- **Claude Code 2.1.231 writes a session title**, as an `ai-title` record in the session
+  transcript, and puts that title in the terminal's title bar. Decision 053 checked for
+  exactly this on 2.1.223 and found none — the table row "Transcript `summary` / `title`
+  entries → **Rejected: does not exist**" is now out of date for `ai-title`.
+
+Observed live, one Ghostty window, one tab, two splits, each running a session:
+
+```
+SURF 6F2668F6…  name=[◐ Claude Code]                                wd=[…/agentstatus]
+SURF EB362C00…  name=[◑ Fix Ghostty tab focus when clicking light]  wd=[…/agentstatus]
+```
+
+The working directory is identical, as 054 said. The title is not: the second surface's
+title is the bar's own session title with the activity spinner glyph prepended. The first
+session had no `ai-title` yet, so its terminal reads the generic "Claude Code".
+
+### Options
+
+| Option | Verdict |
+|---|---|
+| Match the surface by `working directory` | **Rejected.** It is the *shell's* cwd, so two agents in one repo — the exact case reported — are indistinguishable, and a plain shell sitting in that folder would match and be focused instead |
+| Have the hook record a Ghostty surface id | **Rejected.** Ghostty exports no surface identifier into the session environment (`GHOSTTY_RESOURCES_DIR`, `GHOSTTY_BIN_DIR`, `GHOSTTY_SHELL_FEATURES`, `TERM_PROGRAM*` and nothing else), so the hook has nothing to record, and querying Ghostty from inside the hook would put an `osascript` spawn on the user's turn (Guideline #3) |
+| Ask Claude Code for the mapping | **Rejected.** `claude agents --json` and `~/.claude/sessions/<pid>.json` carry the pid, cwd, kind and name — no tty, no title |
+| Order surfaces against shell pids by creation time | **Rejected.** Unverifiable ordering, and it would fail silently into a *wrong* tab |
+| **Match the surface title against Claude Code's session title** | **Chosen.** The only identifier both sides publish, and it is the one thing that separates two agents in one folder |
+
+### Decision
+
+`focus_terminal_session` gains a Ghostty branch, tried after the Terminal.app tty lookup and
+before the existing app-activation fallback:
+
+1. `claude_ai_title(session_id)` finds the session transcript by globbing
+   `~/.claude/projects/*/<session_id>.jsonl` — cheaper and steadier than re-deriving Claude
+   Code's directory-slug rule from `cwd` — and returns the **last** `ai-title` record, the
+   title being rewritten as the subject of the session changes. Files past 16 MB are skipped
+   rather than read on the click path; the largest transcript on this machine is 3.8 MB.
+2. `focus_ghostty_surface` runs one `osascript` that walks `terminals`, collects those whose
+   `name` **contains** the title (`contains`, not equality, because of the spinner glyph),
+   and calls `focus` only when there is **exactly one** hit.
+
+Anything else — no `ai-title` yet, no hit, more than one hit, Ghostty older than 1.3, or the
+Automation grant refused — returns false and the click falls back to fronting the app, which
+is precisely the behaviour every Ghostty click had before. A wrong tab is worse than no tab
+(UI Principle #4).
+
+An untitled session is deliberately *not* matched on the literal "Claude Code" its terminal
+shows. That string names nothing, and matching it would risk focusing some other untitled
+session's tab.
+
+### Why this shape
+
+- **No hook change, no schema change.** All of it runs app-side on click, off the hot path
+  of the user's session (Guideline #3). The status file is byte-identical to 054's.
+- **Reading the transcript is a flagged exception to Guideline #5.** The title is the only
+  per-surface identifier Ghostty publishes, so the feature genuinely requires it. Only the
+  title string is pulled out, nothing is stored, and it is already on screen in the tab it
+  names. Lines are substring-filtered on `"ai-title"` before any JSON parsing, so no message
+  body is ever deserialized.
+- **Version-dependent by nature, so it degrades rather than assumes.** `ai-title` did not
+  exist on 2.1.223 and Ghostty's dictionary did not exist before 1.3; both absences fall
+  through to the old path instead of failing.
+- **Splits come for free.** Ghostty's `terminal` is a surface, so the same match reaches a
+  session in a split pane, which no tty-style mapping would have.
+
+### Known limits
+
+- **Two Ghostty instances.** `tell application "Ghostty"` reaches one of them; a session in
+  the other simply produces no hit and the click degrades to app-level focus. 054's
+  background-agent attach (`open -na Ghostty`) is what creates a second instance.
+- **iTerm2 and other emulators are untouched.** Not installed here, so no code that has not
+  been tested against them (Guideline #4).
+- **Two sessions with titles that contain one another** produce two hits and fall back.
+
+### Verification
+
+- **The shipped AppleScript, run standalone** against the two live splits: a fabricated
+  title returned `no`; `"Claude Code"` returned `ok` and reading back
+  `focused terminal of tab 1 of window 1` confirmed the *other* split; the real session title
+  returned `ok` and moved focus back. Both directions, confirmed by read-back, not by
+  assumption.
+- **`focus_ghostty_live`** (new, `--ignored`): the untitled session printed
+  `title = None / focused = false`; the titled one printed
+  `title = Some("Fix Ghostty tab focus when clicking light") / focused = true`.
+- **`focus_terminal_live`** (extended with the session id and the resolved title) on the live
+  session: `tty = Some("/dev/ttys001")`, `terminal app = Some(("Ghostty", 32265))`,
+  `session title = Some("Fix Ghostty tab focus when clicking light")`, and the click path
+  landed on the right split.
+- **`cargo build --release`** clean, no new warnings; `cargo test --release` 2 passed,
+  9 ignored.
+- **Survey of `ai-title` across `~/.claude/projects`**: present in 6 of the 12 most recent
+  transcripts, 1–56 records each, absent in every transcript of a session that had not yet
+  produced a turn — matching the fallback the code takes.

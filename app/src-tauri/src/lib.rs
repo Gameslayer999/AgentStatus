@@ -722,13 +722,101 @@ fn terminal_app_of(pid: i64) -> Option<(String, i64)> {
     None
 }
 
-/// Focus a CLI session in its terminal (decision 054). Terminal.app publishes a `tty`
-/// per tab, so the exact tab running the session is selected and raised. Every other
-/// emulator gets app-level focus: Ghostty exposes no tty (only a working directory,
-/// which is ambiguous across tabs) and iTerm2 is not installed here to verify against,
-/// so neither gets tab-precise code it has not been tested with (Guideline #4).
+/// Claude Code's own title for a session — the text it puts in the terminal's title bar,
+/// and the only handle that tells two Ghostty surfaces apart. It is written into the
+/// session transcript as an `ai-title` record and rewritten as the subject of the session
+/// changes, so the last one is the current title. Absent until Claude has titled the
+/// session (verified on 2.1.231: 0 records in a session that had run one prompt, 11 in a
+/// working one) — and decision 053 found *no* title record of any kind on 2.1.223, so this
+/// is version-dependent and every caller must degrade when it is missing (Guideline #4).
+///
+/// Reading a transcript is a deliberate exception to Guideline #5, taken because the title
+/// is the only per-surface identifier Ghostty publishes. Only the title is pulled out of
+/// the file; nothing is stored, and the string is already on screen in the tab it names.
+/// Transcripts reach a few MB, so a file past `MAX_TRANSCRIPT` is skipped rather than read
+/// on the click path.
+fn claude_ai_title(session_id: &str) -> Option<String> {
+    const MAX_TRANSCRIPT: u64 = 16 * 1024 * 1024;
+    // The id becomes a path component, so accept only the uuid alphabet.
+    if session_id.is_empty() || !session_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return None;
+    }
+    let home = std::env::var("HOME").ok()?;
+    let projects = std::path::PathBuf::from(home).join(".claude").join("projects");
+    // One directory per project folder; the session's transcript is under whichever one
+    // it belongs to, named by session id. Cheaper and more robust than re-deriving the
+    // directory name from `cwd` with Claude Code's own slug rule.
+    let file = format!("{session_id}.jsonl");
+    let path = std::fs::read_dir(&projects)
+        .ok()?
+        .flatten()
+        .map(|e| e.path().join(&file))
+        .find(|p| p.is_file())?;
+    if std::fs::metadata(&path).ok()?.len() > MAX_TRANSCRIPT {
+        return None;
+    }
+    let text = std::fs::read_to_string(&path).ok()?;
+    text.lines()
+        // Cheap reject first: only the handful of title records are worth parsing.
+        .filter(|l| l.contains("\"ai-title\""))
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v.get("type").and_then(|x| x.as_str()) == Some("ai-title"))
+        .filter_map(|v| v.get("aiTitle").and_then(|x| x.as_str()).map(str::to_string))
+        .filter(|s| !s.is_empty())
+        .last()
+}
+
+/// Focus the exact Ghostty surface — tab *or* split — running this session (decision 055).
+/// Ghostty 1.3 ships an AppleScript dictionary whose `terminal` objects expose a title and
+/// a `focus` command that selects the surface and fronts its window in one step. It
+/// publishes no tty and no pid, so the session is found by its title: Claude Code writes
+/// its session title into the terminal title bar, so the two join on that string —
+/// `Fix Ghostty tab focus when clicking light` on the bar matched
+/// `◑ Fix Ghostty tab focus when clicking light` in Ghostty, the leading glyph being the
+/// activity spinner. Hence `contains`, not equality.
+///
+/// Only an unambiguous match acts: exactly one surface must contain the title, and an
+/// untitled session (no `ai-title` yet) is not matched at all — its terminal reads the
+/// generic "Claude Code", which names nothing. Everything else returns false and the
+/// caller falls back to fronting the app, which is what every Ghostty click did before.
+/// A wrong tab would be worse than no tab (UI Principle #4).
+///
+/// Known limit: with two Ghostty *instances* running (a background-agent attach starts
+/// one), AppleScript reaches only one of them and a session in the other simply does not
+/// match — that click degrades to app-level focus.
 #[cfg(target_os = "macos")]
-fn focus_terminal_session(pid: i64, tty: &str) {
+fn focus_ghostty_surface(session_id: &str) -> bool {
+    let Some(title) = claude_ai_title(session_id) else {
+        return false;
+    };
+    const SCRIPT: &str = r#"on run argv
+  set target to item 1 of argv
+  tell application "Ghostty"
+    set hits to {}
+    repeat with t in terminals
+      if (name of t) contains target then set end of hits to t
+    end repeat
+    if (count of hits) is 1 then
+      focus (item 1 of hits)
+      return "ok"
+    end if
+  end tell
+  return "no"
+end run"#;
+    std::process::Command::new("osascript")
+        .args(["-e", SCRIPT, &title])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "ok")
+        .unwrap_or(false)
+}
+
+/// Focus a CLI session in its terminal (decision 054). Terminal.app publishes a `tty`
+/// per tab, so the exact tab running the session is selected and raised. Ghostty is
+/// matched by session title through its own scripting dictionary (decision 055). Every
+/// other emulator gets app-level focus: iTerm2 is not installed here to verify against,
+/// so it gets no tab-precise code that has not been tested with it (Guideline #4).
+#[cfg(target_os = "macos")]
+fn focus_terminal_session(pid: i64, tty: &str, session_id: &str) {
     let Some((app, app_pid)) = terminal_app_of(pid) else {
         return;
     };
@@ -757,6 +845,9 @@ end run"#;
         if matched {
             return;
         }
+    }
+    if app == "Ghostty" && focus_ghostty_surface(session_id) {
+        return;
     }
     // Another emulator, or a tab we could not match. Land in the right app — and, when the
     // emulator has several instances running, the right *instance*: activate the exact
@@ -961,7 +1052,7 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
                 None => tty_of(pid).is_some(),
             };
             match (interactive, tty_of(pid)) {
-                (true, Some(tty)) => focus_terminal_session(pid, &tty),
+                (true, Some(tty)) => focus_terminal_session(pid, &tty, &session_id),
                 (true, None) => {}
                 _ => attach_background_agent(&session_id),
             }
@@ -1685,7 +1776,8 @@ mod tests {
     /// Exercise the real click path for a CLI light and report what it resolved, so a
     /// "clicking does nothing" report can be pinned to a cause instead of guessed at:
     ///
-    ///   AGENTSTATUS_TEST_PID=<pid> cargo test -- --ignored --nocapture focus_terminal_live
+    ///   AGENTSTATUS_TEST_PID=<pid> AGENTSTATUS_TEST_SESSION=<id> \
+    ///     cargo test -- --ignored --nocapture focus_terminal_live
     ///
     /// A background agent prints tty=None and is expected to do nothing.
     #[test]
@@ -1695,19 +1787,37 @@ mod tests {
             .ok()
             .and_then(|s| s.trim().parse().ok())
             .expect("set AGENTSTATUS_TEST_PID");
+        let sid = std::env::var("AGENTSTATUS_TEST_SESSION").unwrap_or_default();
         println!("pid          = {pid}");
         let tty = super::tty_of(pid);
         println!("tty          = {tty:?}");
         println!("terminal app = {:?}", super::terminal_app_of(pid));
+        println!("session title= {:?}", super::claude_ai_title(&sid));
         match &tty {
-            Some(t) => super::focus_terminal_session(pid, t),
+            Some(t) => super::focus_terminal_session(pid, t, &sid),
             None => {
-                let sid = std::env::var("AGENTSTATUS_TEST_SESSION").unwrap_or_default();
                 println!("detached -> claude attach {}", sid.split('-').next().unwrap_or(""));
                 super::attach_background_agent(&sid);
             }
         }
         println!("(done)");
+    }
+
+    /// Resolve a live session to the Ghostty surface a click would focus, and focus it —
+    /// the whole of decision 055's join in one command, so a miss can be pinned to the
+    /// title lookup or to the AppleScript match rather than guessed at:
+    ///
+    ///   AGENTSTATUS_TEST_SESSION=<id> cargo test -- --ignored --nocapture focus_ghostty_live
+    ///
+    /// `title = None` means Claude has not titled the session yet (nothing to match on, so
+    /// a click correctly falls back to fronting Ghostty). `focused = false` with a title
+    /// present means no surface, or more than one, contained it.
+    #[test]
+    #[ignore]
+    fn focus_ghostty_live() {
+        let sid = std::env::var("AGENTSTATUS_TEST_SESSION").expect("set AGENTSTATUS_TEST_SESSION");
+        println!("title   = {:?}", super::claude_ai_title(&sid));
+        println!("focused = {}", super::focus_ghostty_surface(&sid));
     }
 
     /// Print every row title in Cursor's tray menu without pressing anything — the ground
