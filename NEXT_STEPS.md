@@ -7,6 +7,62 @@
 
 ## Current state
 
+- **Four hosts now, not two (decision 054).** Claude Code in **VS Code**, in a **terminal**
+  (`ide:"cli"`), and in **Claude Desktop** (`ide:"claude-desktop"`), plus **Cursor**. The two
+  new ones needed no signal-layer work at all — all three Claude Code surfaces read the same
+  `~/.claude/settings.json`, so the hook was already firing for them; they were invisible
+  because everything non-Cursor was tagged `vscode` and decision 027 lock-prunes any `vscode`
+  session whose `cwd` matches no live `~/.claude/ide/*.lock`. `report.sh` now tags the host
+  from `$CLAUDE_CODE_ENTRYPOINT` and records the owning `claude` pid; those hosts are pruned by
+  pid liveness instead. **This also fixed two latent bugs**, both from Desktop sessions being
+  tagged `vscode`: they were pruned whenever no VS Code window happened to share their folder,
+  and clicking one focused a VS Code window *and* left a stray new Claude tab behind. The stray
+  tab turned out to be its own defect, reported live: **the VS Code extension was entirely
+  host-blind** (no `ide` field in its `Session`, read zero times), so it claimed any session
+  whose `cwd` fell in its workspace — giving foreign sessions a status-bar item in the wrong
+  window, opening a stray Claude tab when one was clicked, and letting the decision-019 relay
+  reach the same command. **Cursor was exposed to all of it too.** The extension now renders
+  only `ide == "vscode"` (**v0.1.3**, installed) and the bar writes the relay only for
+  `vscode`. Installed live via `./install.sh`; this session retagged itself to
+  `claude-desktop` with a pid `ps` confirms is Claude Desktop's `claude` binary.
+  **Follow-up from live use:** a Ghostty CLI light activates Ghostty but cannot select the
+  tab — verified against the live app that Ghostty publishes no per-tab identifier that joins
+  to a process (working directory is identical across tabs in one project, the title is a
+  stale previous prompt, the ids are opaque handles unrelated to the pty). Terminal.app stays
+  the only tab-precise host. Also fixed there: **background agents** (`claude --bg`, real
+  sessions that Claude names) run detached under `ClaudeCode.app`, so the ancestor walk called
+  that their "terminal" and a click would have activated an unrelated app. A detached agent is
+  now **opened in a new terminal** via `claude attach` (Claude Code's own verb, safe on a live
+  agent), Ghostty when it runs else Terminal.app — verified live: clicking spawned a window
+  with `claude attach 2fa90c2f` running on `ttys015`. Two facts had to be found by testing:
+  `attach` rejects the full uuid and takes only the short id (uuid up to the first dash), and
+  the command must go through a login shell because a GUI-launched app has a minimal PATH.
+  That attach instance then broke the *interactive* click ("brought me to an empty Ghostty
+  tab"): with two Ghostty instances running, `open -a Ghostty` cannot say which one it means.
+  A terminal light now activates the **owning instance** by pid (`System Events`, `unix id`),
+  not the app by name — verified by fronting the wrong instance and confirming the click moved
+  focus to the one hosting the session's tty. Ghostty's AppleScript write surface (`surface
+  configuration`, `initial input`, `input text`) is non-functional in 1.2.x — all three report
+  success and start nothing — so `-e` plus a second instance is the only working route.
+  **CLI lights are now reconciled against `claude agents --json`** (throttled 10s, only when a
+  CLI light exists, fail-open — the #048 pattern). Two reasons: Claude Code 2.1.231 hosts
+  sessions inside pre-warmed `claude bg-spare` processes, so the hook's `$PPID` can be a
+  helper with no tty even for an *interactive* session (which made a running Ghostty session
+  open a redundant tab instead of focusing its window); and `bg-spare` processes fire
+  `SessionStart` and create lights for sessions that never exist, indistinguishable locally
+  from real background agents (identical argv, no tty, and they never inherit
+  `AGENTSTATUS_IGNORE` because a daemon spawns them). Clicks route on the reported `kind` and
+  pid; unlisted CLI lights are dropped after 20s. Verified live: 5 CLI lights → the 3 real
+  sessions.
+  New re-runnable diagnostic for "clicking does nothing" reports:
+  `AGENTSTATUS_TEST_PID=<pid> AGENTSTATUS_TEST_SESSION=<id> cargo test -- --ignored --nocapture
+  focus_terminal_live`, which prints the tty and resolved terminal and then performs the click. Headless `claude -p` (`sdk-cli`)
+  is deliberately still pruned. **Claude Desktop's ordinary chat threads are out of scope** —
+  its bundle contains no hook events and it stores no conversation state locally.
+  **Left to verify live:** rebuild via `./install.sh`, then confirm a terminal session lights
+  up and that clicking it selects the right Terminal.app tab (needs a one-time Automation
+  grant, separate from Accessibility).
+
 - **Cursor lights are reconciled against Cursor's record, vetoed by its tray (decisions 048,
   052).** A silent Cursor light is forced to `idle` when Cursor's stored `status` is terminal —
   but only if Cursor's own tray row doesn't say that composer is `", Running"` right now.
@@ -247,6 +303,31 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 ---
 
 ## Recently completed
+
+- **2026-08-13** — **Terminal CLI and Claude Desktop became first-class hosts (decision 054).**
+  Investigated first (Guideline #4): an isolated `--settings` probe showed the **terminal CLI
+  fires the full lifecycle with payload keys byte-identical to the VS Code extension**, and
+  Claude Code **inside Claude Desktop was already writing a status file** during the
+  investigation. So the signal layer needed nothing — all three surfaces read the same
+  settings file. The reason neither appeared was display-layer: `report.sh` tagged everything
+  without `.cursor_version` as `vscode`, and decision 027 deletes a `vscode` session whose
+  `cwd` matches no live IDE lock, which a terminal never writes. Changes: `report.sh` tags the
+  host from `$CLAUDE_CODE_ENTRYPOINT` (`cli` / `claude-desktop`; `sdk-cli` and every unknown
+  value fall through to the old default, so VS Code and Cursor cannot regress) and records the
+  owning `claude` pid as a new optional `pid` field; `lib.rs` prunes those hosts by
+  `pid_alive()` instead of IDE locks, and routes their clicks — a terminal session selects its
+  exact Terminal.app tab via the tty, any other emulator gets app-level focus, and a Desktop
+  session activates Claude. **Claude Desktop's ordinary chat threads were ruled out**: zero
+  hook event names in its 38 MB `app.asar` and no local conversation state, so any light would
+  have to be inferred and would lie (UI Principle #4). Verified: 8 hook unit cases incl. Cursor
+  and VS Code regressions; a real pty-driven interactive `claude` writing `ide:"cli"` with a
+  pid that `ps` confirms is the claude process; `cargo check` clean debug **and** release; a new
+  `cli_liveness_pruning` test (live pid survives, dead pid pruned, pre-054 file without a `pid`
+  not pruned); and the Terminal.app tab lookup checked live with correct positive, negative,
+  and full select-and-raise. Also refreshed the gitignored, generated `extension/report.sh`,
+  which was a stale pre-#040 artifact locally (`vscode:prepublish` regenerates it, so nothing
+  stale could have shipped). **Left to verify live:** rebuild via `./install.sh`, a real
+  terminal light on the running bar, and the packaged app's Automation grant for tab focus.
 
 - **2026-08-12** — **Released v0.6.4.** Version bumped 0.6.3 → 0.6.4 across
   `tauri.conf.json`, `package.json`, `package-lock.json`, `Cargo.toml`/`Cargo.lock`, and the

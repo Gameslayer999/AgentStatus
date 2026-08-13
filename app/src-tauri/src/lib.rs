@@ -32,7 +32,8 @@ struct SessionStatus {
     updated_at: i64,
     task: String,
     detail: String,
-    /// Host surface ("cursor" or "vscode"), from the hook — drives click-to-focus.
+    /// Host surface ("cursor", "vscode", "cli", or "claude-desktop"), from the hook —
+    /// drives click-to-focus and which liveness signal prunes the light (decision 054).
     ide: String,
     /// agent_type of each currently-running subagent under this session.
     subagents: Vec<String>,
@@ -412,6 +413,16 @@ fn list_sessions() -> Vec<SessionStatus> {
         cursor_facts(&cursor_ids, now)
     };
     let names = session_names(now);
+    // Claude Code's own view of its live CLI sessions, consulted only when the bar actually
+    // has one — it costs a subprocess, so a machine with no terminal sessions never pays.
+    let cli_live = if files
+        .iter()
+        .any(|(_, _, v)| v.get("ide").and_then(|x| x.as_str()) == Some("cli"))
+    {
+        cli_facts(now)
+    } else {
+        None
+    };
     {
         for (path, id, v) in &files {
             let (path, id) = (path.clone(), id.clone());
@@ -431,11 +442,34 @@ fn list_sessions() -> Vec<SessionStatus> {
             //       moment any VS Code window was open). Its clean-close is covered by the
             //       bridged SessionEnd; unclean death by dropping all Cursor lights when
             //       Cursor has quit, plus the MAX_IDLE_SECS backstop.
+            //   (e) CLI / Claude Desktop (decision 054): neither writes an IDE lock either,
+            //       and both are excluded from (a) by their own `ide` value. Their liveness
+            //       handle is the pid of the owning `claude` process, recorded by the hook —
+            //       so a terminal closed or force-killed without a SessionEnd drops its light
+            //       on the next poll instead of lingering to the backstop. `pid > 0` keeps
+            //       status files written before this change on the idle timeout alone.
             let ide = v.get("ide").and_then(|x| x.as_str()).unwrap_or("vscode");
+            let pid = v.get("pid").and_then(|x| x.as_i64()).unwrap_or(0);
             let window_gone = ide == "vscode" && !live_folders.is_empty() && !cwd_is_live(cwd, &live_folders);
             let cwd_gone = !cwd.is_empty() && !std::path::Path::new(cwd).exists();
             let cursor_gone = ide == "cursor" && !cursor_alive;
-            if window_gone || cwd_gone || cursor_gone || now - updated_at > MAX_IDLE_SECS {
+            let host_process_gone =
+                matches!(ide, "cli" | "claude-desktop") && pid > 0 && !pid_alive(pid);
+            //   (f) a pre-warmed spare (decision 054): a `claude bg-spare` process fires
+            //       SessionStart, so a light appears, but it never becomes a session. Claude
+            //       Code does not list it in `claude agents --json`, which is the only thing
+            //       that separates it from a real background agent (identical argv, no tty
+            //       either way). Only applied once the light has been silent a little while,
+            //       so a genuinely new session is never raced before Claude registers it, and
+            //       only when the query actually answered.
+            let spare_light = ide == "cli"
+                && now - updated_at >= CLI_UNLISTED_SECS
+                && cli_live
+                    .as_ref()
+                    .is_some_and(|facts| !facts.contains_key(id.as_str()));
+            if window_gone || cwd_gone || cursor_gone || host_process_gone || spare_light
+                || now - updated_at > MAX_IDLE_SECS
+            {
                 let _ = std::fs::remove_file(&path);
                 let _ = std::fs::remove_dir_all(dir.join(format!("{id}.subagents")));
                 continue;
@@ -639,6 +673,226 @@ fn raise_window_fast(root: &str, ide: &str) {
         .spawn();
 }
 
+/// The controlling terminal of a process, as a device path ("/dev/ttys000") — the
+/// key Terminal.app publishes per tab. None when the process has no tty (`??`), which
+/// is every non-CLI host.
+#[cfg(target_os = "macos")]
+fn tty_of(pid: i64) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "tty=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if t.is_empty() || t == "??" {
+        return None;
+    }
+    Some(format!("/dev/{t}"))
+}
+
+/// Walk up from `pid` to the first ancestor that is a macOS app bundle and return its name
+/// **and pid** — the terminal emulator hosting this CLI session, and which *instance* of it.
+/// Verified on a live Terminal.app session: `-zsh` → `login` →
+/// `…/Terminal.app/Contents/MacOS/Terminal`.
+///
+/// The pid matters: a terminal can have several instances running at once (Ghostty does,
+/// since a background-agent attach has to launch one), and `open -a <name>` cannot say which
+/// one it means — it activated the wrong window and looked like the click had failed.
+#[cfg(target_os = "macos")]
+fn terminal_app_of(pid: i64) -> Option<(String, i64)> {
+    let mut cur = pid;
+    for _ in 0..12 {
+        if cur <= 1 {
+            break;
+        }
+        let out = std::process::Command::new("ps")
+            .args(["-o", "ppid=,comm=", "-p", &cur.to_string()])
+            .output()
+            .ok()?;
+        let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let (ppid_s, comm) = line.split_once(char::is_whitespace)?;
+        if let Some(i) = comm.trim().find(".app/Contents/MacOS/") {
+            let name = std::path::Path::new(&comm.trim()[..i + 4])
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())?;
+            return Some((name, cur));
+        }
+        cur = ppid_s.trim().parse().ok()?;
+    }
+    None
+}
+
+/// Focus a CLI session in its terminal (decision 054). Terminal.app publishes a `tty`
+/// per tab, so the exact tab running the session is selected and raised. Every other
+/// emulator gets app-level focus: Ghostty exposes no tty (only a working directory,
+/// which is ambiguous across tabs) and iTerm2 is not installed here to verify against,
+/// so neither gets tab-precise code it has not been tested with (Guideline #4).
+#[cfg(target_os = "macos")]
+fn focus_terminal_session(pid: i64, tty: &str) {
+    let Some((app, app_pid)) = terminal_app_of(pid) else {
+        return;
+    };
+    if app == "Terminal" {
+        const SCRIPT: &str = r#"on run argv
+  set target to item 1 of argv
+  tell application "Terminal"
+    repeat with w in windows
+      repeat with t in tabs of w
+        if (tty of t) is target then
+          set selected of t to true
+          set frontmost of w to true
+          activate
+          return "ok"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "no"
+end run"#;
+        let matched = std::process::Command::new("osascript")
+            .args(["-e", SCRIPT, tty])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "ok")
+            .unwrap_or(false);
+        if matched {
+            return;
+        }
+    }
+    // Another emulator, or a tab we could not match. Land in the right app — and, when the
+    // emulator has several instances running, the right *instance*: activate the exact
+    // process that owns this session, which `open -a <name>` cannot express.
+    const ACTIVATE: &str = r#"on run argv
+  tell application "System Events"
+    set frontmost of (first process whose unix id is (item 1 of argv as integer)) to true
+  end tell
+  return "ok"
+end run"#;
+    let activated = std::process::Command::new("osascript")
+        .args(["-e", ACTIVATE, &app_pid.to_string()])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "ok")
+        .unwrap_or(false);
+    if !activated {
+        // No Accessibility grant (or the process vanished) — fall back to the app by name.
+        let _ = std::process::Command::new("open").args(["-a", &app]).spawn();
+    }
+}
+
+/// Open a **detached background agent** (`claude --bg`) in a real terminal — the only way
+/// to reach one, since it has no terminal of its own to focus. `claude attach` is Claude
+/// Code"s own verb for this, and it is safe to use on a live agent: "Open the background
+/// session in this terminal ... The session keeps running either way."
+///
+/// `attach` takes the **short** id — the session uuid up to the first dash. The full uuid is
+/// rejected ("No job matching ..."), verified live, so the id is truncated here.
+#[cfg(target_os = "macos")]
+fn attach_background_agent(session_id: &str) {
+    let short = session_id.split('-').next().unwrap_or("");
+    // The id is interpolated into a shell command, so accept only a plain hex id.
+    if short.len() < 6 || !short.chars().all(|c| c.is_ascii_hexdigit()) {
+        return;
+    }
+    let ghostty_up = std::process::Command::new("pgrep")
+        .args(["-x", "ghostty"])
+        .output()
+        .map(|o| !o.stdout.is_empty())
+        .unwrap_or(false);
+    if ghostty_up {
+        // A GUI-launched app has a minimal PATH, and `claude` lives in the user PATH, so go
+        // through a login shell. Ghostty`s `-e` runs the command directly with no shell.
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        let _ = std::process::Command::new("open")
+            .args(["-na", "Ghostty", "--args", "-e", &shell, "-lc"])
+            .arg(format!("claude attach {short}"))
+            .spawn();
+        return;
+    }
+    // Terminal.app is always present, and `do script` already runs in a login shell.
+    const SCRIPT: &str = r#"on run argv
+  tell application "Terminal"
+    do script ("claude attach " & (item 1 of argv))
+    activate
+  end tell
+end run"#;
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", SCRIPT, short])
+        .spawn();
+}
+
+/// What Claude Code itself says about a live CLI session: whether it is an interactive
+/// terminal session or a detached background agent, and the pid that actually owns it.
+#[derive(Clone, Debug)]
+struct CliFact {
+    kind: String,
+    pid: i64,
+}
+
+/// How long a `claude agents --json` answer is reused, and how long an unlisted CLI light is
+/// tolerated before it is treated as a pre-warmed spare rather than a session.
+const CLI_FACTS_TTL: i64 = 10;
+const CLI_UNLISTED_SECS: i64 = 20;
+
+/// Ask Claude Code to enumerate its own live sessions. This is the only way to tell a real
+/// session from a **pre-warmed spare**: a spare is a `claude bg-spare` process that fires
+/// `SessionStart` (so the hook writes a status file and a light appears) but never becomes a
+/// session, and its argv is byte-identical to that of a genuine background agent — so no
+/// process inspection can separate them. Spares are started by a long-lived daemon, so they
+/// do not inherit `AGENTSTATUS_IGNORE` from anyone and cannot opt themselves out.
+///
+/// Run through a login shell: the bar is a GUI app with a minimal PATH, and `claude` lives in
+/// the user PATH.
+fn cli_facts_query() -> Option<std::collections::HashMap<String, CliFact>> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let out = std::process::Command::new(shell)
+        .args(["-lc", "claude agents --json"])
+        .env("AGENTSTATUS_IGNORE", "1")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let mut map = std::collections::HashMap::new();
+    for a in v.as_array()? {
+        let Some(sid) = a.get("sessionId").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        map.insert(
+            sid.to_string(),
+            CliFact {
+                kind: a.get("kind").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                pid: a.get("pid").and_then(|x| x.as_i64()).unwrap_or(0),
+            },
+        );
+    }
+    Some(map)
+}
+
+/// Cached `cli_facts_query`, refreshed at most every `CLI_FACTS_TTL` seconds. A failed query
+/// caches as `None`, which reconciles nothing — the same fail-open contract as #048.
+fn cli_facts(now: i64) -> Option<std::collections::HashMap<String, CliFact>> {
+    type Cache = std::sync::Mutex<(i64, Option<std::collections::HashMap<String, CliFact>>)>;
+    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(|| std::sync::Mutex::new((0, None)));
+    let Ok(mut guard) = cache.lock() else {
+        return None;
+    };
+    if now - guard.0 >= CLI_FACTS_TTL {
+        *guard = (now, cli_facts_query());
+    }
+    guard.1.clone()
+}
+
+/// The `claude` process id the hook recorded for a session, or 0 when absent (a status
+/// file written before decision 054).
+fn session_pid(session_id: &str) -> i64 {
+    std::fs::read_to_string(sessions_dir().join(format!("{session_id}.json")))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("pid").and_then(|x| x.as_i64()))
+        .unwrap_or(0)
+}
+
 /// Jump to a session's window by focusing it through the **IDE's own CLI**
 /// (`code`/`cursor <folder>`). The IDE resolves the folder to its existing window
 /// and focuses it — switching macOS Spaces (including a full-screen Space) because
@@ -654,12 +908,29 @@ fn raise_window_fast(root: &str, ide: &str) {
 /// full-screen windows on inactive Spaces — verified live). If the CLI binary is
 /// missing we fall back to `open -a` (Agent Guideline #3: degrade, never break). The
 /// IDE is chosen from the session's `ide` field (decision 015).
+///
+/// Hosts with no IDE window of their own (decision 054): a `cli` session is focused in
+/// its terminal, and a `claude-desktop` session activates Claude. Both must be handled
+/// explicitly — falling through to the VS Code CLI would land the user in the wrong
+/// application entirely.
 #[tauri::command]
 fn focus_session(cwd: String, ide: String, session_id: String) {
     // Focus the exact session tab via the extension relay (decision 015); the window
     // raise below only gets us to the right *window*. Written first so the extension
     // can pick it up while / right after the window comes forward.
-    write_focus_request(&session_id);
+    //
+    // VS Code sessions only (decision 054) — the relay exists solely to reach the VS Code
+    // extension, so writing it for a host that extension cannot serve is meaningless at
+    // best. At worst it was the bug: the extension acted on any id among the sessions whose
+    // `cwd` fell inside its workspace, without checking the host, so a Cursor / terminal /
+    // Claude Desktop session in a folder some VS Code window happened to have open matched,
+    // and `claude-vscode.editor.open` was handed an id naming no VS Code session — which
+    // opens a **new Claude tab**. Observed exactly that way on a Claude Desktop session
+    // still tagged `vscode`: the click focused VS Code *and* left a stray tab behind. The
+    // extension now filters by host too; this guard also covers an older extension build.
+    if ide == "vscode" {
+        write_focus_request(&session_id);
+    }
     #[cfg(target_os = "macos")]
     {
         // Cursor never goes through the IDE CLI (decision 047): with the Agent ("glass")
@@ -668,6 +939,43 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
         // opens a *new* agent in that folder instead of focusing anything. Press the
         // session's own row in Cursor's tray menu instead — that's the one thing that
         // opens the existing conversation. Falls back to raise + activate, never the CLI.
+        // A CLI session has no window to raise. If it owns a terminal, focus the tab it runs
+        // in; if it does not, it is a detached background agent, so open it in a new terminal
+        // via `claude attach` — otherwise its light would be the one thing on the bar that
+        // leads nowhere (UI Principle #3).
+        if ide == "cli" {
+            // Ask Claude Code which kind of session this is rather than inferring it from the
+            // recorded pid. That pid is the hook's parent, which for a session hosted in a
+            // `bg-spare` process is a helper with no controlling terminal even though the
+            // session is interactive — inferring from it sent an interactive session down the
+            // attach path and opened a redundant terminal tab. Claude Code reports both the
+            // kind and the pid that actually owns the session.
+            let fact = cli_facts(now_unix()).and_then(|m| m.get(&session_id).cloned());
+            let pid = match &fact {
+                Some(f) if f.pid > 0 => f.pid,
+                _ => session_pid(&session_id),
+            };
+            let interactive = match &fact {
+                Some(f) => f.kind == "interactive",
+                // Unlisted (or the query failed): fall back to the terminal it owns, if any.
+                None => tty_of(pid).is_some(),
+            };
+            match (interactive, tty_of(pid)) {
+                (true, Some(tty)) => focus_terminal_session(pid, &tty),
+                (true, None) => {}
+                _ => attach_background_agent(&session_id),
+            }
+            return;
+        }
+        // Claude Code inside Claude Desktop: bring Claude forward. Desktop exposes no
+        // scripting interface for selecting a specific conversation, so this is
+        // app-level focus by necessity, not by choice.
+        if ide == "claude-desktop" {
+            let _ = std::process::Command::new("open")
+                .args(["-a", "Claude"])
+                .spawn();
+            return;
+        }
         if ide == "cursor" {
             if let Some(name) = cursor_composer_name(&session_id) {
                 if cursor_press_tray_row(&|t| tray_row_is(t, &name)) {
@@ -1335,6 +1643,73 @@ pub fn run() {
 /// `AXUIElementCopyAttributeValue`.
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
+    /// Decision 054: a CLI light lives and dies with its `claude` process — the liveness
+    /// signal that replaces the IDE lock file a terminal session never writes. Also pins
+    /// the upgrade path: a status file written before 054 carries no `pid` and must fall
+    /// back to the idle timeout rather than be deleted on sight. Ignored because it sets
+    /// AGENTSTATUS_DIR, which is process-global:
+    ///
+    ///   cargo test -- --ignored --nocapture cli_liveness_pruning
+    #[test]
+    #[ignore]
+    fn cli_liveness_pruning() {
+        let tmp = std::env::temp_dir().join(format!("agentstatus-054-{}", std::process::id()));
+        let sessions = tmp.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::env::set_var("AGENTSTATUS_DIR", &tmp);
+
+        let now = super::now_unix();
+        let write = |id: &str, pid: Option<i64>| {
+            let mut v = serde_json::json!({
+                "state": "running", "cwd": env!("CARGO_MANIFEST_DIR"), "ide": "cli",
+                "label": "src-tauri", "updated_at": now, "task": "", "detail": ""
+            });
+            if let Some(p) = pid {
+                v["pid"] = serde_json::json!(p);
+            }
+            std::fs::write(sessions.join(format!("{id}.json")), v.to_string()).unwrap();
+        };
+        // Our own process is certainly alive. macOS caps pids at 99999, so 999999 can
+        // never name a live process — a dead pid without racing a real one.
+        write("alive", Some(std::process::id() as i64));
+        write("dead", Some(999_999));
+        write("legacy", None);
+
+        let ids: Vec<String> = super::list_sessions().into_iter().map(|s| s.id).collect();
+        assert!(ids.contains(&"alive".to_string()), "live CLI session pruned: {ids:?}");
+        assert!(!ids.contains(&"dead".to_string()), "dead CLI session survived: {ids:?}");
+        assert!(ids.contains(&"legacy".to_string()), "pre-054 file pruned: {ids:?}");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Exercise the real click path for a CLI light and report what it resolved, so a
+    /// "clicking does nothing" report can be pinned to a cause instead of guessed at:
+    ///
+    ///   AGENTSTATUS_TEST_PID=<pid> cargo test -- --ignored --nocapture focus_terminal_live
+    ///
+    /// A background agent prints tty=None and is expected to do nothing.
+    #[test]
+    #[ignore]
+    fn focus_terminal_live() {
+        let pid: i64 = std::env::var("AGENTSTATUS_TEST_PID")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .expect("set AGENTSTATUS_TEST_PID");
+        println!("pid          = {pid}");
+        let tty = super::tty_of(pid);
+        println!("tty          = {tty:?}");
+        println!("terminal app = {:?}", super::terminal_app_of(pid));
+        match &tty {
+            Some(t) => super::focus_terminal_session(pid, t),
+            None => {
+                let sid = std::env::var("AGENTSTATUS_TEST_SESSION").unwrap_or_default();
+                println!("detached -> claude attach {}", sid.split('-').next().unwrap_or(""));
+                super::attach_background_agent(&sid);
+            }
+        }
+        println!("(done)");
+    }
+
     /// Print every row title in Cursor's tray menu without pressing anything — the ground
     /// truth for the title format the click path matches against (decision 049):
     ///

@@ -39,6 +39,22 @@ STATUS_DIR="${AGENTSTATUS_DIR:-${CLAUDESTATUS_DIR:-$HOME/.claude/status}}"
 SESSIONS_DIR="$STATUS_DIR/sessions"
 EVENT="${1:-}"
 
+# Which Claude Code surface is running this session (decision 054). The same
+# ~/.claude/settings.json is read by every surface, so the hook already fires for
+# all of them; CLAUDE_CODE_ENTRYPOINT is what tells them apart, and it costs a
+# variable read (no process spawn — Agent Guideline #3).
+#
+# Observed values on 2.1.200: "cli" (interactive terminal), "sdk-cli" (headless
+# `claude -p`), "claude-desktop" (Claude Code inside Claude Desktop).
+# `sdk-cli` is deliberately left unmapped: those are short-lived scripted runs and
+# lighting them re-creates the decision-013 noise. An unknown or absent value is
+# also unmapped, so VS Code and Cursor keep exactly their current behaviour.
+case "${CLAUDE_CODE_ENTRYPOINT:-}" in
+  cli)            HOST=cli;;
+  claude-desktop) HOST=claude-desktop;;
+  *)              HOST="";;
+esac
+
 # Normalize Cursor's camelCase event names to the Claude PascalCase names the
 # rest of this script keys on (decision 018). Cursor runs this same hook two ways:
 # via its Claude-compat bridge (reads ~/.claude/settings.json, passes PascalCase)
@@ -101,7 +117,8 @@ esac
   # One jq pass: map event -> state, carry forward task, compute a fresh detail,
   # and emit the merged status object (or empty to skip unmapped events).
   obj="$(printf '%s' "$payload" | jq -c \
-      --arg event "$EVENT" --argjson ts "$ts" --arg oldjson "$old_json" '
+      --arg event "$EVENT" --argjson ts "$ts" --arg oldjson "$old_json" \
+      --arg host "$HOST" --argjson pid "${PPID:-0}" '
     def clean: (. // "") | gsub("[\n\r\t]+";" ") | gsub("^ +| +$";"");
     def trunc($n): clean | if (length > $n) then (.[:$n] + "…") else . end;
     ($oldjson | if . == "" then {} else (fromjson? // {}) end) as $old
@@ -117,7 +134,12 @@ esac
     # the exec dir of that tool call, not the session folder — prefer workspace_roots.
     | (if $isCursor then (($p.workspace_roots // [])[0] // $old.cwd)
        else ($p.cwd // $old.cwd) end // "") as $cwd
-    | (if $isCursor then "cursor" else ($old.ide // "vscode") end) as $ide
+    # Cursor wins and stays sticky (its native camelCase hooks carry no
+    # .cursor_version), then the entrypoint-derived host, then the prior default.
+    | (if $isCursor then "cursor"
+       elif ($old.ide // "") == "cursor" then "cursor"
+       elif $host != "" then $host
+       else ($old.ide // "vscode") end) as $ide
     | ($p.tool_name // "") as $tool
     | (if $event == "UserPromptSubmit" then ($p.prompt | trunc(160)) else ($old.task // "") end) as $task
     | (if $event == "PreToolUse" then
@@ -133,7 +155,11 @@ esac
        elif $event == "StopFailure" then ("⚠ turn failed" + (if ($p.error_type // "") != "" then " — " + $p.error_type else "" end))
        elif $event == "SessionStart" then ""
        else ($old.detail // "") end) as $detail
-    | { state: $state, cwd: $cwd, ide: $ide,
+    # pid = the parent of this hook process, i.e. the claude process itself. A CLI
+    # session has no IDE lock file to prove it is still alive, so the app checks
+    # this pid instead (decision 054). No apostrophes in this comment: the jq
+    # program is single-quoted, so one would terminate it.
+    | { state: $state, cwd: $cwd, ide: $ide, pid: $pid,
         label: ($cwd | split("/") | map(select(length > 0)) | last // ""),
         updated_at: $ts, task: $task, detail: $detail }
   ' 2>/dev/null)"

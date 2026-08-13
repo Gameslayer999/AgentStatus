@@ -2,7 +2,7 @@
   "name": "agentstatus",
   "displayName": "AgentStatus",
   "description": "Live status of this window's Claude Code sessions, in the status bar.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "agentstatus",
   "engines": {
     "vscode": "^1.85.0"

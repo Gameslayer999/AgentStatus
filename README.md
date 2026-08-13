@@ -27,9 +27,9 @@ know their state. AgentStatus shows one colored light for each session. The bar 
 above all other windows, also full-screen applications. The lights change immediately.
 Click a light to go directly to that session.
 
-AgentStatus operates with **Claude Code in VS Code** and with the **Cursor agent**. Both
-use the same hook. An optional VS Code extension adds a status-bar item to each VS Code
-window.
+AgentStatus operates with **Claude Code in VS Code**, **in the terminal**, and **in Claude
+Desktop**, and with the **Cursor agent**. They all use the same hook. An optional VS Code
+extension adds a status-bar item to each VS Code window.
 
 ## Install (macOS, Apple Silicon)
 
@@ -63,6 +63,10 @@ At the first start, the application **installs its own hooks**. It writes
 the initial files first. **Claude Code sessions that are already open use the hook
 immediately. A restart is not necessary.**
 
+Claude Code reads that one settings file in VS Code, in the terminal, and in Claude
+Desktop, so this single registration covers all three. There is nothing to install per
+terminal and nothing to alias.
+
 AgentStatus is an accessory application and has **no Dock icon**. To start it at login,
 add it in **System Settings → General → Login Items**.
 
@@ -88,7 +92,8 @@ above.
 
 ## The lights
 
-Each light is one Claude Code or Cursor session.
+Each light is one session: Claude Code in VS Code, in a terminal, or in Claude Desktop, or
+a Cursor agent.
 
 ![The six light states: green for running, orange for blocked with a pulse, white for done, dim gray for idle, red for error with a pulse, and a hollow gray ring for unknown. Each state has a label.](docs/lightbar-states.svg)
 
@@ -112,6 +117,9 @@ Each light is one Claude Code or Cursor session.
   gives their types.
 - **Click a light** to go to that session. In VS Code, the window comes to the front and
   shows the tab of the session. In Cursor, the application opens that agent conversation.
+  For a **terminal** session, Terminal.app comes to the front with that session's tab
+  selected; another terminal application comes to the front without tab selection. For a
+  session in **Claude Desktop**, Claude comes to the front.
 - **Right-click the bar** to open the settings.
 - **Drag the bar** to move it. Hold the bar by the padding, not by a light. The
   application keeps the position.
@@ -181,6 +189,11 @@ window. It has the same click-to-focus and the same tooltip, without the session
 reads the same status files, thus it needs the application (or the development hooks) for
 the signal.
 
+It shows **Claude Code sessions in VS Code only**. A Cursor agent, a terminal session, or a
+session in Claude Desktop can sit in the same project folder, but it has no tab in this
+window, so the extension leaves it out. The floating bar shows those and opens them in the
+correct application.
+
 ```bash
 code --install-extension extension/claudestatus-0.1.2.vsix
 ```
@@ -232,3 +245,15 @@ notes. The workflow stops if the tag does not agree with the version in
 - **Cursor needs the Accessibility permission** for click-to-focus and to keep its lights
   correct. Without it, a click only brings Cursor to the front, and a long-silent agent
   can go gray while it still works.
+- **Only Terminal.app gets tab-precise focus.** It publishes a tty for each tab, which is
+  what identifies the tab a session runs in. Ghostty publishes no such identifier — only a
+  title and a working directory, and neither tells two agents in one project apart — so a
+  Ghostty light brings the right Ghostty window to the front and you pick the tab. macOS asks
+  once for permission to control the terminal application.
+- **A background agent opens in a new terminal.** `claude --bg` runs detached from any
+  terminal, so there is no tab to show. A click opens a new terminal window running
+  `claude attach` for that agent instead. Ghostty is used when it runs, otherwise
+  Terminal.app.
+- **Claude Desktop chat threads have no light.** Claude Desktop provides no hook and keeps
+  no conversation state on disk, so the bar has nothing to read. Claude Code *inside*
+  Claude Desktop is fully supported; ordinary chat conversations are not.

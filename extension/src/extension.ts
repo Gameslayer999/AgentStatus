@@ -23,6 +23,9 @@ interface Session {
   task: string;
   detail: string;
   subagents: string[];
+  /// Which host the session belongs to ("vscode", "cursor", "cli", "claude-desktop").
+  /// This extension serves VS Code sessions only — see `refresh` (decision 054).
+  ide: string;
 }
 
 function statusDir(): string {
@@ -100,6 +103,8 @@ function readSessions(): Session[] {
       task: obj.task ?? "",
       detail: obj.detail ?? "",
       subagents: subs,
+      // A status file written before the `ide` field existed is a VS Code session.
+      ide: typeof obj.ide === "string" && obj.ide ? obj.ide : "vscode",
     });
   }
   return out;
@@ -162,8 +167,15 @@ const items = new Map<string, vscode.StatusBarItem>();
 
 function refresh(): void {
   const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+  // VS Code sessions only (decision 054). `cwd` alone is not enough to say a session
+  // belongs to this window: a Cursor agent, a terminal session, or a Claude Desktop
+  // session sitting in a folder this window happens to have open matches `cwd` just as
+  // well, and none of them has a tab here. Showing them put a status-bar item in the
+  // wrong window, and clicking it handed `claude-vscode.editor.open` an id that names no
+  // VS Code session — which opens a **new Claude tab**. The floating bar shows those
+  // hosts and can focus them properly; this surface is for the ones it can actually reach.
   const sessions = readSessions()
-    .filter((s) => inThisWindow(s.cwd, folders))
+    .filter((s) => s.ide === "vscode" && inThisWindow(s.cwd, folders))
     .sort((a, b) => a.id.localeCompare(b.id));
 
   const seen = new Set<string>();
