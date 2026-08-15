@@ -562,6 +562,24 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 
 ## Recently completed
 
+- **2026-08-15** — **v0.8.0 released, after the first tag published nothing (decision 079).**
+  Version bumped 0.7.1 → 0.8.0 across five manifests plus both lockfiles — a minor bump
+  because 0.7.1 could not run on Windows at all. The first `v0.8.0` tag built **both**
+  platforms successfully and then failed in `publish`: `read dist/msi: is a directory`.
+  `actions/upload-artifact` preserves the structure below the common ancestor of the paths it
+  is handed, and the macOS job passes one path while the Windows job passes two — so the DMG
+  arrived flat and the Windows installers arrived inside `msi/` and `nsis/`, and `dist/*`
+  handed `gh` two directories. #069 had checked those globs against the *local* build output,
+  where the asymmetry does not exist. Now collected with `find dist -type f` and a count
+  guard, so a glob that silently matches too few can never publish a release missing an
+  installer. **Nothing broken reached users** — `gh release create` deletes the release it
+  just made when an upload fails, which is its behaviour, not something this workflow
+  arranged. Also corrected while bumping: the README's release checklist named three of the
+  five files that carry the version.
+  **Still true and still unverified: the macOS half.** #076 has never been run on a Mac. CI
+  now proves it *builds* on `macos-15`, which was the largest unknown, but hook parity and a
+  live session are not proven — check the DMG on a Mac before pointing anyone at the release.
+
 - **2026-08-15** — **A plan-mode approval turns the light orange (decision 078).** Reported as
   "Windows isn't picking up on orange", with the light **green** while waiting. The first thing
   the measurement did was **exonerate the Windows port**: `AskUserQuestion` and Bash permission

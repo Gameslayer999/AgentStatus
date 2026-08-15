@@ -88,6 +88,7 @@
 | 076 | 2026-08-15 | **macOS support drops to 13 (Ventura) and the DMG becomes universal.** The app never targeted macOS 15 — `Info.plist` carried Tauri's default `LSMinimumSystemVersion 10.13`. The 15 floor was one accidental dependency: `report.sh` needs a `jq` that ships at `/usr/bin/jq` only from macOS 15, so every DMG user on 13/14 installed a hook that silently no-opped forever (#059's finding, and the reason #068's port stopped at Windows). macOS now installs the same native `agentstatus-hook` binary Windows has shipped since 0.7.0, so the dependency is gone rather than guarded. 13 is the floor because **Claude Code itself requires macOS 13.0+**, and it is now declared, so an older Mac is refused at install instead of half-working. The DMG is universal because Claude Code supports `darwin-x64` and an arm64-only build excluded every Intel Mac — which also forces the *hook* to be universal, since a compiled hook is arch-specific where `report.sh` was not. Two macOS-only hazards a straight port would have shipped: `fs::copy` is `fcopyfile(COPYFILE_ALL)` and would carry `com.apple.quarantine` onto a binary Claude Code runs on every tool call, and writing over the destination fails `ETXTBSY` while a hook is executing it — so the install writes fresh bytes to a staged path and `rename`s over. **Unverified: everything macOS.** Written on Windows; needs a `cargo check`, `gen-golden.sh`, and a live old-vs-new session diff on a Mac before release | Proposed |
 | 077 | 2026-08-15 | **Several Windows terminal windows are told apart by the session title.** Reported live: with three terminals open, a click brought *a* terminal forward, not the right one. #071 measured one terminal and assumed one window per host process — but Windows Terminal runs every window of an instance in **one** `WindowsTerminal.exe`, so all three chains converged on one pid owning three windows, and the walk kept whichever `EnumWindows` handed it first (z-order). The choice is now made by the title Claude Code writes into the title bar, reusing the Ghostty rule (#055/#066): ends-with is the session's window, contains must be unique. When it cannot tell — an untitled session, or one in a background tab whose window shows another title — the click does nothing rather than raise the wrong terminal (UI Principle #4), a deliberate change from #071. Tab selection remains out of reach (#069). Verified live on the three-window machine, choice asserted separately from the raise because `SetForegroundWindow` cannot succeed from a test binary | Accepted |
 | 078 | 2026-08-15 | **A plan-mode approval turns the light orange.** Reported live as "Windows isn't picking up on orange", with the light showing **green** while waiting. Instrumenting the chain exonerated the Windows port — `AskUserQuestion` and Bash permission prompts already held `blocked` for 43 s / 32 s and rendered orange on screen. The defect is `ExitPlanMode`: its `PermissionRequest` fires when the user *answers*, so `PreToolUse` is the only event that lands while the prompt is up and the light stayed green for the whole 48 s wait, turning orange for under 150 ms at the end. The approved first fix — extend #067's reconcile on Claude Code's own `status: "waiting"` — was **falsified by the same measurement** (status read `busy` throughout the plan prompt) and dropped rather than shipped as dead weight. Instead `ExitPlanMode`/`EnterPlanMode` rewrite their `PreToolUse` to `PermissionRequest` in both hook implementations, so state and detail stay in agreement and `PostToolUse` greens the light on approval. `AskUserQuestion` left out as redundant; `EnterPlanMode` included at the user's choice, accepting a sub-second orange flicker when auto-approved as cheaper than 48 s of wrong-green (UI Principle #2). Golden regeneration is +4 lines / 0 changed, proving the refactor touched nothing else. Verified live: 31.9 s of `blocked` across a real approval, against 48 s of green before | Accepted |
+| 079 | 2026-08-15 | **The release publishes with `find`, not a `dist/*` glob.** The first `v0.8.0` tag built both platforms and then published nothing: `read dist/msi: is a directory`. `actions/upload-artifact` preserves the structure below the **common ancestor of the paths it is given**, and the two jobs give it different numbers of paths — macOS one (its DMG lands flat), Windows two (`msi/` and `nsis/` arrive as directories) — so `dist/*` handed `gh` two files and two directories. Invisible until now because #069 checked the globs against the *local* build output; the asymmetry is created by `upload-artifact`, not by the build. Nothing broken reached users only because `gh release create` deletes the release it just made when an asset upload fails — `v0.7.1` stayed Latest. Now `find dist -type f`, plus a count guard that fails before publishing rather than shipping a release quietly missing an installer (the same class as #041's version guard). Flattening the Windows upload was rejected: it fixes this shape and leaves the next one to another failed tag | Accepted |
 
 ---
 
@@ -4880,3 +4881,62 @@ reproduced — `permissions.defaultMode: "auto"` allowed every command tried, an
 `permissions.ask` rule added mid-session had no effect. Whether those announce themselves on
 time is **unmeasured** (Guideline #4). If a green light on a waiting session is reported
 again, that is where to look next.
+
+---
+
+## 079 — The release publishes with `find`, not a `dist/*` glob
+
+**Date:** 2026-08-15
+**Status:** Accepted
+**Context:** The first `v0.8.0` tag built both platforms successfully and then **published
+nothing**. The `publish` job failed in 9 s with:
+
+```
+Post "https://uploads.github.com/.../releases/370970632/assets?label=&name=msi":
+  read dist/msi: is a directory
+```
+
+### The mechanism
+
+`actions/upload-artifact` preserves the directory structure **below the common ancestor of
+the paths it is given**. The two build jobs give it different numbers of paths, so the two
+artifacts do not arrive in the same shape:
+
+| job | paths given | common ancestor | arrives as |
+|---|---|---|---|
+| macOS | one (`…/bundle/dmg/*.dmg`) | the dmg dir | `dist/AgentStatus_0.8.0_universal.dmg` |
+| Windows | two (`…/msi/*.msi`, `…/nsis/*-setup.exe`) | `…/bundle/` | `dist/msi/…`, `dist/nsis/…` |
+
+`gh release create "$TAG" dist/*` therefore handed `gh` two files and **two directories**.
+This was invisible until now because #069 wrote the matrix and the globs were checked against
+the *local* build output, where both platforms' bundles sit in their own directories — the
+asymmetry is created by `upload-artifact`, not by the build.
+
+**Nothing broken reached users.** `gh release create` deleted the release it had just made
+when an asset upload failed, so `v0.7.1` remained Latest. That is `gh`'s behaviour, not a
+guarantee this workflow arranged, and it is the only reason a half-release did not survive.
+
+### Decision
+
+Collect the installers with `find dist -type f` rather than a glob, so the publish step is
+immune to whichever shape either job produces, and assert the count:
+
+```bash
+mapfile -t installers < <(find dist -type f | sort)
+printf 'publishing %s\n' "${installers[@]}"
+[ ${#installers[@]} -ge 3 ] || { echo "::error::expected 3 installers, found ${#installers[@]}"; exit 1; }
+gh release create "$GITHUB_REF_NAME" "${installers[@]}" …
+```
+
+The count guard is the part worth keeping: the failure above was loud, but a glob that
+silently matched *fewer* files would have published a release missing an installer, which is
+the same class of defect as #041's version guard — fail before publishing, not after.
+
+Flattening the Windows upload instead was rejected: it fixes this shape and leaves the next
+one to be discovered by another failed tag.
+
+### Verified
+
+Simulated `dist/` reproduced from the real CI listing (a flat DMG plus `msi/` and `nsis/`
+subdirectories); the extracted publish script collects exactly the three files and passes the
+guard. The script was also `bash -n`'d out of the YAML rather than eyeballed.

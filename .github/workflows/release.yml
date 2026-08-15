@@ -129,13 +129,23 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # The installers are collected with `find`, not `dist/*`, because the two artifacts do
+      # not arrive with the same shape. `upload-artifact` keeps the directory structure below
+      # the common ancestor of the paths it was given: the macOS job passes one path, so its
+      # DMG lands flat in dist/, while the Windows job passes two (msi/ and nsis/), so those
+      # arrive as dist/msi/ and dist/nsis/. A `dist/*` glob therefore hands `gh` a directory,
+      # which fails the upload with "read dist/msi: is a directory" — observed on the v0.8.0
+      # tag, after both builds had succeeded (decision 079). Recursing over files is immune
+      # to the shape either job happens to produce.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ls -l dist
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          mapfile -t installers < <(find dist -type f | sort)
+          printf 'publishing %s\n' "${installers[@]}"
+          [ ${#installers[@]} -ge 3 ] || { echo "::error::expected 3 installers, found ${#installers[@]}"; exit 1; }
+          gh release create "$GITHUB_REF_NAME" "${installers[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --title "AgentStatus ${GITHUB_REF_NAME}" \
             --generate-notes
