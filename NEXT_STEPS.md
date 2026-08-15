@@ -204,6 +204,12 @@
   - **Display:** a **Tauri** borderless always-on-top window (decision 003) watches that
     file and renders the lights; sessions keyed by `session_id`, labeled by project folder,
     with heartbeat-based staleness (decision 004).
+- **A Windows terminal light is now aimed by session title, not by host process alone
+  (decision 077).** All of one Windows Terminal instance's windows share a single process, so
+  the ancestor walk #071 added identifies the *host*, not the *window*; the title Claude Code
+  writes into the title bar is what tells three terminals apart. Untitled sessions and
+  sessions in background tabs cannot be placed, and their click is declined rather than
+  landing somewhere wrong. Tab selection remains out of reach (#069).
 - **Event → state mapping (to be verified against the installed version — see Now):**
   `UserPromptSubmit`/`PreToolUse` → green; `Notification`/`PermissionRequest`/`Elicitation`
   → orange; `Stop`/`SessionStart` → gray; `StopFailure`/`PostToolUseFailure` → red;
@@ -489,10 +495,15 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
   everything consuming `pid` (`pid_alive`, `owns_terminal`, the #067 reconcile) is macOS-only or
   fails open on a pid it cannot resolve — but it must be measured before any Windows feature
   depends on session liveness. Needs one live interactive Windows session, not a headless run.
-- **`PermissionRequest` and `StopFailure` have never been observed on Windows.** Neither is
-  reachable from a headless `claude -p` run, so their fixtures are built from the contract
-  verified on macOS (#006) and are marked synthetic. They carry no paths, so platform *should*
-  not matter — but that is reasoning, not evidence. Confirm from a live interactive session.
+- **`StopFailure` has never been observed on Windows.** It is not reachable from a headless
+  `claude -p` run, so its fixtures are built from the contract verified on macOS (#006) and are
+  marked synthetic. They carry no paths, so platform *should* not matter — but that is
+  reasoning, not evidence. Confirm from a live interactive session.
+  **`PermissionRequest` is now observed** (decision 078, 2026-08-15): it fired on Windows for
+  an `AskUserQuestion` box and twice for a Bash tool approval, holding `blocked` for 43 s / 32 s
+  / 6 s, and the bar rendered orange on screen. Still unobserved there: whether it fires **on
+  time** for an auto-mode escalation, a file-edit diff approval, or a subagent's own prompt —
+  none could be reproduced, and `ExitPlanMode` is the proven case where it does not (#078).
 - **VS Code / Cursor window-title formats on Windows are unconfirmed (decision 070).**
   Click-to-focus matches a title that `contains(<project folder>)` and `ends_with("Visual
   Studio Code")` / `"Cursor"` — reasoned from the macOS titles, **not observed**, because
@@ -550,6 +561,48 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 ---
 
 ## Recently completed
+
+- **2026-08-15** — **A plan-mode approval turns the light orange (decision 078).** Reported as
+  "Windows isn't picking up on orange", with the light **green** while waiting. The first thing
+  the measurement did was **exonerate the Windows port**: `AskUserQuestion` and Bash permission
+  prompts already held `blocked` for 43 s and 32 s, and a timed screen capture caught the bar
+  drawing orange. The defect is `ExitPlanMode` — its `PermissionRequest` fires when the user
+  *answers*, so `PreToolUse` is the only event that lands while the prompt is up and the light
+  stayed green for the whole 48 s wait, flicking orange for under 150 ms at the end.
+  Worth keeping: **the approved fix was falsified by its own reproduction.** The plan was to
+  extend #067's reconcile on Claude Code's `status: "waiting"` — already parsed every poll, and
+  #067's measured vocabulary always said `waiting` → orange. But status read **`busy`** for the
+  entire plan prompt (it reads `waiting` for the other two), so it would not have caught the
+  reported case. Dropped rather than shipped alongside; recorded in #078 because the reasoning
+  is attractive and will be proposed again.
+  Both hook implementations now rewrite `PreToolUse` for `ExitPlanMode`/`EnterPlanMode` to
+  `PermissionRequest` — rewriting the event, not adding a state branch, is what keeps `state`
+  and `detail` in agreement. `report.sh` changed in lockstep so macOS keeps parity while it
+  still ships the shell hook (#076); the regenerated goldens are **+4 lines, 0 changed**, which
+  is the proof the `$event`→`$ev` refactor touched nothing else. Verified live on the rebuilt
+  binary: **31.9 s** of `blocked` across a real approval, against 48 s of green before, plus a
+  screen capture of the orange light — a before/after pair, not a single after-the-fact reading.
+  Left unmeasured on purpose: auto-mode escalation, file-edit diff approvals and subagent
+  prompts could not be reproduced (`defaultMode: "auto"` allowed every command tried, and a
+  project `permissions.ask` rule added mid-session had no effect).
+
+- **2026-08-15** — **A Windows click now lands on the right terminal window (decision 077).**
+  Reported live: with three terminals open, clicking a light brought *a* terminal forward, not
+  the session's. #071 was measured with one terminal open and assumed one window per host
+  process — but Windows Terminal runs every window of an instance in **one**
+  `WindowsTerminal.exe`, so all three sessions' ancestor walks converged on one pid owning
+  three windows, and the code kept whichever `EnumWindows` handed it first, i.e. z-order.
+  The choice is now made by the session title Claude Code writes into the title bar, reusing
+  the Ghostty rule (#055/#066) unchanged: ends-with is that session's window, contains must be
+  unique. When nothing identifies a window — an untitled session, or one in a background tab
+  whose window shows another session's title — the click does nothing rather than raise the
+  wrong terminal. `focus_host_window` is now `host_window(...).map(raise)` so the choice is
+  testable without `SetForegroundWindow`, which is refused for any process that is not the
+  foreground one and therefore can never succeed from a test binary — the first live run
+  failed on exactly that with the correct window already chosen underneath. Verified live:
+  session `7512a93d` (pid 34064) resolves to `✳ Fix Windows orange input detection`. Tab
+  selection is still out of reach (#069). **`target/release/app.exe` is rebuilt — relaunch the
+  bar to pick this up.**
 
 - **2026-08-15** — **macOS 13 becomes the floor and the DMG becomes universal (decision 076).
   Written, not verified — see the blocking block at the top of Now.** The app never targeted

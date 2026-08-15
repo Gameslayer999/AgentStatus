@@ -1042,10 +1042,30 @@ fn process_tree() -> std::collections::HashMap<u32, (u32, String)> {
 /// This is the window, not the tab — Windows Terminal exposes no way to select a tab, so
 /// that ceiling stands (#069). But the window is far better than the nothing a `cli` light
 /// did before, which is exactly the click-that-goes-nowhere UI Principle #3 forbids.
+///
+/// One host process can own **several** windows: Windows Terminal runs every window of an
+/// instance in one `WindowsTerminal.exe`, so three terminals with a Claude session each share
+/// one pid and the ancestor walk lands on all three at once. Which one comes forward is then
+/// decided by title, not by enumeration order (decision 077) — see `pick_window`.
 #[cfg(windows)]
-fn focus_host_window(pid: i64) -> bool {
+fn focus_host_window(pid: i64, session_id: &str) -> bool {
+    match host_window(pid, session_id) {
+        Some((hwnd, _title)) => raise(hwnd),
+        None => false,
+    }
+}
+
+/// The window `focus_host_window` would raise, and its title. Split from the raise so the
+/// choice can be checked against live sessions without `SetForegroundWindow` — which a test
+/// binary cannot make succeed, since it is refused for a process that is not the foreground
+/// one, and a failed raise would otherwise mask a correct choice.
+#[cfg(windows)]
+fn host_window(
+    pid: i64,
+    session_id: &str,
+) -> Option<(windows_sys::Win32::Foundation::HWND, String)> {
     if pid <= 0 {
-        return false;
+        return None;
     }
     let tree = process_tree();
 
@@ -1055,7 +1075,7 @@ fn focus_host_window(pid: i64) -> bool {
     // walk into an unrelated application's tree and raise its window.
     match tree.get(&(pid as u32)) {
         Some((_, name)) if name == "claude.exe" => {}
-        _ => return false,
+        _ => return None,
     }
 
     // The ancestor chain, nearest first. It stops at the shell: `explorer.exe` owns the
@@ -1079,12 +1099,16 @@ fn focus_host_window(pid: i64) -> bool {
     }
 
     // One sweep for the whole chain rather than one per ancestor: each sweep walks every
-    // visible top-level window and reads its title.
-    let mut owned: std::collections::HashMap<u32, windows_sys::Win32::Foundation::HWND> =
-        std::collections::HashMap::new();
-    each_window(&mut |hwnd, owner, _title| {
+    // visible top-level window and reads its title. Every window each ancestor owns is kept,
+    // not just the first — one process can own several, and picking between them is the whole
+    // problem when a machine has more than one terminal open (decision 077).
+    let mut owned: std::collections::HashMap<
+        u32,
+        Vec<(windows_sys::Win32::Foundation::HWND, String)>,
+    > = std::collections::HashMap::new();
+    each_window(&mut |hwnd, owner, title| {
         if chain.contains(&owner) {
-            owned.entry(owner).or_insert(hwnd);
+            owned.entry(owner).or_default().push((hwnd, title.to_string()));
         }
         true // visit them all: the nearest ancestor is chosen afterwards, not the first seen
     });
@@ -1092,11 +1116,54 @@ fn focus_host_window(pid: i64) -> bool {
     // Nearest ancestor that owns a window wins — the terminal hosting this session, not
     // whatever is further up the tree.
     for candidate in &chain {
-        if let Some(&hwnd) = owned.get(candidate) {
-            return raise(hwnd);
-        }
+        let Some(windows) = owned.get(candidate) else {
+            continue;
+        };
+        // Read the session title only when the choice is actually ambiguous: it costs a
+        // directory scan plus a transcript read on the click path.
+        let session_title = if windows.len() > 1 {
+            claude_ai_title(session_id)
+        } else {
+            None
+        };
+        let titles: Vec<String> = windows.iter().map(|(_, t)| t.clone()).collect();
+        return pick_window(&titles, session_title.as_deref()).map(|i| windows[i].clone());
     }
-    false
+    None
+}
+
+/// Which of the windows a host process owns is showing `session_title`, as an index into
+/// `titles` (enumeration order, so index 0 is the topmost window).
+///
+/// Split out from `focus_host_window` so the rule that decides where a click lands is
+/// testable without a live terminal, exactly as `editor_title_matches` is.
+///
+/// Claude Code keeps the terminal's title set to its own session title while a session is
+/// running, prefixed with an activity glyph — the live windows here read
+/// `◐ Fix Windows orange input detection`, `✳ Extend app support for older macOS versions`.
+/// So the same two grades of match as Ghostty on macOS (decision 066): a title that **ends
+/// with** the session title is showing that session, while one that merely **contains** it
+/// may be showing something else whose title spans it, so that grade must be unambiguous.
+///
+/// With nothing to disambiguate on — no `ai-title` yet, or the session sitting in a
+/// background tab whose title the window does not show — this answers `None` and the click
+/// does nothing, rather than raising whichever window happens to be topmost. A wrong window
+/// is worse than none (UI Principle #4); it is also what the user sees as the bug.
+#[cfg(windows)]
+fn pick_window(titles: &[String], session_title: Option<&str>) -> Option<usize> {
+    if titles.len() < 2 {
+        // A single window is this host's window by construction, titled or not.
+        return titles.first().map(|_| 0);
+    }
+    let want = session_title?;
+    if let Some(i) = titles.iter().position(|t| t.trim_end().ends_with(want)) {
+        return Some(i);
+    }
+    let mut weak = titles.iter().enumerate().filter(|(_, t)| t.contains(want));
+    match (weak.next(), weak.next()) {
+        (Some((i, _)), None) => Some(i),
+        _ => None,
+    }
 }
 
 /// Raise the IDE window that has `root` open, matched the same way as on macOS: by the
@@ -1796,7 +1863,7 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
     #[cfg(windows)]
     {
         if ide == "cli" || ide == "claude-desktop" {
-            if focus_host_window(session_pid(&session_id)) {
+            if focus_host_window(session_pid(&session_id), &session_id) {
                 return;
             }
             if ide == "claude-desktop" {
@@ -3327,24 +3394,66 @@ mod windows_focus {
         };
         let mut found = None;
         for e in entries.flatten() {
-            let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
+            let path = e.path();
+            let Some(sid) = path.file_stem().and_then(|s| s.to_str()).map(str::to_string) else {
+                continue;
+            };
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
             let ide = v.get("ide").and_then(|x| x.as_str()).unwrap_or("");
             let pid = v.get("pid").and_then(|x| x.as_i64()).unwrap_or(0);
             if matches!(ide, "cli" | "claude-desktop") && pid > 0 {
-                found = Some((ide.to_string(), pid));
+                found = Some((ide.to_string(), pid, sid));
                 break;
             }
         }
-        let Some((ide, pid)) = found else {
+        let Some((ide, pid, sid)) = found else {
             println!("no live cli/desktop session with a recorded pid — skipped");
             return;
         };
-        println!("ide={ide} pid={pid}");
-        assert!(
-            super::focus_host_window(pid),
-            "no ancestor of pid {pid} owns a visible window — a {ide} light would click into nothing"
-        );
+        let title = super::claude_ai_title(&sid);
+        println!("ide={ide} pid={pid} session={sid} title={title:?}");
+        let picked = super::host_window(pid, &sid);
+        println!("picked window = {:?}", picked.as_ref().map(|(_, t)| t));
+        let (_, window_title) = picked.unwrap_or_else(|| {
+            panic!("no ancestor of pid {pid} owns a visible window for session {sid} — its light would click into nothing")
+        });
+        // And it must be *that* session's window, not merely one of the host's (decision 077).
+        if let Some(title) = title {
+            assert!(
+                window_title.contains(&title),
+                "picked {window_title:?}, which is not the window showing {title:?}"
+            );
+        }
+    }
+
+    /// The rule that picks between the several windows one host process owns (decision 077).
+    /// Titles as the live Windows Terminal windows carry them: the session title behind an
+    /// activity glyph.
+    #[cfg(windows)]
+    #[test]
+    fn pick_window_matches_the_session_title() {
+        let t = |s: &str| s.to_string();
+        let three = vec![
+            t("◐ Fix Windows orange input detection"),
+            t("◑ Fix Claude terminal window focus on light click"),
+            t("✳ Extend app support for older macOS versions"),
+        ];
+        assert_eq!(super::pick_window(&three, Some("Fix Claude terminal window focus on light click")), Some(1));
+        assert_eq!(super::pick_window(&three, Some("Extend app support for older macOS versions")), Some(2));
+        // Nothing to match on, or nothing matching: no window rather than the topmost one.
+        assert_eq!(super::pick_window(&three, None), None);
+        assert_eq!(super::pick_window(&three, Some("Some other session")), None);
+        // One window is this host's window whatever it is titled — the ordinary single-terminal
+        // case, which must keep working when Claude has not titled the session yet.
+        assert_eq!(super::pick_window(&[t("PowerShell")], None), Some(0));
+        assert_eq!(super::pick_window(&[], Some("anything")), None);
+        // Containing the title without ending in it is a weak match: taken when unique,
+        // declined when two windows share it.
+        let spanning = vec![t("◐ Ship it now — building"), t("◐ Ship it later"), t("Terminal")];
+        assert_eq!(super::pick_window(&spanning, Some("Ship it now")), Some(0));
+        assert_eq!(super::pick_window(&spanning, Some("Ship it later")), Some(1));
+        assert_eq!(super::pick_window(&spanning, Some("Ship it")), None);
     }
 
     /// The title rule decides where a click lands, and a wrong match is not self-correcting

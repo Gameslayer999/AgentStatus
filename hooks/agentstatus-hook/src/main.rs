@@ -252,6 +252,29 @@ pub fn decide(event: &str, payload: &Value, old: Option<&Value>, env: &Env) -> O
         return Some(Outcome { session_id: sid, action, calibration: None, clear_subagents: false });
     }
 
+    // A plan-mode approval is the one prompt Claude Code does not announce when it appears.
+    // Measured live on 2.1.229 (decision 078): for `ExitPlanMode` the `PermissionRequest`
+    // fires at *resolution* time, so the only event during the wait is this `PreToolUse` —
+    // the light stayed green for the 48 s the approval sat on screen and turned orange for
+    // under 150 ms at the end, after the user had already dealt with it. `Bash` behaves the
+    // other way round (its `PermissionRequest` lands 62 ms after `PreToolUse` and holds
+    // `blocked` for the whole wait), which is why only these tools need this.
+    //
+    // Both exist solely to stop and ask the user, so their `PreToolUse` *is* the prompt.
+    // Rewriting the event gives the light exactly the state and the wording the late
+    // `PermissionRequest` would have written, and `PostToolUse` turns it green again on
+    // approval. When one is auto-approved and no prompt appears, the cost is a sub-second
+    // orange flicker — accepted deliberately, because the alternative failure is a green
+    // light on a session that is waiting for you (UI Principle #2).
+    const WAITS_ON_USER: [&str; 2] = ["ExitPlanMode", "EnterPlanMode"];
+    let event = if event == "PreToolUse"
+        && WAITS_ON_USER.contains(&str_or_empty(payload, "tool_name").as_str())
+    {
+        "PermissionRequest"
+    } else {
+        event
+    };
+
     // Failure calibration: a turn-level StopFailure is a real error (red); a
     // PostToolUseFailure is a recovered tool failure — log it but don't flip state
     // (decision 013).
@@ -794,6 +817,40 @@ mod tests {
             outcome.calibration.unwrap(),
             "99\tPostToolUseFailure\ts\ttool=Bash\tinterrupt=false"
         );
+    }
+
+    /// A plan-mode prompt is orange for the whole time it is on screen (decision 078).
+    /// Measured live: `ExitPlanMode`'s `PermissionRequest` fires when the user *answers*,
+    /// so `PreToolUse` is the only event during the wait and the light was green for 48 s.
+    /// Every other tool keeps `PreToolUse` → running, which is what the light means.
+    #[test]
+    fn plan_mode_tools_block_from_pre_tool_use() {
+        let env = Env { host: String::new(), pid: 0, now: 0 };
+        for tool in ["ExitPlanMode", "EnterPlanMode"] {
+            let p = json!({"session_id": "s", "cwd": "/a", "tool_name": tool});
+            let Action::Write(st) = decide("PreToolUse", &p, None, &env).unwrap().action else {
+                panic!("{tool} produced no write");
+            };
+            assert_eq!(st.state, "blocked", "{tool}");
+            assert_eq!(st.detail, format!("⏸ waiting — approve {tool}"), "{tool}");
+
+            // Answering it is a PostToolUse, which returns the light to green.
+            let old = serde_json::to_value(&st).unwrap();
+            let Action::Write(st) = decide("PostToolUse", &p, Some(&old), &env).unwrap().action
+            else {
+                panic!("{tool} answer produced no write");
+            };
+            assert_eq!(st.state, "running", "{tool}");
+        }
+
+        // Not a blanket rule on PreToolUse — an ordinary tool is still running.
+        let p = json!({"session_id": "s", "cwd": "/a", "tool_name": "Bash",
+                       "tool_input": {"command": "ls"}});
+        let Action::Write(st) = decide("PreToolUse", &p, None, &env).unwrap().action else {
+            panic!("no write");
+        };
+        assert_eq!(st.state, "running");
+        assert_eq!(st.detail, "$ ls");
     }
 
     #[test]

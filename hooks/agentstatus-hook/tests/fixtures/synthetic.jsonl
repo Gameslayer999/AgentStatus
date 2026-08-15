@@ -26,3 +26,7 @@
 {"event":"sessionStart","payload":{"session_id":"empty-state-draft","cwd":"/Users/x/proj/Widget"}}
 {"event":"SessionStart","payload":{"cwd":"/Users/x/proj/NoSession"}}
 {"event":"UserPromptSubmit","payload":{"session_id":"s-trail","cwd":"/Users/x/proj/Trailing/","prompt":"trailing separator in cwd"}}
+{"event":"PreToolUse","payload":{"session_id":"s-plan","cwd":"/Users/x/proj/Widget","tool_name":"EnterPlanMode","tool_input":{}}}
+{"event":"PostToolUse","payload":{"session_id":"s-plan","cwd":"/Users/x/proj/Widget","tool_name":"EnterPlanMode"}}
+{"event":"PreToolUse","payload":{"session_id":"s-plan","cwd":"/Users/x/proj/Widget","tool_name":"ExitPlanMode","tool_input":{}}}
+{"event":"PostToolUse","payload":{"session_id":"s-plan","cwd":"/Users/x/proj/Widget","tool_name":"ExitPlanMode"}}

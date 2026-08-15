@@ -40,3 +40,7 @@ null
 null
 null
 {"state":"running","cwd":"/Users/x/proj/Trailing/","ide":"vscode","pid":0,"label":"Trailing","updated_at":0,"task":"trailing separator in cwd","detail":""}
+{"state":"blocked","cwd":"/Users/x/proj/Widget","ide":"vscode","pid":0,"label":"Widget","updated_at":0,"task":"","detail":"⏸ waiting — approve EnterPlanMode"}
+{"state":"running","cwd":"/Users/x/proj/Widget","ide":"vscode","pid":0,"label":"Widget","updated_at":0,"task":"","detail":"⏸ waiting — approve EnterPlanMode"}
+{"state":"blocked","cwd":"/Users/x/proj/Widget","ide":"vscode","pid":0,"label":"Widget","updated_at":0,"task":"","detail":"⏸ waiting — approve ExitPlanMode"}
+{"state":"running","cwd":"/Users/x/proj/Widget","ide":"vscode","pid":0,"label":"Widget","updated_at":0,"task":"","detail":"⏸ waiting — approve ExitPlanMode"}

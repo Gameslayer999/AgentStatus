@@ -322,11 +322,13 @@ powershell -ExecutionPolicy Bypass -File hooks\windows-diagnostics.ps1
 ### Make a release
 
 GitHub Actions builds and publishes the releases. Set the new version in
-`app/src-tauri/tauri.conf.json`, `app/package.json`, and `app/src-tauri/Cargo.toml`. Merge
-to `main`. Then push a tag with the same version:
+`app/src-tauri/tauri.conf.json`, `app/package.json`, `app/src-tauri/Cargo.toml`, and
+`hooks/agentstatus-hook/Cargo.toml` — then rebuild once so both `Cargo.lock`s and
+`app/package-lock.json` pick the number up. Merge to `main`. Then push a tag with the same
+version:
 
 ```bash
-git tag v0.7.1 && git push origin v0.7.1
+git tag v0.8.0 && git push origin v0.8.0
 ```
 
 The workflow builds the universal (arm64 + x86_64) DMG on a macOS runner and the MSI and
@@ -348,6 +350,12 @@ starts the workflow.
   bar finds the terminal that hosts the session and focuses that window. Windows Terminal
   offers no way to select a tab, so if the session is in a background tab you pick the tab
   yourself. On macOS, Terminal.app and Ghostty get tab-precise focus.
+- **On Windows, several terminal windows are told apart by the session title.** Windows
+  Terminal runs every window of an instance in one process, so the hosting process alone
+  does not say which window a session is in; the bar matches the title Claude Code writes
+  into the title bar instead. A session Claude has not titled yet, and one sitting in a
+  background tab whose window shows another session's title, cannot be placed — the click
+  then does nothing rather than bringing the wrong terminal forward.
 - **Windows Subsystem for Linux is not supported.** A session running inside WSL writes its
   status inside WSL, where the Windows application cannot see it.
 - **Cursor has no blocked light.** Cursor sends no permission event, so its lights show

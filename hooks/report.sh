@@ -17,6 +17,9 @@
 # Contract (Claude Code 2.1.201 — DECISIONS.md #006; Cursor 3.10.11 — #018):
 #   running  <- UserPromptSubmit | PreToolUse | PostToolUse
 #   blocked  <- PermissionRequest  (Claude only; Cursor has no such event)
+#            <- PreToolUse for ExitPlanMode/EnterPlanMode — those prompts fire their
+#               PermissionRequest only when the user answers, so PreToolUse is the
+#               only event that lands while they are on screen (decision 078)
 #   idle     <- Stop | SessionStart
 #   error    <- StopFailure  (a real turn/API failure; PostToolUseFailure is a
 #               recovered tool failure and does NOT flip the light — decision 013)
@@ -128,12 +131,21 @@ esac
     def norm: if (test("^[A-Za-z]:") or startswith("\\\\")) then (split("\\") | join("/")) else . end;
     ($oldjson | if . == "" then {} else (fromjson? // {}) end) as $old
     | . as $p
+    # A plan-mode approval is the one prompt Claude Code does not announce when it
+    # appears: PermissionRequest fires at resolution time, so the only event during the
+    # wait is this PreToolUse and the light stays green throughout (decision 078,
+    # measured at 48 seconds). Both tools exist solely to stop and ask, so their
+    # PreToolUse is the prompt; rewriting the event gives the light the same state and
+    # the same wording the late event would have written.
+    | (if $event == "PreToolUse"
+         and (($p.tool_name // "") | test("^(ExitPlanMode|EnterPlanMode)$"))
+       then "PermissionRequest" else $event end) as $ev
     | ({ "UserPromptSubmit":"running", "PreToolUse":"running", "PostToolUse":"running",
          "PermissionRequest":"blocked", "Stop":"idle", "SessionStart":"idle",
-         "StopFailure":"error" }[$event]) as $base
+         "StopFailure":"error" }[$ev]) as $base
     | ($p.cursor_version != null) as $isCursor
     | (($p.status // "") | test("error|fail|abort|cancel"; "i")) as $failedStop
-    | (if $event == "Stop" and $failedStop then "error" else $base end) as $state
+    | (if $ev == "Stop" and $failedStop then "error" else $base end) as $state
     | select($state != null)
     # Cursor puts the workspace in workspace_roots[]; a tool-level .cwd (e.g. /tmp) is
     # the exec dir of that tool call, not the session folder — prefer workspace_roots.
@@ -146,19 +158,19 @@ esac
        elif $host != "" then $host
        else ($old.ide // "vscode") end) as $ide
     | ($p.tool_name // "") as $tool
-    | (if $event == "UserPromptSubmit" then ($p.prompt | trunc(160)) else ($old.task // "") end) as $task
-    | (if $event == "PreToolUse" then
+    | (if $ev == "UserPromptSubmit" then ($p.prompt | trunc(160)) else ($old.task // "") end) as $task
+    | (if $ev == "PreToolUse" then
          (if $tool == "Bash" then "$ " + ($p.tool_input.command | trunc(90))
           elif ($tool | test("^(Edit|Write|Read|NotebookEdit)$")) then
             $tool + " " + (($p.tool_input.file_path // "") | norm | split("/") | last)
           else "Running " + $tool end)
-       elif $event == "PermissionRequest" then
+       elif $ev == "PermissionRequest" then
          (if $tool == "AskUserQuestion" then "⏸ waiting — a question for you"
           else "⏸ waiting — approve " + $tool end)
-       elif $event == "Stop" then
+       elif $ev == "Stop" then
          (if $failedStop then ("⚠ turn failed — " + ($p.status // "")) else (($p.last_assistant_message // "") | trunc(160)) end)
-       elif $event == "StopFailure" then ("⚠ turn failed" + (if ($p.error_type // "") != "" then " — " + $p.error_type else "" end))
-       elif $event == "SessionStart" then ""
+       elif $ev == "StopFailure" then ("⚠ turn failed" + (if ($p.error_type // "") != "" then " — " + $p.error_type else "" end))
+       elif $ev == "SessionStart" then ""
        else ($old.detail // "") end) as $detail
     # pid = the parent of this hook process, i.e. the claude process itself. A CLI
     # session has no IDE lock file to prove it is still alive, so the app checks

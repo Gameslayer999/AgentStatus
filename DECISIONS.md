@@ -86,6 +86,8 @@
 | 074 | 2026-08-15 | **Opening the tray popover on Windows opens the settings panel with it.** Requested live. On Windows the tray item is a single summary dot (#072), so the popover was showing a larger copy of what the user had just clicked and hiding the panel they wanted behind another right-click; on macOS the menu-bar item already shows every dot, so it keeps #024's behaviour. The mechanism is the interesting part: `visibilitychange` is the natural signal and the codebase already used it for this moment, but **WebView2 keeps the document "visible" while the window is hidden**, so it never fires on Windows — the first implementation relied on it and did nothing. The backend now emits `popover-shown`. Opening via the normal `toggleSettings` inherits the upward growth, the lights anchor, and `fit_popover` (#073), so it lands 189x361 clear of the taskbar | Accepted |
 | 075 | 2026-08-15 | **The settings panel collapses without the lights jumping.** Reported live, and the asymmetry (only on collapse) was the clue: `panel-above` is `column-reverse`, so the lights sit at the *bottom* of the open panel; collapsing mutates the DOM first, snapping them to the top of a still-tall window, and only three-plus frames later do the async resize and re-anchor put them back. DOM and window geometry cannot be made atomic, so the fix suppresses the paint instead — `visibility: hidden` across the transition, restored once the window is final. `visibility` rather than `display`/`opacity` because `resizeToContent` still has to measure the layout. The rAF wait is now bounded (250 ms) and the restore is in a `finally`, or a popover dismissed mid-collapse would leave the bar invisible for good. Also fixed here: #073's debounce stamped even when the popover was already hidden, so the next tray click was swallowed. Verified with a **negative control** — fix off: 360 px jump; fix on: 22 px | Accepted |
 | 076 | 2026-08-15 | **macOS support drops to 13 (Ventura) and the DMG becomes universal.** The app never targeted macOS 15 — `Info.plist` carried Tauri's default `LSMinimumSystemVersion 10.13`. The 15 floor was one accidental dependency: `report.sh` needs a `jq` that ships at `/usr/bin/jq` only from macOS 15, so every DMG user on 13/14 installed a hook that silently no-opped forever (#059's finding, and the reason #068's port stopped at Windows). macOS now installs the same native `agentstatus-hook` binary Windows has shipped since 0.7.0, so the dependency is gone rather than guarded. 13 is the floor because **Claude Code itself requires macOS 13.0+**, and it is now declared, so an older Mac is refused at install instead of half-working. The DMG is universal because Claude Code supports `darwin-x64` and an arm64-only build excluded every Intel Mac — which also forces the *hook* to be universal, since a compiled hook is arch-specific where `report.sh` was not. Two macOS-only hazards a straight port would have shipped: `fs::copy` is `fcopyfile(COPYFILE_ALL)` and would carry `com.apple.quarantine` onto a binary Claude Code runs on every tool call, and writing over the destination fails `ETXTBSY` while a hook is executing it — so the install writes fresh bytes to a staged path and `rename`s over. **Unverified: everything macOS.** Written on Windows; needs a `cargo check`, `gen-golden.sh`, and a live old-vs-new session diff on a Mac before release | Proposed |
+| 077 | 2026-08-15 | **Several Windows terminal windows are told apart by the session title.** Reported live: with three terminals open, a click brought *a* terminal forward, not the right one. #071 measured one terminal and assumed one window per host process — but Windows Terminal runs every window of an instance in **one** `WindowsTerminal.exe`, so all three chains converged on one pid owning three windows, and the walk kept whichever `EnumWindows` handed it first (z-order). The choice is now made by the title Claude Code writes into the title bar, reusing the Ghostty rule (#055/#066): ends-with is the session's window, contains must be unique. When it cannot tell — an untitled session, or one in a background tab whose window shows another title — the click does nothing rather than raise the wrong terminal (UI Principle #4), a deliberate change from #071. Tab selection remains out of reach (#069). Verified live on the three-window machine, choice asserted separately from the raise because `SetForegroundWindow` cannot succeed from a test binary | Accepted |
+| 078 | 2026-08-15 | **A plan-mode approval turns the light orange.** Reported live as "Windows isn't picking up on orange", with the light showing **green** while waiting. Instrumenting the chain exonerated the Windows port — `AskUserQuestion` and Bash permission prompts already held `blocked` for 43 s / 32 s and rendered orange on screen. The defect is `ExitPlanMode`: its `PermissionRequest` fires when the user *answers*, so `PreToolUse` is the only event that lands while the prompt is up and the light stayed green for the whole 48 s wait, turning orange for under 150 ms at the end. The approved first fix — extend #067's reconcile on Claude Code's own `status: "waiting"` — was **falsified by the same measurement** (status read `busy` throughout the plan prompt) and dropped rather than shipped as dead weight. Instead `ExitPlanMode`/`EnterPlanMode` rewrite their `PreToolUse` to `PermissionRequest` in both hook implementations, so state and detail stay in agreement and `PostToolUse` greens the light on approval. `AskUserQuestion` left out as redundant; `EnterPlanMode` included at the user's choice, accepting a sub-second orange flicker when auto-approved as cheaper than 48 s of wrong-green (UI Principle #2). Golden regeneration is +4 lines / 0 changed, proving the refactor touched nothing else. Verified live: 31.9 s of `blocked` across a real approval, against 48 s of green before | Accepted |
 
 ---
 
@@ -4719,3 +4721,162 @@ observation — confirm it against the first universal build.
 Its registration is replaced (`HOOK_MARKERS` matches both names), so nothing invokes it; the
 Windows upgrade path leaves the same file, and removing files from a user's `~/.claude` for
 tidiness is not worth the blast radius.
+
+## 077 — Several Windows terminal windows are told apart by the session title
+
+**Date:** 2026-08-15
+**Status:** Accepted (fixes #071)
+
+**Context:** Reported live: *"when multiple terminals are open with claude, clicking a light
+only brings a terminal into focus but does not focus the right window."* Decision 071 focuses
+a `cli` light by walking up from the recorded `claude` pid to the first ancestor owning a
+visible titled window. The measurement behind it had **one** terminal open, and it hid the
+assumption that a host process owns one window. Three Claude sessions in three terminals on
+this machine:
+
+```
+claude.exe 34064 → powershell.exe 24256 ┐
+claude.exe 36412 → powershell.exe  5480 ├→ WindowsTerminal.exe 30784   (all three)
+claude.exe 31588 → powershell.exe 33092 ┘
+```
+
+Windows Terminal runs every window of an instance in **one** process, so all three chains
+converge on pid 30784, which owns all three windows. `focus_host_window` kept the first window
+`EnumWindows` handed it (`owned.entry(owner).or_insert(hwnd)`) — that is z-order, so the click
+raised whichever terminal was already nearest the top. Two of three clicks landed on the wrong
+session, and the "right" one was luck.
+
+**Decision:** When the host process owns more than one window, choose between them by the
+session title, reusing the macOS Ghostty rule (#055/#066) unchanged. Claude Code keeps the
+terminal's title bar set to its own session title behind an activity glyph, and the app
+already reads that title from the transcript's `ai-title` record for exactly this purpose. The
+live windows and titles join cleanly:
+
+```
+◐ Fix Windows orange input detection            ← ai-title "Fix Windows orange input detection"
+◑ Fix Claude terminal window focus on light click
+✳ Extend app support for older macOS versions
+```
+
+So: a title that **ends with** the session title is that session's window (strong); one that
+merely **contains** it may be showing something else spanning it, so that grade must be
+unique to act on. A single window is still taken as-is, titled or not — no ambiguity, and no
+transcript read on the click path.
+
+**When it cannot tell, the click does nothing.** Two cases: a session Claude has not titled
+yet, and a session in a *background tab*, whose window shows the foreground tab's title.
+Raising an arbitrary window there is precisely the reported bug, and a wrong window is worse
+than none (UI Principle #4). This is a deliberate behaviour change from #071, which always
+raised something.
+
+**What this does not do:** select the tab. #069's ceiling stands — Windows Terminal still
+exposes no way to select one.
+
+**Verified live**, on the three-window machine above:
+
+- `focus_host_window` is now `host_window(...).map(raise)`, so the *choice* can be asserted
+  without `SetForegroundWindow` — which is refused for a process that is not the foreground
+  one, so a test binary can never make it succeed (the first run of the live test failed on
+  exactly that, with the correct window chosen underneath). `focus_host_window_reaches_a_window`
+  (ignored, run explicitly) now asserts the chosen window's title contains the session's:
+  session `7512a93d`, pid 34064, resolved to `✳ Fix Windows orange input detection` — its own
+  window, not the topmost one.
+- `pick_window_matches_the_session_title` covers the rule itself against those live titles:
+  strong match, weak-unique match, ambiguous weak declined, no title declined, single window
+  taken.
+
+---
+
+## 078 — A plan-mode approval turns the light orange
+
+**Date:** 2026-08-15
+**Status:** Accepted
+**Context:** Reported live: "the Windows version isn't picking up on orange (user input
+needed) things right now." Asked what the light showed instead, the answer was **green**.
+
+### What was measured
+
+The whole chain was instrumented rather than reasoned about: a 150 ms poller over
+`~/.claude/status/sessions/<id>.json` and Claude Code's own `~/.claude/sessions/<pid>.json`,
+plus timed full-screen captures of the bar. Claude Code 2.1.229, Windows, `ide:"cli"`.
+
+**The Windows port is not at fault**, and this is worth recording so nobody re-investigates
+it. Three prompt types already worked end to end:
+
+| prompt | when `PermissionRequest` fires | light | held | Claude's own `status` |
+|---|---|---|---|---|
+| `AskUserQuestion` | when the prompt appears | `blocked` | 43 s | `waiting` |
+| Bash permission (1st) | 62 ms after `PreToolUse` | `blocked` | 32 s | `waiting` |
+| Bash permission (2nd) | same | `blocked` | 6 s | `waiting` |
+
+A capture taken 8 s into the first case shows the bar drawing green + orange. Registration is
+correct too (11 events, `PermissionRequest` among them) and the event name is present in the
+2.1.229 binary.
+
+**`ExitPlanMode` is the defect.** Its `PermissionRequest` fires at *resolution* time:
+
+```
+01:19:07.803  running   "Running ExitPlanMode"              <- PreToolUse; prompt appears
+   … 48 seconds of the approval sitting on screen, light GREEN …
+01:19:55.122  running   "⏸ waiting — approve ExitPlanMode"  <- PermissionRequest, on approval;
+                                                               PostToolUse overwrites it in
+                                                               under 150 ms
+```
+
+So the orange existed for a fraction of a second, *after* the user had already dealt with it.
+
+### Why the obvious fix was dropped
+
+The first plan was to extend #067's reconcile: Claude Code's own record reads `status:
+"waiting"` while a session is stopped for the user, it is already parsed every poll, and
+#067's measured vocabulary always said `waiting` → orange while only the `idle` → grey half
+was implemented. It was approved, then **falsified by the reproduction above**: during the
+plan prompt Claude Code's status stayed `busy` the whole time. It would not have caught the
+reported case, and it added no coverage for any case that was measured, so it was dropped
+rather than shipped as well. Recorded because the reasoning is attractive and someone will
+propose it again.
+
+### Decision
+
+`ExitPlanMode` and `EnterPlanMode` exist solely to stop and ask the user, so their
+`PreToolUse` **is** the prompt. Both hook implementations rewrite that event to
+`PermissionRequest` before the state map, which yields exactly the state and the wording the
+late event would have written; `PostToolUse` returns the light to green on approval.
+
+Rewriting the event rather than adding a state branch is what keeps `state` and `detail` in
+agreement — one substitution, and the existing mapping does the rest.
+
+`AskUserQuestion` was considered and **left out**: it already blocks through the real event,
+so adding it would be redundant on what was measured. `EnterPlanMode` was included at the
+user's explicit choice even though it did **not** prompt in either observation; the cost when
+a tool in the set is auto-approved is a sub-second orange flicker, accepted deliberately as
+far cheaper than 48 s of wrong-green on a session that is waiting (UI Principle #2).
+
+- `hooks/agentstatus-hook/src/main.rs` — `WAITS_ON_USER` plus the rewrite in `decide`.
+- `hooks/report.sh` — the same rewrite in jq as `$ev`, every downstream `$event` switched to
+  it, so macOS keeps parity for as long as it ships the shell hook (see #076).
+- Four fixtures added to `synthetic.jsonl` (both tools, each followed by its `PostToolUse`)
+  and `hooks/gen-golden.sh` re-run. The regenerated golden file is **+4 lines, 0 changed** —
+  that diff is the proof the `$event`→`$ev` refactor altered nothing else.
+
+No status-file schema change, no new hook registration, no app-side change.
+
+### Verified
+
+- `cargo test` — 14 passing, including `matches_report_sh_on_every_fixture` (strict equality
+  against `report.sh` across all 46 fixtures) and a new
+  `plan_mode_tools_block_from_pre_tool_use` that also pins the negative case: `Bash`
+  `PreToolUse` is still `running` with `$ ls`.
+- Live, against the rebuilt binary installed over `~/.claude/status/agentstatus-hook.exe`:
+  a real plan approval held `blocked` **31.9 s**, for the entire time it was on screen, and
+  returned to `running` on approval. The identical prompt held green for 48 s before the fix,
+  which is the before/after pair rather than a single after-the-fact reading.
+- A screen capture during that window shows the session's light **orange** on the bar.
+
+### Not fixed, and deliberately recorded
+
+Auto-mode escalation, file-edit diff approvals, and a subagent's own prompt were never
+reproduced — `permissions.defaultMode: "auto"` allowed every command tried, and a project
+`permissions.ask` rule added mid-session had no effect. Whether those announce themselves on
+time is **unmeasured** (Guideline #4). If a green light on a waiting session is reported
+again, that is where to look next.
