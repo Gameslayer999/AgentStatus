@@ -46,7 +46,7 @@ needs it.
 > AgentStatus is **not signed and not notarized**. Thus macOS Gatekeeper stops it at the
 > first start. Step 3 removes the download quarantine, and the application starts.
 
-1. Download **`AgentStatus_0.7.1_universal.dmg`** from the
+1. Download **`AgentStatus_0.8.0_universal.dmg`** from the
    [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest). One
    download covers both Apple Silicon and Intel.
 2. Open the DMG. Drag **AgentStatus** into **Applications**.
@@ -85,7 +85,7 @@ Security → Automation.
 > The installer is **not signed**. Windows SmartScreen therefore shows "Windows protected
 > your PC" the first time you run it. Choose **More info → Run anyway**.
 
-1. Download **`AgentStatus_0.7.1_x64-setup.exe`** from the
+1. Download **`AgentStatus_0.8.0_x64-setup.exe`** from the
    [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest). An
    `.msi` is published alongside it if you prefer that.
 2. Run the installer.
