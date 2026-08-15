@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// AgentStatus — install/uninstall the real status hooks (report.sh).
+// AgentStatus — install/uninstall the real status hooks (agentstatus-hook).
 //
 // Merges the status hooks into the user's ~/.claude/settings.json WITHOUT
 // clobbering existing settings or hooks (Agent Guideline #3). Idempotent
@@ -22,19 +22,17 @@ const CLAUDE_BACKUP = CLAUDE_SETTINGS + '.agentstatus-bak';
 const LEGACY_CODEX_HOOKS = join(homedir(), '.codex', 'hooks.json');
 const LEGACY_ANTIGRAVITY_HOOKS = join(homedir(), '.gemini', 'config', 'hooks.json');
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
-const REPORT = join(HOOKS_DIR, 'report.sh');
 const HOOK_BIN = join(
   HOOKS_DIR, 'agentstatus-hook', 'target', 'release',
   process.platform === 'win32' ? 'agentstatus-hook.exe' : 'agentstatus-hook',
 );
 
-// Which hook this platform registers, mirroring install.rs (decision 068): Windows uses the
-// native binary — `report.sh` needs a `jq` Windows does not ship and costs ~8x more per
-// event — while macOS stays on `report.sh` until the port is diffed against a live macOS
-// session. The command is handed to a shell (Git Bash on Windows), so a Windows path is
-// written with forward slashes (a backslash is an escape there) and quoted for spaces.
+// Both platforms register the native binary, mirroring install.rs (decisions 068 and 076):
+// `report.sh` needs a `jq` that Windows does not ship at all and macOS ships only from 15,
+// and it costs ~8x more per event. The command is handed to a shell (Git Bash on Windows),
+// so it is quoted for spaces and a Windows path is written with forward slashes (a backslash
+// is an escape there).
 function hookCommand() {
-  if (process.platform !== 'win32') return REPORT;
   if (!existsSync(HOOK_BIN)) {
     console.error(`Missing ${HOOK_BIN}\nBuild it first:  npm --prefix app run stage-hook`);
     process.exit(1);

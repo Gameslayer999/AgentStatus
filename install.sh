@@ -8,7 +8,8 @@ cd "$(dirname "$0")"
 echo "== AgentStatus installer =="
 
 # --- prerequisites ---
-command -v jq   >/dev/null 2>&1 || { echo "Missing: jq (install with: brew install jq)"; exit 1; }
+# No jq: the hook is a compiled binary on both platforms now (decisions 068/076). jq is only
+# a dev dependency of hooks/gen-golden.sh, which this script does not run.
 command -v node >/dev/null 2>&1 || { echo "Missing: node (https://nodejs.org)"; exit 1; }
 if ! command -v cargo >/dev/null 2>&1 && [ -f "$HOME/.cargo/env" ]; then
   # shellcheck disable=SC1091

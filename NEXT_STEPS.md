@@ -7,6 +7,14 @@
 
 ## Current state
 
+- **⚠ macOS is on unverified code (decision 076).** Both platforms now install the native
+  `agentstatus-hook` binary — `report.sh` is no longer installed anywhere, only kept as the
+  reference `gen-golden.sh` generates goldens from. The supported floor is **macOS 13**
+  (declared, matching Claude Code's own requirement) and the DMG is **universal**, hook
+  included. This closes the real macOS-15 bug: `jq` ships at `/usr/bin/jq` only from 15, so
+  every DMG user on 13/14 had a hook that no-opped silently forever. **All of it was written
+  on the Windows box and none of it has run on a Mac** — see the blocking checklist at the top
+  of *Now* before tagging anything.
 - **Claude Code lights now have a state reconcile of their own (decision 067).** Until this,
   Cursor had one (#048/#052) and background jobs had one (#063), but a Claude Code light was
   pure hook output — and the hook can only reach `idle` through a `Stop` event, so any turn
@@ -239,6 +247,36 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Now (build queue, in order)
 
+**⚠ BLOCKING — verify decision 076 on a Mac before any release.** The macOS-13 floor, the
+binary hook on macOS, and the universal DMG were all written on the Windows box. `cargo check`
+passes there, which proves only that Windows is unregressed; **every line of the new macOS
+path is unrun.** Until this list is green, macOS users are on unverified code, and tagging a
+release ships it to all of them. On a Mac, in order:
+
+1. `cd app/src-tauri && cargo check` — the `#[cfg(not(windows))]` `install_binary` has never
+   been compiled.
+2. `cd hooks/agentstatus-hook && cargo test` — the golden-parity suite, on macOS this time.
+3. `./hooks/gen-golden.sh` — confirm it reproduces `tests/fixtures/golden.jsonl` byte for
+   byte. A diff means `report.sh` behaves differently on macOS than on the Windows box the
+   goldens were captured on, and the port's equivalence claim needs re-reading before
+   anything ships.
+4. `./install.sh`, then a **live session diffed old-vs-new**: run a turn with the old
+   `report.sh` registered, capture `~/.claude/status/sessions/<id>.json` after each event,
+   re-register the binary, run the same turn, diff. `pid` and `updated_at` differ by design;
+   nothing else may.
+5. Confirm the installed `~/.claude/status/agentstatus-hook` is executable and carries **no**
+   `com.apple.quarantine` (`xattr -l`) after a DMG install cleared through *"Open Anyway"*
+   rather than `xattr -dr` — that path is the reason the install writes bytes instead of
+   `fs::copy`ing, and it is the one hazard here with no Windows analogue to reason from.
+6. Build the universal DMG once (`AGENTSTATUS_HOOK_UNIVERSAL=1 npm run tauri build --
+   --target universal-apple-darwin`) and check three things: `lipo -archs` on
+   `Contents/Resources/resources/agentstatus-hook` reports both slices, `LSMinimumSystemVersion`
+   in `Info.plist` reads `13.0`, and the **actual DMG filename** matches what the README tells
+   users to download (`AgentStatus_0.7.1_universal.dmg` is an expectation, not an observation).
+7. `hooks/sign-app.sh` still verifies clean — `codesign --deep` now has a nested Mach-O in
+   `Contents/Resources` to sign, which it did not before. A failure here silently costs the
+   Accessibility grant (#039), so read its output rather than trusting its exit code.
+
 **Current focus — Windows support, option B (decisions 068/069).** Native Windows only;
 Cursor-AX and per-tab terminal focus are out of scope by decision. Sequenced so macOS is
 never at risk. (Kept out of the numbered queue below, whose numbering runs on into **Next**.)
@@ -317,16 +355,12 @@ never at risk. (Kept out of the numbered queue below, whose numbering runs on in
      Verified by driving the real UI end to end: right-click → Tray → the icon appears in the
      notification area (found by its new tooltip) → clicking it reveals the popover →
      switching back restores the floating bar.
-   - **g. Switch macOS to the binary hook — NOT DONE, and deliberately so.** (a)–(f) are
-     complete and verified on Windows, but this step is the one that touches existing macOS
-     users, and it cannot be verified from a Windows machine: it needs a `cargo check` for
-     macOS, `hooks/gen-golden.sh` re-run there, and a live session diffed old-vs-new. Doing
-     it blind would be exactly the "ship it and see" the Windows-first sequencing was chosen
-     to avoid. macOS still writes and registers `report.sh`, unchanged.
-     When picking it up: `tauri.macos.conf.json` needs the resource entry that
-     `tauri.windows.conf.json` has, and `install.rs`'s `#[cfg(not(windows))]` branch swaps
-     from writing `report.sh` to copying the binary. Both are small; the verification is the
-     work.
+   - **g. Switch macOS to the binary hook — ⚠ WRITTEN 2026-08-15 (decision 076), NOT YET
+     VERIFIED.** The code is in: `tauri.macos.conf.json` declares the resource,
+     `install.rs`'s `#[cfg(not(windows))]` branch copies the binary, `setup.mjs` follows.
+     What has not changed is why this was deferred — **none of it has run on a Mac**, and it
+     is the one step that touches existing macOS users. See the verification block at the top
+     of the queue below; do not tag a release until it is green.
 
 0. **From the 2026-08-13 competitor survey (decisions 056–059).** In priority order:
    - **a. ✅ Superseded 2026-08-14 (decision 068)** — the `jq` guard is no longer needed,
@@ -516,6 +550,27 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 ---
 
 ## Recently completed
+
+- **2026-08-15** — **macOS 13 becomes the floor and the DMG becomes universal (decision 076).
+  Written, not verified — see the blocking block at the top of Now.** The app never targeted
+  macOS 15: `Info.plist` carried Tauri's default `LSMinimumSystemVersion 10.13`, no code is
+  version-gated, and the CSS (`oklch`, `color-mix`) is fine on Ventura's Safari. The 15 floor
+  was one accidental dependency — `report.sh` needs a `jq` that ships at `/usr/bin/jq` only
+  from macOS 15, so every DMG user on 13/14 installed a hook, registered it, and got silence
+  forever. macOS now installs the same native `agentstatus-hook` Windows has run since 0.7.0,
+  which is #068 finally reaching its second platform. **13 is the floor because Claude Code
+  itself requires macOS 13.0+**, and it is now declared rather than defaulted, so an older Mac
+  is refused at install instead of half-working. The DMG went universal because Claude Code
+  supports `darwin-x64` and arm64-only excluded every Intel Mac — which forces the *hook* to
+  be universal too, the non-obvious part: a shell script ran on any architecture, a compiled
+  hook does not, so `stage-hook.mjs` now `lipo`s both slices under
+  `AGENTSTATUS_HOOK_UNIVERSAL=1` and asserts both are present before staging. Two macOS-only
+  hazards the Windows code gave no reason to expect: `fs::copy` is
+  `fcopyfile(COPYFILE_ALL)` and would carry `com.apple.quarantine` onto a binary Claude Code
+  runs on every tool call, and writing over the destination fails `ETXTBSY` while a hook is
+  executing it — so the install writes fresh bytes to a staged path and `rename`s over.
+  `install.sh` lost its `jq` prerequisite; `jq` is now only a dev dependency of
+  `gen-golden.sh`.
 
 - **2026-08-15** — **Collapsing the settings panel no longer flickers (decision 075).**
   Reported live, and the asymmetry — only on collapse, never on open — was the clue.

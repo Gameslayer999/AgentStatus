@@ -13,6 +13,13 @@
 // kind. Re-running is cheap: cargo no-ops when nothing changed, and the copy is skipped when
 // the bytes already match.
 //
+// **Universal builds (decision 076).** The macOS DMG ships arm64 + x86_64 so Intel Macs are
+// covered, and a *binary* hook is arch-specific where `report.sh` was not — an arm64-only
+// hook inside a universal app would leave every Intel user with a silently dead app. Set
+// `AGENTSTATUS_HOOK_UNIVERSAL=1` (the release workflow does) to build both slices and `lipo`
+// them; the result is verified to carry both before it is staged. Unset — every local build —
+// stages the host arch only, so no developer needs a second rustup target installed.
+//
 //   node hooks/stage-hook.mjs
 
 import { execFileSync } from 'node:child_process';
@@ -24,12 +31,40 @@ const REPO = dirname(dirname(fileURLToPath(import.meta.url)));
 const CRATE = join(REPO, 'hooks', 'agentstatus-hook');
 const TAURI = join(REPO, 'app', 'src-tauri');
 const BIN = process.platform === 'win32' ? 'agentstatus-hook.exe' : 'agentstatus-hook';
+const UNIVERSAL = process.env.AGENTSTATUS_HOOK_UNIVERSAL === '1' && process.platform === 'darwin';
+const SLICES = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
 
 // Always the release build: this is the binary users get, and it is what makes the hook
 // fast enough to satisfy Agent Guideline #3. A debug hook would ship a slow one.
-execFileSync('cargo', ['build', '--release'], { cwd: CRATE, stdio: 'inherit' });
+const cargo = (args) => execFileSync('cargo', args, { cwd: CRATE, stdio: 'inherit' });
 
-const src = join(CRATE, 'target', 'release', BIN);
+let src;
+if (UNIVERSAL) {
+  // Idempotent and a no-op when the targets are already there (Agent Guideline #8) — this is
+  // what keeps "build a universal hook" one command rather than a documented prerequisite.
+  execFileSync('rustup', ['target', 'add', ...SLICES], { stdio: 'inherit' });
+  for (const slice of SLICES) cargo(['build', '--release', '--target', slice]);
+  src = join(CRATE, 'target', 'universal', 'release', BIN);
+  mkdirSync(dirname(src), { recursive: true });
+  execFileSync('lipo', [
+    '-create', '-output', src,
+    ...SLICES.map((s) => join(CRATE, 'target', s, 'release', BIN)),
+  ], { stdio: 'inherit' });
+
+  // A hook that runs on only one of the two architectures the DMG claims to support is
+  // exactly the silent failure this change exists to remove, so prove it before staging.
+  const archs = execFileSync('lipo', ['-archs', src], { encoding: 'utf8' }).trim().split(/\s+/);
+  for (const need of ['arm64', 'x86_64']) {
+    if (!archs.includes(need)) {
+      console.error(`stage-hook: ${BIN} is missing the ${need} slice (has: ${archs.join(', ')})`);
+      process.exit(1);
+    }
+  }
+} else {
+  cargo(['build', '--release']);
+  src = join(CRATE, 'target', 'release', BIN);
+}
+
 if (!existsSync(src)) {
   console.error(`stage-hook: cargo did not produce ${src}`);
   process.exit(1);

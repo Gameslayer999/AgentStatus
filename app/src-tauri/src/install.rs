@@ -5,33 +5,33 @@
 // (safe every launch), reversible (a one-time backup), and non-clobbering (only touches its
 // own hook entries).
 //
-// **Which hook depends on the platform (decision 068).** Windows installs the native
-// `agentstatus-hook` binary, shipped as a Tauri bundle resource: `report.sh` costs ~210 ms
-// per event there against the binary's ~26 ms, and needs a `jq` that Windows does not have.
-// macOS keeps writing the embedded `report.sh` until the port has been diffed against a live
-// macOS session — there are no Windows users to regress and macOS users to protect.
+// **Both platforms install the native `agentstatus-hook` binary** (decision 068, extended to
+// macOS by #076). It ships as a Tauri bundle resource. `report.sh` cost ~210 ms per event on
+// Windows against the binary's ~26 ms, and needed a `jq` Windows does not have — but `jq`
+// ships at `/usr/bin/jq` only on macOS 15+, so the shell hook silently no-opped for every
+// macOS 13/14 user of the DMG. The binary has no dependency to be missing.
 //
-// Either way the installed hook lives *outside* the app bundle, so it keeps working if the
-// app is moved. Gated to release builds — in dev we point at the repo's hooks/ via
-// `node hooks/setup.mjs`.
+// The installed hook lives *outside* the app bundle, so it keeps working if the app is moved.
+// Gated to release builds — in dev we point at the repo's hooks/ via `node hooks/setup.mjs`.
 
 use std::path::{Path, PathBuf};
 
-#[cfg(not(windows))]
-const REPORT_SH: &str = include_str!("../../../hooks/report.sh");
-
 /// Hook entries this app owns, in **any** version it has ever shipped. Matching both is what
 /// makes an upgrade *replace* its own registration rather than sit alongside the old one —
-/// without this, a Windows user upgrading from a `report.sh` build would have two hooks
-/// firing per event, each writing the same status file.
+/// without this, a user upgrading from a `report.sh` build would have two hooks firing per
+/// event, each writing the same status file.
 const HOOK_MARKERS: &[&str] = &["report.sh", "agentstatus-hook"];
 
-/// The staged resource path (see `hooks/stage-hook.mjs` and `tauri.windows.conf.json`) and
+/// The staged resource path (see `hooks/stage-hook.mjs` and the two platform configs) and
 /// the name it is installed under.
 #[cfg(windows)]
 const HOOK_BIN: &str = "agentstatus-hook.exe";
 #[cfg(windows)]
 const HOOK_RESOURCE: &str = "resources/agentstatus-hook.exe";
+#[cfg(not(windows))]
+const HOOK_BIN: &str = "agentstatus-hook";
+#[cfg(not(windows))]
+const HOOK_RESOURCE: &str = "resources/agentstatus-hook";
 
 // Same event set as hooks/setup.mjs. Tool events take a "*" matcher.
 const SIMPLE_EVENTS: &[&str] = &[
@@ -75,15 +75,13 @@ pub fn ensure_installed(app: &tauri::AppHandle) {
     }
 }
 
-/// Put the platform's hook in `~/.claude/status/` and return the command Claude Code should
-/// run for it.
+/// Put the hook binary in `~/.claude/status/` and return the command Claude Code should run
+/// for it.
 ///
-/// The command string is handed to a **shell** — Git Bash on Windows — so on that platform
-/// the path is written with forward slashes (a backslash is an escape inside a bash word)
-/// and quoted (a home directory can contain spaces). Verified live: a forward-slash Windows
-/// path executes correctly as a hook command. macOS keeps the exact unquoted form it has
-/// always registered, so nothing about its settings.json changes.
-#[cfg(windows)]
+/// The command string is handed to a **shell** — Git Bash on Windows — so the path is quoted
+/// (a home directory can contain spaces), and on Windows it is written with forward slashes
+/// (a backslash is an escape inside a bash word). Verified live: a forward-slash Windows path
+/// executes correctly as a hook command.
 fn install_hook(app: &tauri::AppHandle, status: &Path) -> std::io::Result<String> {
     use tauri::Manager;
 
@@ -93,17 +91,41 @@ fn install_hook(app: &tauri::AppHandle, status: &Path) -> std::io::Result<String
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
     let dst = status.join(HOOK_BIN);
     install_binary(&src, &dst)?;
+    #[cfg(windows)]
     sweep_replaced_binaries(status);
-    Ok(format!("\"{}\"", dst.to_string_lossy().replace('\\', "/")))
+    let path = dst.to_string_lossy().to_string();
+    #[cfg(windows)]
+    let path = path.replace('\\', "/");
+    Ok(format!("\"{path}\""))
 }
 
+/// The unix half of `install_binary`. Two macOS specifics drive the shape of this:
+///
+/// 1. **Write beside, then `rename` over.** Writing straight onto the destination fails with
+///    `ETXTBSY` while a hook process is executing it — and hooks fire on every tool call. The
+///    rename is atomic, and a hook mid-run keeps the inode it already opened. No `.old-*`
+///    sweep is needed: unix drops the unlinked file once the last process closes it.
+/// 2. **Copy the bytes, not the file.** `fs::copy` is `fcopyfile(COPYFILE_ALL)` on macOS,
+///    which carries extended attributes across — including `com.apple.quarantine` if the
+///    resource inside the downloaded app bundle still has it. A quarantined unsigned
+///    executable is exactly what we must not hand Claude Code to run on every tool call
+///    (Agent Guideline #3), so the bytes are written to a fresh file that has no xattrs.
 #[cfg(not(windows))]
-fn install_hook(_app: &tauri::AppHandle, status: &Path) -> std::io::Result<String> {
-    let script = status.join("report.sh");
-    std::fs::write(&script, REPORT_SH)?;
+fn install_binary(src: &Path, dst: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
-    Ok(script.to_string_lossy().to_string())
+
+    let bytes = std::fs::read(src)?;
+    if std::fs::read(dst).is_ok_and(|current| current == bytes) {
+        return Ok(());
+    }
+    let staged = dst.with_extension(format!("new-{}", std::process::id()));
+    let result = std::fs::write(&staged, &bytes)
+        .and_then(|_| std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)))
+        .and_then(|_| std::fs::rename(&staged, dst));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&staged);
+    }
+    result
 }
 
 /// Copy the bundled hook binary into place, skipping the write when the bytes already match

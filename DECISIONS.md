@@ -85,6 +85,7 @@
 | 073 | 2026-08-15 | **The tray popover dismisses itself, and anchors to the work area** — two defects in #072, both reported from live use. (a) The popover stayed on top after clicking away. The fix is to hide on `Focused(false)`, but the window is configured `focus: false` and `show()` does not activate it, so it **never held focus to lose** — the first attempt deployed and did nothing. `set_focus()` after `show()` is what makes dismissal possible; a 400 ms guard stops the focus loss from racing the tray click and making the icon unable to close it. (b) The popover opened overlapping the taskbar, because it anchored to the *click point* and the tray icon sits inside the taskbar. Now anchored to the monitor's **work area** (`GetMonitorInfoW`'s `rcWork`), which `Monitor::size()` cannot express. A third defect found while fixing them: opening settings grows the window ~360px and ran it off the bottom, so `fit_popover` pulls it back inside the work area. Windows only — macOS's panel is non-activating by design (#008). Verified by driving the real UI | Accepted |
 | 074 | 2026-08-15 | **Opening the tray popover on Windows opens the settings panel with it.** Requested live. On Windows the tray item is a single summary dot (#072), so the popover was showing a larger copy of what the user had just clicked and hiding the panel they wanted behind another right-click; on macOS the menu-bar item already shows every dot, so it keeps #024's behaviour. The mechanism is the interesting part: `visibilitychange` is the natural signal and the codebase already used it for this moment, but **WebView2 keeps the document "visible" while the window is hidden**, so it never fires on Windows — the first implementation relied on it and did nothing. The backend now emits `popover-shown`. Opening via the normal `toggleSettings` inherits the upward growth, the lights anchor, and `fit_popover` (#073), so it lands 189x361 clear of the taskbar | Accepted |
 | 075 | 2026-08-15 | **The settings panel collapses without the lights jumping.** Reported live, and the asymmetry (only on collapse) was the clue: `panel-above` is `column-reverse`, so the lights sit at the *bottom* of the open panel; collapsing mutates the DOM first, snapping them to the top of a still-tall window, and only three-plus frames later do the async resize and re-anchor put them back. DOM and window geometry cannot be made atomic, so the fix suppresses the paint instead — `visibility: hidden` across the transition, restored once the window is final. `visibility` rather than `display`/`opacity` because `resizeToContent` still has to measure the layout. The rAF wait is now bounded (250 ms) and the restore is in a `finally`, or a popover dismissed mid-collapse would leave the bar invisible for good. Also fixed here: #073's debounce stamped even when the popover was already hidden, so the next tray click was swallowed. Verified with a **negative control** — fix off: 360 px jump; fix on: 22 px | Accepted |
+| 076 | 2026-08-15 | **macOS support drops to 13 (Ventura) and the DMG becomes universal.** The app never targeted macOS 15 — `Info.plist` carried Tauri's default `LSMinimumSystemVersion 10.13`. The 15 floor was one accidental dependency: `report.sh` needs a `jq` that ships at `/usr/bin/jq` only from macOS 15, so every DMG user on 13/14 installed a hook that silently no-opped forever (#059's finding, and the reason #068's port stopped at Windows). macOS now installs the same native `agentstatus-hook` binary Windows has shipped since 0.7.0, so the dependency is gone rather than guarded. 13 is the floor because **Claude Code itself requires macOS 13.0+**, and it is now declared, so an older Mac is refused at install instead of half-working. The DMG is universal because Claude Code supports `darwin-x64` and an arm64-only build excluded every Intel Mac — which also forces the *hook* to be universal, since a compiled hook is arch-specific where `report.sh` was not. Two macOS-only hazards a straight port would have shipped: `fs::copy` is `fcopyfile(COPYFILE_ALL)` and would carry `com.apple.quarantine` onto a binary Claude Code runs on every tool call, and writing over the destination fails `ETXTBSY` while a hook is executing it — so the install writes fresh bytes to a staged path and `rename`s over. **Unverified: everything macOS.** Written on Windows; needs a `cargo check`, `gen-golden.sh`, and a live old-vs-new session diff on a Mac before release | Proposed |
 
 ---
 
@@ -4628,3 +4629,93 @@ during the collapse and reports where the green running-light painted in each:
 
 The negative control matters: without it, "spread = 0" only proves the measurement ran, not
 that it could ever fail.
+
+---
+
+## 076 — macOS 13 becomes the floor, and the DMG becomes universal
+
+**Date:** 2026-08-15
+**Status:** Proposed — the code is written; **no part of it has run on macOS**
+(extends #068 to macOS, closes the macOS half of #059, amends #024 and #041)
+
+**Context:** The README promised "macOS on Apple Silicon" with no version floor, and the
+project talked about itself as a macOS-15+ tool. Neither was a real constraint. Reading the
+build settled what actually gated it:
+
+- **The bundle already declared 10.13.** `tauri.conf.json` sets no `minimumSystemVersion`,
+  so the Tauri default (`tauri-utils-2.9.3/src/config.rs:691`) is what lands in `Info.plist`.
+  The app would launch back to High Sierra.
+- **Nothing in the code is version-gated.** No `sw_vers`, no availability checks, no version
+  conditionals. Everything the app shells out to (`osascript`, `pgrep`, `ps`, `open`,
+  `/usr/bin/sqlite3`) and every native API it uses (Accessibility, `NSPanel`, `NSStatusItem`)
+  predates Ventura by years.
+- **The CSS is fine.** `oklch()` needs Safari 15.4 and `color-mix()` needs 16.2; Ventura runs
+  16.4+. The light glows survive. They would break below macOS 12.
+- **`jq` was the whole floor.** `report.sh` calls it nine times, `install.rs` never checked
+  for it, and it ships at `/usr/bin/jq` only from macOS 15. A DMG user on 13 or 14 got an app
+  that installed a hook, registered it, and then no-opped on every event forever — no light,
+  no error. #059 found this; #068 fixed it for Windows and deliberately stopped there.
+
+**Where the floor should sit:** Claude Code's own requirement is **macOS 13.0+**
+([setup docs](https://code.claude.com/docs/en/setup)), so supporting 11 or 12 buys nothing
+for the primary host — a Mac that cannot run Claude Code has no sessions to light. The same
+page lists `darwin-x64` as supported, which makes Intel Macs a real population that the
+arm64-only DMG excluded outright.
+
+**Options for the hook:**
+
+| Option | Verdict |
+|---|---|
+| Guard `report.sh` on `jq` and tell the user to `brew install jq` | No — #068 already rejected this: it turns a silent failure into a loud one and still leaves a non-working app, and it makes Homebrew a requirement |
+| Bundle a `jq` binary in the DMG | No — ships a third-party binary to avoid using code we already wrote and test |
+| Install the native `agentstatus-hook` on macOS too | **Chosen.** The port exists, has a golden-file parity test against `report.sh`, and has shipped on Windows since 0.7.0 |
+
+**Decision:**
+
+1. **macOS installs `agentstatus-hook`**, not `report.sh`. `install.rs`'s `#[cfg(not(windows))]`
+   branch copies the bundled binary instead of writing the embedded script, and
+   `tauri.macos.conf.json` declares it as a bundle resource the way
+   `tauri.windows.conf.json` already does. `hooks/setup.mjs` (the dev path) follows.
+2. **`minimumSystemVersion: "13.0"`**, declared rather than defaulted. An unsupported Mac is
+   now refused by Gatekeeper at install time instead of installing an app whose host cannot
+   run there anyway. It also sets `MACOSX_DEPLOYMENT_TARGET` for the Rust build.
+3. **The DMG is universal.** `release.yml` builds `--target universal-apple-darwin`.
+4. **The hook is universal too.** This is the non-obvious consequence: `report.sh` was a
+   shell script and ran on any architecture, while a compiled hook does not. An arm64-only
+   hook inside a universal app would give every Intel user exactly the silently-dead app this
+   decision exists to remove. `stage-hook.mjs` builds both slices and `lipo`s them when
+   `AGENTSTATUS_HOOK_UNIVERSAL=1` (set only by the release workflow), then **asserts both
+   architectures are present** before staging — the same shape as the PE-subsystem assertion
+   that already guards the Windows build. Local builds stay host-only, so no developer needs
+   a second rustup target to run `tauri dev`.
+5. **`install.sh` drops its `jq` prerequisite.** `jq` is now only a dev dependency of
+   `hooks/gen-golden.sh`, which that script does not run.
+
+**Two macOS-only hazards a straight port from Windows would have shipped.** Neither exists on
+Windows and neither is visible from reading the Windows code:
+
+- **`fs::copy` carries extended attributes on macOS.** It is `fcopyfile(COPYFILE_ALL)`, which
+  includes `COPYFILE_XATTR`. If the resource inside a downloaded bundle still carries
+  `com.apple.quarantine` — which "Open Anyway" does not necessarily clear on nested files the
+  way `xattr -dr` does — the installed hook would inherit it, and that is a quarantined
+  unsigned executable handed to Claude Code to run on every tool call (Agent Guideline #3).
+  The install now writes the bytes to a fresh file, which has no xattrs to inherit.
+- **`ETXTBSY`.** Writing over the destination fails while a hook process is executing it, and
+  hooks fire on every tool call. The new bytes go to a staged path beside it and `rename`
+  over the top: atomic, and a hook mid-run keeps the inode it already opened. Windows needed
+  a `.old-*` rename-aside and a sweep for the same problem; unix drops the unlinked file
+  itself, so that machinery stays Windows-only.
+
+**What is verified and what is not.** `cargo check` passes on the Windows host, which proves
+the Windows path is unregressed but exercises none of the new code. **Everything macOS in
+this entry is unverified** — it was written on a Windows machine, which is the same reason
+#068 stopped short of macOS. Before release it needs, on a Mac: `cargo check`,
+`hooks/gen-golden.sh` re-run to confirm the goldens hold there, `cargo test` in the hook
+crate, a real DMG build, and one live session diffed old-hook-vs-new. The DMG's exact
+filename (`AgentStatus_0.7.1_universal.dmg` in the README) is an expectation, not an
+observation — confirm it against the first universal build.
+
+**Left alone deliberately:** an upgrade does not delete the orphaned `~/.claude/status/report.sh`.
+Its registration is replaced (`HOOK_MARKERS` matches both names), so nothing invokes it; the
+Windows upgrade path leaves the same file, and removing files from a user's `~/.claude` for
+tidiness is not worth the blast radius.

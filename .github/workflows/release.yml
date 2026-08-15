@@ -8,9 +8,9 @@
 # tauri.conf.json disagree, which is the one way a tag-driven release can silently ship
 # the wrong number.
 #
-# Two platforms, three installers: an arm64 DMG from a macOS runner, and an MSI plus an
-# NSIS setup from a Windows runner. All are **unsigned** — GitHub's runners hold no
-# Developer ID cert and no Authenticode cert — so the README's Gatekeeper step still
+# Two platforms, three installers: a universal (arm64 + x86_64) DMG from a macOS runner, and
+# an MSI plus an NSIS setup from a Windows runner. All are **unsigned** — GitHub's runners
+# hold no Developer ID cert and no Authenticode cert — so the README's Gatekeeper step still
 # applies on macOS, and Windows SmartScreen will warn on first run. The local self-signing
 # in hooks/sign-app.sh (decision 039) is for build-from-source installs only and plays no
 # part here.
@@ -56,14 +56,18 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          # macos-15 is Apple Silicon — the arm64 DMG the README advertises.
+          # macos-15 is Apple Silicon, but the DMG is universal (decision 076): Claude Code
+          # supports darwin-x64, so an arm64-only build excludes every Intel Mac. The bundle
+          # lands under target/universal-apple-darwin/, not target/.
           - os: macos-15
             artifact: macos-dmg
-            paths: app/src-tauri/target/release/bundle/dmg/*.dmg
+            args: --target universal-apple-darwin
+            paths: app/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           # windows-latest ships the WebView2 runtime the app needs, so nothing extra is
           # installed here.
           - os: windows-latest
             artifact: windows-installers
+            args: ""
             paths: |
               app/src-tauri/target/release/bundle/msi/*.msi
               app/src-tauri/target/release/bundle/nsis/*-setup.exe
@@ -83,6 +87,13 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # `--target universal-apple-darwin` compiles both slices, so both standard libraries
+      # have to be installed before tauri starts. stage-hook.mjs adds them too, but leaving it
+      # at that would make the app's build depend on a beforeBuildCommand side effect.
+      - name: Add the macOS universal targets
+        if: matrix.os == 'macos-15'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
       # Both Cargo.lock files are committed, so this restores an exact-match build cache.
       # The hook is its own crate (decision 068) and would otherwise rebuild every run.
       - uses: Swatinem/rust-cache@v2
@@ -92,12 +103,16 @@ jobs:
             hooks/agentstatus-hook
 
       # `tauri build` runs hooks/stage-hook.mjs first (beforeBuildCommand), which builds the
-      # hook crate and stages the binary as a bundle resource.
+      # hook crate and stages the binary as a bundle resource. On macOS the env var makes it
+      # stage a `lipo`'d arm64+x86_64 hook — a single-arch hook inside a universal app would
+      # be dead on the other architecture (decision 076). It is ignored off macOS.
       - name: Build
         working-directory: app
+        env:
+          AGENTSTATUS_HOOK_UNIVERSAL: "1"
         run: |
           npm ci
-          npm run tauri build
+          npm run tauri build -- ${{ matrix.args }}
 
       - uses: actions/upload-artifact@v4
         with:

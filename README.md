@@ -36,17 +36,19 @@ extension adds a status-bar item to each VS Code window.
 A downloaded installer is the fastest method. You do not need build tools. The application
 installs its own hooks at the first start.
 
-**Requirements:** Claude Code or Cursor, and either **macOS on Apple Silicon** (M1 or later)
-or **Windows 11 on x64**.
+**Requirements:** Claude Code or Cursor, and either **macOS 13 (Ventura) or later** on Apple
+Silicon or Intel, or **Windows 11 on x64**. macOS 13 is the floor because Claude Code itself
+needs it.
 
-### macOS (Apple Silicon)
+### macOS (Apple Silicon and Intel)
 
 > [!IMPORTANT]
 > AgentStatus is **not signed and not notarized**. Thus macOS Gatekeeper stops it at the
 > first start. Step 3 removes the download quarantine, and the application starts.
 
-1. Download **`AgentStatus_0.7.1_aarch64.dmg`** from the
-   [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest).
+1. Download **`AgentStatus_0.7.1_universal.dmg`** from the
+   [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest). One
+   download covers both Apple Silicon and Intel.
 2. Open the DMG. Drag **AgentStatus** into **Applications**.
 3. Remove the download quarantine and start the application:
 
@@ -57,8 +59,8 @@ or **Windows 11 on x64**.
 
    As an alternative, double-click the application and let macOS stop it. Then open
    **System Settings → Privacy & Security**. Find the message "AgentStatus was blocked".
-   Click **Open Anyway**. On macOS 15 and later, right-click → Open does not remove this
-   block for downloaded applications.
+   Click **Open Anyway**. On macOS 13 and 14, right-click → **Open** also works; on macOS 15
+   and later it does not remove the block for downloaded applications.
 
 AgentStatus is an accessory application and has **no Dock icon**. To start it at login,
 add it in **System Settings → General → Login Items**.
@@ -97,10 +99,9 @@ macOS asks for Accessibility to do the same thing.
 
 ### What the first start does
 
-The application **installs its own hooks**. On macOS it writes `~/.claude/status/report.sh`;
-on Windows it writes `~/.claude/status/agentstatus-hook.exe`, a small native program that
-does the same job — Windows has no `jq`, and a shell hook there would add roughly half a
-second to every tool call. It registers that hook for Claude Code in
+The application **installs its own hooks**. It writes `~/.claude/status/agentstatus-hook`
+(`agentstatus-hook.exe` on Windows), a small native program with no dependencies. It
+registers that hook for Claude Code in
 `~/.claude/settings.json`, and makes a backup of that file first. **Claude Code sessions
 that are already open use the hook immediately. A restart is not necessary.**
 
@@ -110,20 +111,18 @@ Claude-compatible bridge. There is nothing to install per terminal and nothing t
 
 ### Build from source instead
 
-**macOS** — if you have an Intel Mac, or if you want to build the application yourself:
+**macOS** — if you want to build the application yourself:
 
 ```bash
 ./install.sh
 ```
 
-This needs [Rust](https://rustup.rs), Node, and `jq` (`brew install jq`). The script
-builds the application and copies it to `/Applications`. The application installs its own
-hooks at the first start, as the DMG does. For a new installation, do the Gatekeeper step
-above.
+This needs [Rust](https://rustup.rs) and Node. The script builds the application for your
+own architecture and copies it to `/Applications`. The application installs its own hooks at
+the first start, as the DMG does. For a new installation, do the Gatekeeper step above.
 
 **Windows** — this needs [Rust](https://rustup.rs) (the MSVC toolchain), the **Visual Studio
-Build Tools** with the C++ workload, and Node. No `jq`: the Windows hook is a compiled
-binary. Run the installer it produces under
+Build Tools** with the C++ workload, and Node. Run the installer it produces under
 `app/src-tauri/target/release/bundle/`:
 
 ```bash
@@ -249,12 +248,10 @@ else, and always opens clear of the taskbar.
 AgentStatus has two parts:
 
 - **The signal layer** — one hook starts at each session event and writes the state of that
-  session to `~/.claude/status/sessions/<id>.json`. On macOS this is a shell script
-  (`report.sh`); on Windows it is a compiled binary (`agentstatus-hook.exe`), because
-  Windows starts processes far more slowly and a shell hook there would delay every tool
-  call. The hook is global, thus one installation covers all projects and all Claude Code
-  and Cursor windows. It does the minimum work and stops immediately. It does not delay a
-  turn.
+  session to `~/.claude/status/sessions/<id>.json`. The hook is a compiled binary with no
+  dependencies, so nothing on your machine has to be present for it to work. The hook is
+  global, thus one installation covers all projects and all Claude Code and Cursor windows.
+  It does the minimum work and stops immediately. It does not delay a turn.
 - **The display layer** — a Tauri application reads that directory and shows the lights,
   as the floating bar or as the menu-bar item.
 
@@ -307,8 +304,7 @@ npm run tauri dev
 ```
 
 In development, the application does **not** install its own hooks, so the hooks the repo
-registers stay in use. On macOS that is `hooks/report.sh`, and an edit to it takes effect
-immediately with no rebuild. On Windows it is the compiled hook, so an edit to
+registers stay in use. They point at the compiled hook, so an edit to
 `hooks/agentstatus-hook/` needs `npm --prefix app run stage-hook` before it takes effect;
 `node hooks/setup.mjs install` reports what to run if the binary is missing. The release
 build installs its own hooks. Use `node hooks/setup.mjs status|uninstall` to control the
@@ -333,16 +329,16 @@ to `main`. Then push a tag with the same version:
 git tag v0.7.1 && git push origin v0.7.1
 ```
 
-The workflow builds the arm64 DMG on a macOS runner and the MSI and NSIS installers on a
-Windows runner, then publishes all of them in one release with generated notes. It stops
-before building if the tag does not agree with the version in `tauri.conf.json`, and it
+The workflow builds the universal (arm64 + x86_64) DMG on a macOS runner and the MSI and
+NSIS installers on a Windows runner, then publishes all of them in one release with
+generated notes. It stops before building if the tag does not agree with the version in `tauri.conf.json`, and it
 publishes nothing unless every platform built. A merge to `main` publishes nothing. The tag
 starts the workflow.
 
 ## Limits
 
-- **macOS and Windows. The DMG is for Apple Silicon; the Windows build is x64.** For an
-  Intel Mac, build from source.
+- **macOS and Windows. The DMG is universal (Apple Silicon and Intel); the Windows build is
+  x64.** macOS 13 or later, because Claude Code needs it.
 - **Downloaded builds are not signed**, thus the Gatekeeper step (macOS) or the SmartScreen
   step (Windows) above is necessary.
 - **On Windows, Cursor lights bring Cursor's window forward rather than opening the exact
