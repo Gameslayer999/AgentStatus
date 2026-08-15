@@ -190,12 +190,32 @@ function setOrientation(orient) {
 const MODE_KEY = "agentstatus.mode"; // "floating" | "menubar"
 const CONDENSE_KEY = "agentstatus.menubarcondense"; // "true" | "false"
 
+// Which platform the backend is on, asked once at startup (decision 072). The tray exists
+// on both macOS and Windows, but it is a different shape there, and the control labels
+// differ — so a few decisions below need to know. Empty until the first answer arrives;
+// every use treats that as "not Windows", which is the pre-existing behaviour.
+let PLATFORM = "";
+
 function currentMode() {
   return localStorage.getItem(MODE_KEY) === "menubar" ? "menubar" : "floating";
 }
 
 function currentCondense() {
+  // A Windows notification-area icon is square (16x16 logical, scaled by DPI). A row of
+  // dots stretched into that is an unreadable smear, so Windows always shows the single
+  // summary dot — the Dots/Single choice is hidden there rather than offered and ignored.
+  if (PLATFORM === "windows") return true;
   return localStorage.getItem(CONDENSE_KEY) === "true";
+}
+
+// Rename the tray controls to what the platform calls that place. The mechanism is the
+// same; "menu bar" is simply the wrong word on Windows.
+function applyPlatformChrome() {
+  if (PLATFORM !== "windows") return;
+  const modeBtn = document.querySelector('#mode-seg button[data-mode="menubar"]');
+  if (modeBtn) modeBtn.textContent = "Tray";
+  const crowLabel = document.querySelector("#condense-row .row-label");
+  if (crowLabel) crowLabel.textContent = "Tray";
 }
 
 // Visual-only: highlight the active Mode button and show the Condense row only in
@@ -206,7 +226,9 @@ function applyModeButtons(mode) {
     btn.classList.toggle("active", btn.dataset.mode === mode);
   }
   const crow = document.getElementById("condense-row");
-  if (crow) crow.hidden = mode !== "menubar";
+  // Windows forces the single dot (see currentCondense), so offering the choice there
+  // would be a control that does nothing.
+  if (crow) crow.hidden = mode !== "menubar" || PLATFORM === "windows";
   // Orientation is forced horizontal in menu-bar mode, so hide its control there.
   const orow = document.getElementById("orient-row");
   if (orow) orow.hidden = mode === "menubar";
@@ -226,7 +248,19 @@ async function applyMode(mode) {
   applyModeButtons(mode);
   applyOrientation(effectiveOrientation()); // menu-bar forces horizontal; floating restores the saved pref
   try {
-    await invoke("set_mode", { mode });
+    // The backend answers false when menu-bar mode has no tray to represent the panel.
+    // Honouring that matters: without a tray there is no tray icon, no taskbar button
+    // (skipTaskbar) and no Dock icon, so the first light click — which hides the popover —
+    // would leave the app on screen nowhere and reachable only by killing the process.
+    // Fall back to floating instead, and persist that so the next launch is not trapped too.
+    const ok = await invoke("set_mode", { mode });
+    if (mode === "menubar" && ok === false) {
+      localStorage.setItem(MODE_KEY, "floating");
+      applyModeButtons("floating");
+      applyOrientation(effectiveOrientation());
+      await restoreAnchor();
+      return;
+    }
   } catch (_) {
     /* backend not ready yet; the next toggle / load will retry */
   }
@@ -628,12 +662,59 @@ async function toggleSettings() {
     settings.removeAttribute("hidden");
     bar.classList.add("settings-open");
   } else {
+    // Closing jumps the lights unless they are hidden for the transition. With
+    // `panel-above` the bar is `column-reverse`, so the lights sit at the *bottom* of a
+    // ~360px window; dropping the panel puts them at the top of a window that is still
+    // ~360px tall, and only after the resize and re-anchor (three frames later, both async
+    // IPC) do they come back down. That round trip is the flicker. Opening never shows it
+    // because `chooseGrowthDirection` runs *before* the panel appears, so the lights never
+    // move. `visibility` rather than `display`/`opacity`: it stops the paint while keeping
+    // the layout that `resizeToContent` measures.
+    bar.style.visibility = "hidden";
     settings.setAttribute("hidden", "");
     bar.classList.remove("settings-open", "panel-above");
     bar.style.alignItems = "";
   }
+  try {
+    await resizeToContent();
+    await anchorLightsTo(anchor);
+    await fitPopover();
+  } finally {
+    // Reveal only once the window is its final size and back in position, so the first
+    // frame the user sees is the finished one. In a `finally` because `resizeToContent`
+    // waits on animation frames, which stall if the popover is dismissed mid-collapse —
+    // and a bar left `visibility: hidden` would come back invisible on the next open.
+    if (!opening) bar.style.visibility = "";
+  }
+}
+
+// In tray mode the popover sits against the work-area edge, so opening the settings panel
+// grows it straight off the bottom of the screen. The backend pulls it back inside the work
+// area — the screen minus the taskbar, which the frontend cannot see. No-op when floating,
+// where the user's own dragged position is authoritative (decision 073).
+// The popover just appeared. Re-size it (the webview pauses rAF while hidden, so it may be
+// stale) and, on Windows, bring the settings panel up with it: the tray item there is a
+// single summary dot, so the panel behind the lights is what the popover is actually for
+// (decision 074). macOS keeps decision 024's behaviour — its menu-bar item already shows
+// every dot, and changing it would alter what existing users see.
+async function onPopoverShown() {
+  if (currentMode() !== "menubar") return;
+  const settings = document.getElementById("settings");
+  if (PLATFORM === "windows" && settings && settings.hasAttribute("hidden")) {
+    await toggleSettings(); // resizes, re-anchors, and fits inside the work area
+    return;
+  }
   await resizeToContent();
-  await anchorLightsTo(anchor);
+  await fitPopover();
+}
+
+async function fitPopover() {
+  if (currentMode() !== "menubar") return;
+  try {
+    await invoke("fit_popover");
+  } catch (_) {
+    /* fail-silent: the panel is merely positioned awkwardly, not broken */
+  }
 }
 
 function initSettings() {
@@ -984,8 +1065,15 @@ async function resizeToContent() {
   // reappears, so the panel sizes correctly on open.
   if (document.hidden) return;
   // Wait for layout+paint so we never measure a 0-width bar (which shrank the
-  // window to nothing before the content rendered).
-  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  // window to nothing before the content rendered). Bounded: animation frames stop firing
+  // if the window is hidden mid-wait (a tray popover dismissed during a collapse), and an
+  // unbounded wait here would leave every caller's cleanup — notably the visibility restore
+  // in `toggleSettings` — permanently pending. Whichever fires first wins; resolving twice
+  // is a no-op.
+  await new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+    setTimeout(resolve, 250);
+  });
   const size = contentSize();
   if (!size) return;
   try {
@@ -1289,6 +1377,15 @@ async function tick() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  // Ask the backend what it is running on before anything reads PLATFORM (decision 072).
+  // Only the tray's shape and its control labels depend on the answer, and both are applied
+  // below — so a failure here just leaves the macOS wording, never a broken bar.
+  try {
+    PLATFORM = await invoke("platform");
+  } catch (_) {
+    /* older backend without the command; treat as not-Windows */
+  }
+  applyPlatformChrome();
   initSettings();
   // Bound native drags to the monitor (can't be dragged off-screen) and remember the
   // lights' resting position. Registered before restore so restore's own moves are
@@ -1299,8 +1396,16 @@ window.addEventListener("DOMContentLoaded", async () => {
   // The webview pauses rAF while the panel is hidden; when the menu-bar popover
   // reappears, re-run the resize so it sizes to the current dots on open.
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && currentMode() === "menubar") resizeToContent();
+    if (!document.hidden && currentMode() === "menubar") onPopoverShown();
   });
+  // WebView2 keeps the document "visible" while the window is hidden, so on Windows
+  // `visibilitychange` never fires for a popover reveal. The backend emits this instead.
+  try {
+    const { listen } = window.__TAURI__.event;
+    listen("popover-shown", () => onPopoverShown());
+  } catch (_) {
+    /* older backend without the event; visibilitychange still covers macOS */
+  }
   await tick(); // first render, so the bar has its real size before we anchor it
   anchorReady = true;
   // Apply the saved presentation mode: floating restores the anchor and shows the

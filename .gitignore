@@ -19,3 +19,6 @@ extension/report.sh
 
 # OS
 .DS_Store
+
+# Rust build output for the standalone hook crate (decision 068)
+hooks/agentstatus-hook/target/

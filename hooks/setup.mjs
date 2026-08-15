@@ -23,6 +23,24 @@ const LEGACY_CODEX_HOOKS = join(homedir(), '.codex', 'hooks.json');
 const LEGACY_ANTIGRAVITY_HOOKS = join(homedir(), '.gemini', 'config', 'hooks.json');
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPORT = join(HOOKS_DIR, 'report.sh');
+const HOOK_BIN = join(
+  HOOKS_DIR, 'agentstatus-hook', 'target', 'release',
+  process.platform === 'win32' ? 'agentstatus-hook.exe' : 'agentstatus-hook',
+);
+
+// Which hook this platform registers, mirroring install.rs (decision 068): Windows uses the
+// native binary — `report.sh` needs a `jq` Windows does not ship and costs ~8x more per
+// event — while macOS stays on `report.sh` until the port is diffed against a live macOS
+// session. The command is handed to a shell (Git Bash on Windows), so a Windows path is
+// written with forward slashes (a backslash is an escape there) and quoted for spaces.
+function hookCommand() {
+  if (process.platform !== 'win32') return REPORT;
+  if (!existsSync(HOOK_BIN)) {
+    console.error(`Missing ${HOOK_BIN}\nBuild it first:  npm --prefix app run stage-hook`);
+    process.exit(1);
+  }
+  return `"${HOOK_BIN.replace(/\\/g, '/')}"`;
+}
 
 // The exact events the signal layer consumes (verified contract, DECISIONS.md #006).
 // Tool-scoped events take a "*" matcher (match all tools); lifecycle events take none.
@@ -32,7 +50,10 @@ const SIMPLE = [
 ];
 const TOOL = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest'];
 
-const marker = (entry) => JSON.stringify(entry).includes('report.sh');
+// Entries this project owns, in any version it has shipped — matching both is what makes a
+// re-install replace its own registration instead of stacking a second hook on every event.
+const MARKERS = ['report.sh', 'agentstatus-hook'];
+const marker = (entry) => MARKERS.some((m) => JSON.stringify(entry).includes(m));
 const load = (path) => (existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {});
 const save = (path, s) => {
   mkdirSync(dirname(path), { recursive: true });
@@ -41,11 +62,12 @@ const save = (path, s) => {
 
 function installHooks(path, backup, simpleEvents = SIMPLE, toolEvents = TOOL) {
   if (existsSync(path) && !existsSync(backup)) copyFileSync(path, backup);
+  const command = hookCommand();
   const s = load(path);
   s.hooks ??= {};
   const add = (event, withMatcher) => {
     const kept = (s.hooks[event] ?? []).filter((e) => !marker(e)); // drop stale entries
-    const hook = { type: 'command', command: `${REPORT} ${event}` };
+    const hook = { type: 'command', command: `${command} ${event}` };
     kept.push(withMatcher ? { matcher: '*', hooks: [hook] } : { hooks: [hook] });
     s.hooks[event] = kept;
   };

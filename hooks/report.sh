@@ -121,6 +121,11 @@ esac
       --arg host "$HOST" --argjson pid "${PPID:-0}" '
     def clean: (. // "") | gsub("[\n\r\t]+";" ") | gsub("^ +| +$";"");
     def trunc($n): clean | if (length > $n) then (.[:$n] + "…") else . end;
+    # Windows sends backslash paths ("C:\\Users\\x\\proj", verified live), which a
+    # "/"-only split leaves whole — the label became the entire path and the file detail
+    # showed a full path instead of a filename. Only a drive letter or a UNC root counts
+    # as Windows, and no macOS path starts either way, so macOS splitting is unchanged.
+    def norm: if (test("^[A-Za-z]:") or startswith("\\\\")) then (split("\\") | join("/")) else . end;
     ($oldjson | if . == "" then {} else (fromjson? // {}) end) as $old
     | . as $p
     | ({ "UserPromptSubmit":"running", "PreToolUse":"running", "PostToolUse":"running",
@@ -145,7 +150,7 @@ esac
     | (if $event == "PreToolUse" then
          (if $tool == "Bash" then "$ " + ($p.tool_input.command | trunc(90))
           elif ($tool | test("^(Edit|Write|Read|NotebookEdit)$")) then
-            $tool + " " + (($p.tool_input.file_path // "") | split("/") | last)
+            $tool + " " + (($p.tool_input.file_path // "") | norm | split("/") | last)
           else "Running " + $tool end)
        elif $event == "PermissionRequest" then
          (if $tool == "AskUserQuestion" then "⏸ waiting — a question for you"
@@ -160,7 +165,7 @@ esac
     # this pid instead (decision 054). No apostrophes in this comment: the jq
     # program is single-quoted, so one would terminate it.
     | { state: $state, cwd: $cwd, ide: $ide, pid: $pid,
-        label: ($cwd | split("/") | map(select(length > 0)) | last // ""),
+        label: ($cwd | norm | split("/") | map(select(length > 0)) | last // ""),
         updated_at: $ts, task: $task, detail: $detail }
   ' 2>/dev/null)"
 

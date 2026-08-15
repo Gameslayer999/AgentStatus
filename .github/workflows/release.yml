@@ -1,4 +1,5 @@
-# Build and publish a release when a v* tag is pushed (decision 041).
+# Build and publish a release when a v* tag is pushed (decision 041, extended for Windows
+# by decision 069).
 #
 #   git tag v0.5.0 && git push origin v0.5.0
 #
@@ -7,10 +8,16 @@
 # tauri.conf.json disagree, which is the one way a tag-driven release can silently ship
 # the wrong number.
 #
-# Output is the same unsigned, un-notarized arm64 DMG the manual releases produced;
-# GitHub's runners hold no Developer ID cert, so the README's Gatekeeper step still
-# applies. The local self-signing in hooks/sign-app.sh (decision 039) is for build-from-
-# source installs only and plays no part here.
+# Two platforms, three installers: an arm64 DMG from a macOS runner, and an MSI plus an
+# NSIS setup from a Windows runner. All are **unsigned** — GitHub's runners hold no
+# Developer ID cert and no Authenticode cert — so the README's Gatekeeper step still
+# applies on macOS, and Windows SmartScreen will warn on first run. The local self-signing
+# in hooks/sign-app.sh (decision 039) is for build-from-source installs only and plays no
+# part here.
+#
+# Building and publishing are separate jobs on purpose: `gh release create` can only run
+# once, so the matrix uploads artifacts and a single publish job assembles the release from
+# them. That also means a failure on one platform never leaves a half-published release.
 
 name: Release
 
@@ -19,17 +26,19 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write # create the release and upload the DMG
+  contents: write # create the release and upload the installers
 
 jobs:
-  release:
-    # macos-15 is Apple Silicon — the arm64 DMG the README advertises.
-    runs-on: macos-15
+  # Runs once, before anything is built: a mismatched tag should fail in seconds, not after
+  # two full Tauri builds.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-
       - name: Check the tag matches tauri.conf.json
-        id: version
+        id: check
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
@@ -40,6 +49,32 @@ jobs:
           fi
           echo "version=$tag" >> "$GITHUB_OUTPUT"
 
+  build:
+    needs: version
+    strategy:
+      # Publish nothing rather than half a release if one platform fails.
+      fail-fast: true
+      matrix:
+        include:
+          # macos-15 is Apple Silicon — the arm64 DMG the README advertises.
+          - os: macos-15
+            artifact: macos-dmg
+            paths: app/src-tauri/target/release/bundle/dmg/*.dmg
+          # windows-latest ships the WebView2 runtime the app needs, so nothing extra is
+          # installed here.
+          - os: windows-latest
+            artifact: windows-installers
+            paths: |
+              app/src-tauri/target/release/bundle/msi/*.msi
+              app/src-tauri/target/release/bundle/nsis/*-setup.exe
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # Git Bash on the Windows runner, so one script works on both platforms.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -48,23 +83,44 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # Cargo.lock is committed, so this restores an exact-match build cache.
+      # Both Cargo.lock files are committed, so this restores an exact-match build cache.
+      # The hook is its own crate (decision 068) and would otherwise rebuild every run.
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: app/src-tauri
+          workspaces: |
+            app/src-tauri
+            hooks/agentstatus-hook
 
+      # `tauri build` runs hooks/stage-hook.mjs first (beforeBuildCommand), which builds the
+      # hook crate and stages the binary as a bundle resource.
       - name: Build
         working-directory: app
         run: |
           npm ci
           npm run tauri build
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.paths }}
+          if-no-files-found: error
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          dmg="$(ls app/src-tauri/target/release/bundle/dmg/*.dmg)"
-          gh release create "$GITHUB_REF_NAME" "$dmg" \
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
             --title "AgentStatus ${GITHUB_REF_NAME}" \
             --generate-notes

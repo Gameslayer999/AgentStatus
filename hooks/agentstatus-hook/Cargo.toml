@@ -1,0 +1,36 @@
+[package]
+name = "agentstatus-hook"
+version = "0.7.1"
+description = "AgentStatus — the Claude Code / Cursor status hook"
+edition = "2021"
+
+# Deliberately its own crate, outside the Tauri package (decision 068). Two reasons:
+# the hook runs on every tool call and must not carry Tauri's dependency graph, and
+# `tauri-build` validates `bundle.resources` for *any* target in its package — so building
+# the hook there would have required the staged binary that the build itself produces.
+# Standalone also means `cargo test` here compiles serde and nothing else.
+
+[[bin]]
+name = "agentstatus-hook"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# getppid(), to record the `claude` process that owns the session (the shell hook's $PPID).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Walk the process tree to find that same `claude` process on Windows, where the hook's own
+# parent is a Git Bash shell rather than the session (decision 071).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_ToolHelp",
+] }
+
+[profile.release]
+lto = true
+strip = true
+opt-level = "z"

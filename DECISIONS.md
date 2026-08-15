@@ -77,6 +77,14 @@
 | 062 | 2026-08-13 | **A light keeps the slot it arrived in** — reported live: the lights kept swapping places. The strip was re-sorted on every 1 s poll by `cwd`, then by session id, so a new session in a folder that already had lights landed at a position decided by its random uuid and pushed every later light along, and a session that `cd`'d changed groups mid-life. With a background agent per `/stop` and pre-warmed spares appearing and vanishing (#064, #065), the bar reshuffled constantly and a light moved out from under the pointer between seeing it and clicking it. Ordering is now **arrival**: a session takes the next free slot the first time the bar sees it and holds it until it is gone, when the gap closes; the first poll after a launch is laid out in the backend's deterministic (label, id) order. The settings segment becomes **Stable | Urgency** (a stored `window` reads as stable), so folder grouping is dropped — it never separated the common case of several sessions in one repo, and the folder is in the tooltip. Frontend-only: no hook change, no status-file change, no Rust change | Accepted |
 | 063 | 2026-08-13 | **A background agent's light says what Claude Code says: green while it works, orange while it waits** — a `--bg` job that stops to ask a question fires `Stop`, not `PermissionRequest`, so the hook writes `idle` and #065's "never retire a `blocked` or `error` light" guard never matched the case it was written for: a waiting agent lost its light after five minutes and got it back only when the answer arrived. Claude Code's own job record carries `state` (`working`/`done`/`blocked`) next to the `status` (`busy`/`idle`) #065 already reads, so a bg light whose hook last wrote `idle` is reconciled from it — `status: busy` → green, `state: blocked` → orange — and a `blocked` job is never retired. Only an `idle` light is touched, so anything the hook actually observed still wins; `done` and stale `working` jobs still retire at five minutes | Accepted |
 | 067 | 2026-08-13 | **An interrupted turn greys its own light** — "when I stop a session manually the light still shows up as green". Structural, not a one-path bug: `report.sh` maps hook *events* and has one route to `idle` (a `Stop`), and an interrupted turn fires none — so the light keeps the `running` its last tool event wrote, forever. Implements #059, closing its live check: sampling `~/.claude/sessions/<pid>.json` every 2 s caught a real Ctrl+C (`status` → `idle` **3.84 s after** the light's last hook event, light still green) and mapped the vocabulary, which matches the bar one for one — `busy`→green, `waiting`→orange, `idle`→gray, absent on **every Claude Desktop session**. Preferred over `claude agents --json`, which costs a subprocess (hence 10 s, not "immediately") and *loses* information — it called a `shell` session `busy` for ten minutes — while the per-pid file is already read every poll for #053's tooltip name. Greys only on positive evidence (`status == "idle"`) whose `statusUpdatedAt` falls in a **strictly later second** than the light, so the hook always wins a tie; also **clears `detail`**, or #014/#050 would render the result as the white "finished, unread" light on a session the user is already looking at. Background jobs excluded (their `idle` means something else — #063/#065); `shell` left alone as unconfirmed. No hook change, no schema change | Accepted |
+| 068 | 2026-08-14 | **The hook becomes a native binary** (`agentstatus-hook`), replacing `report.sh` and removing `jq`. Forced by the Windows port: Claude Code runs hooks through Git Bash, where MSYS emulates `fork()`, so `report.sh`'s eight external spawns per event measured **210.6 ms** against the binary's **26.4 ms** (bash-spawn floor 18.6 ms) — ~421 ms vs ~53 ms of added latency per tool call, and Agent Guideline #3 forbids the former. Also closes #059's open `jq` defect at the root rather than with a guard: `jq` ships only on macOS 15+ and not at all on Windows, and its absence made the app silently inert. Ported against `report.sh` as the specification, with 42 recorded fixtures replayed through both implementations; output files, subagent markers, and `calibration.log` are byte-identical. Shipped Windows-first — macOS keeps `report.sh` until the port has proven itself on a platform with no users to regress | Accepted |
+| 069 | 2026-08-14 | **Windows support, native only** (option B: floating bar, tray, lights, click-to-focus via the VS Code extension relay). `tauri-nspanel` moves to a macOS-only dependency and its plugin registration is `cfg`-gated — an NSPanel is macOS by construction, and Windows needs none of it (plain always-on-top + `skipTaskbar` + transparent). Cursor's menu-bar AX integration (#038/#045/#047) and per-tab terminal focus are **explicitly unsupported** on Windows: neither has a Windows equivalent, and a light that leads nowhere is worse than no feature (UI Principle #3). WSL is out of scope — its hooks write to the WSL filesystem, which a Windows GUI app cannot reach without `\\wsl$\` plumbing | Accepted |
+| 070 | 2026-08-14 | **Windows click-to-focus is a direct Win32 raise**, not a port of the macOS two-path scheme. Per-tab focus already worked — the extension relay (#015/#019) is plain TypeScript — so only the *window* raise was missing. `EnumWindows` + `SetForegroundWindow`, matching the workspace-root basename plus the app name the editor puts at the end of its title; no permission grant (macOS's Accessibility prompt has no analogue) and no subprocess. macOS fires *both* its osascript raise and the IDE CLI because the CLI is the only thing that crosses Spaces (#021); Windows has no Spaces, so the CLI is a **fallback**, used only when no window matched, and via `Code.exe` directly rather than the `code.cmd` shim (`CreateProcess` cannot run a `.cmd`, and `cmd /c` would need nested quoting for paths with spaces). Cursor raises but never falls back to its CLI (#047 opened a new agent on macOS and has not been retested). `cli` is deliberately unreachable (#069, and the recorded pid is still 0). `workspace_root` is un-gated from macOS since the VS Code extension writes the same lock files on Windows, and path matching there is case-insensitive and accepts either separator — macOS keeps its exact, `/`-only rule. **Verified:** the raise finds a real window by title in 0.8 s (ignored Notepad test, runnable on a bare machine). **Unverified:** VS Code and Cursor title formats — neither is installed on the Windows test box | Accepted |
+| 071 | 2026-08-14 | **A Windows terminal session is focused through its host process** (amends #069). Reported live: clicking the only light did nothing, because it was `ide:"cli"` and #069 had declared `cli` unreachable on Windows. That reasoning rested on `pid` being `0` — a measurement deferred in #068, not a platform limit. The process tree settled it: `claude.exe → powershell.exe → WindowsTerminal.exe`, and `claude.exe → claude.exe` for Claude Desktop, two hops in both cases. The hook now walks to the nearest `claude.exe` ancestor (its immediate parent is a Git Bash shell that exits with it, so recording that would give the app a dead pid), and the app walks up from the recorded pid to the first ancestor owning a visible titled window. Still the window, not the tab — Windows Terminal exposes no tab API, so #069's ceiling stands. Verified by an ignored test that resolves a live session's pid and raises its host window | Accepted |
+| 072 | 2026-08-14 | **Tray mode on Windows** (extends #024, completes #069's option-B scope). #069 scoped tray mode in but the first pass gated all of it to macOS, leaving a **Mode** control that did nothing — and a frontend audit showed it was worse than inert: a light click in menu-bar mode calls `hidePopover()`, which on Windows hid the window with no tray icon, no taskbar button (`skipTaskbar`, verified against the shell's own UI tree) and no Dock icon, and the mode is persisted — so the app became unreachable except by killing it. Tray plumbing is now un-gated (`icon_as_template` stays macOS-only); the popover opens away from whichever screen edge the tray sits on; `set_mode` returns whether a tray actually exists and the frontend reverts to floating when it does not, so a failed tray can never strand the app; Windows always uses the single condensed dot because a notification-area icon is square 16x16 and the 170x44 strip would smear, with `square_icon` letterboxing what arrives; a new `platform()` command gives the frontend the platform detection it had none of; "Menu bar" is relabelled "Tray". Verified by driving the real UI: the icon appears in the notification area (named by a new tooltip), clicking it reveals the popover, and switching back restores the floating bar | Accepted |
+| 073 | 2026-08-15 | **The tray popover dismisses itself, and anchors to the work area** — two defects in #072, both reported from live use. (a) The popover stayed on top after clicking away. The fix is to hide on `Focused(false)`, but the window is configured `focus: false` and `show()` does not activate it, so it **never held focus to lose** — the first attempt deployed and did nothing. `set_focus()` after `show()` is what makes dismissal possible; a 400 ms guard stops the focus loss from racing the tray click and making the icon unable to close it. (b) The popover opened overlapping the taskbar, because it anchored to the *click point* and the tray icon sits inside the taskbar. Now anchored to the monitor's **work area** (`GetMonitorInfoW`'s `rcWork`), which `Monitor::size()` cannot express. A third defect found while fixing them: opening settings grows the window ~360px and ran it off the bottom, so `fit_popover` pulls it back inside the work area. Windows only — macOS's panel is non-activating by design (#008). Verified by driving the real UI | Accepted |
+| 074 | 2026-08-15 | **Opening the tray popover on Windows opens the settings panel with it.** Requested live. On Windows the tray item is a single summary dot (#072), so the popover was showing a larger copy of what the user had just clicked and hiding the panel they wanted behind another right-click; on macOS the menu-bar item already shows every dot, so it keeps #024's behaviour. The mechanism is the interesting part: `visibilitychange` is the natural signal and the codebase already used it for this moment, but **WebView2 keeps the document "visible" while the window is hidden**, so it never fires on Windows — the first implementation relied on it and did nothing. The backend now emits `popover-shown`. Opening via the normal `toggleSettings` inherits the upward growth, the lights anchor, and `fit_popover` (#073), so it lands 189x361 clear of the taskbar | Accepted |
+| 075 | 2026-08-15 | **The settings panel collapses without the lights jumping.** Reported live, and the asymmetry (only on collapse) was the clue: `panel-above` is `column-reverse`, so the lights sit at the *bottom* of the open panel; collapsing mutates the DOM first, snapping them to the top of a still-tall window, and only three-plus frames later do the async resize and re-anchor put them back. DOM and window geometry cannot be made atomic, so the fix suppresses the paint instead — `visibility: hidden` across the transition, restored once the window is final. `visibility` rather than `display`/`opacity` because `resizeToContent` still has to measure the layout. The rAF wait is now bounded (250 ms) and the restore is in a `finally`, or a popover dismissed mid-collapse would leave the bar invisible for good. Also fixed here: #073's debounce stamped even when the popover was already hidden, so the next tray click was swallowed. Verified with a **negative control** — fix off: 360 px jump; fix on: 22 px | Accepted |
 
 ---
 
@@ -4124,3 +4132,499 @@ a status changes at every turn boundary, and "immediately" is the requirement.
   rendered nothing on the pty across four attempts (sandboxed and not, `TERM` set and not) and
   never accepted the prompt — `SessionStart` fired and `UserPromptSubmit` never did. The
   measurement above came from sampling a real session instead.
+
+## 068 — The hook becomes a native binary, and `jq` stops being a dependency
+
+**Date:** 2026-08-14
+**Status:** Accepted (supersedes the `report.sh` half of #011; closes the `jq` item in #059)
+**Evidence:** Claude Code 2.1.x on Windows 11 (native winget install, not WSL), Git for
+Windows 2.x, measured on the machine that is now the Windows test box.
+
+**Context:** The Windows port (#069) had to answer "where does `jq` come from on Windows",
+since Git for Windows ships none. Investigating turned up that this was never a Windows
+question: `report.sh` calls `jq` with no availability guard, `install.rs` — the DMG path, the
+*primary* channel per #024 — never checks for it, and `jq` ships at `/usr/bin/jq` only since
+macOS 15. A DMG user on macOS 11–14 without Homebrew already gets an inert app and no error.
+#059 queued a guard for this, which converts a silent failure into a loud one but still
+leaves the user with a non-working app.
+
+**Measured, not assumed (Agent Guideline #4).** Hooks on Windows are executed through Git
+Bash — verified by probe: `SHELL=C:\Program Files\Git\bin\bash.exe`, `$HOME` expanded in the
+hook command, `%USERPROFILE%` did not, and a `.sh` with a shebang ran directly with its stdin
+payload intact. So `report.sh` *runs* on Windows. What it costs there:
+
+| | ms per hook event |
+|---|---|
+| `report.sh` (bash + jq, 8 external spawns) | **210.6** |
+| `agentstatus-hook.exe` | **26.4** |
+| bash spawn floor (`bash -c "exit 0"`) | 18.6 |
+
+`PreToolUse` + `PostToolUse` fire on every tool call, so that is ~421 ms of added latency per
+tool call versus ~53 ms. The cost is not `jq` specifically — MSYS emulates `fork()`, so every
+command substitution is expensive. The ~18.6 ms bash floor is unavoidable either way: Claude
+Code invokes the hook command through a shell regardless of what that command is.
+
+**Options considered:**
+
+| Option | Windows cost/event | Removes the dependency? | Risk |
+|---|---|---|---|
+| Bundle `jq.exe` per platform | ~210 ms | No — ships a third-party MIT binary | ~30 lines, zero behaviour risk |
+| **Native binary (chosen)** | **~26 ms** | Yes, entirely | Rewrites a working signal layer |
+| Perl + `JSON::PP` (ships with Git for Windows) | ~210 ms | Trades `jq` for a perl Apple has deprecated | Same rewrite risk, worse outcome |
+| Node `report.mjs` | ~220 ms | No — Claude Code's installer doesn't need Node | Same rewrite risk |
+
+Perl and Node are strictly dominated: the rewrite risk of the binary without its payoff.
+
+**Decision:** Port `report.sh` to a **standalone crate**, `hooks/agentstatus-hook/`, outside
+the Tauri package. Ship it as a Tauri bundle resource that `install.rs` copies to
+`~/.claude/status/` on launch — the installed hook stays outside the app, exactly as
+`report.sh` did, so it survives the app moving. Windows gets it first; macOS keeps
+`report.sh` until the port is diffed against a live macOS session (there are no Windows users
+to regress, and macOS users to protect).
+
+**Why a separate crate rather than a second `[[bin]]` in the Tauri package** (learned by
+hitting it): `tauri-build` validates `bundle.resources` for **every** target in its package,
+so `cargo build --bin agentstatus-hook` there required the staged binary that the build
+itself produces — a genuine circular dependency, which is the same build-ordering trap that
+ruled out `include_bytes!`. Standalone also delivers what the design wanted anyway: the hook
+carries none of Tauri's dependency graph, and `cargo test` for it compiles serde and nothing
+else (13 tests in ~6 s from cold, versus a full Tauri build).
+
+**Build wiring:** `hooks/stage-hook.mjs` builds the crate in release and copies the binary to
+`app/src-tauri/resources/`, which `tauri.windows.conf.json` lists as a resource. It runs from
+both `beforeBuildCommand` and `beforeDevCommand`, because Tauri resolves `bundle.resources`
+for `tauri dev` too and errors on a missing path — pointing the config straight at
+`target/release/` would break dev on any tree that had never done a release build. Staging
+gives the config one stable path that always exists (Agent Guideline #8: a script, not a step
+you remember).
+
+**Nothing this app runs on Windows may allocate a console** (found in live use on
+2026-08-14, immediately after the first real install, reported as "a terminal window keeps
+popping in and out of my desktop"). There were **two** causes, and fixing the first did not
+stop it — the second was only found by recording every process creation for 25 s and reading
+what actually appeared, rather than reasoning about it again:
+
+1. *The hook's own subsystem.* Covered below.
+2. *The bar's polling.* `cli_facts_query` runs `claude agents --json` every
+   `CLI_FACTS_TTL` (10 s), forever. The bar is a GUI process and therefore owns **no**
+   console, so Windows allocated a **new** one for that child every ten seconds — measured
+   as `app` → `claude.exe` → `conhost.exe` on a 10-second cadence, running whether or not
+   the user was doing anything. Fixed with `CREATE_NO_WINDOW` on the spawn, via a
+   `no_window()` helper that is a no-op off Windows. Nothing is lost: every such spawn is
+   read through a pipe, never a terminal.
+
+The general rule this establishes: on Windows a GUI process must pass `CREATE_NO_WINDOW`
+to **every** console child, and any binary the user never launches themselves must be
+GUI-subsystem. Neither is something a test catches — both programs behaved perfectly, they
+just brought a window with them.
+
+While measuring, `cursor_running()` also turned out to shell out to `pgrep` **once per
+second** on Windows purely to fail (there is no `pgrep`), so it is now macOS-gated with the
+same fail-open answer.
+
+**The hook must be a GUI-subsystem binary.** A Rust binary defaults to the **console**
+subsystem, so Windows allocated a console for every invocation — and the hook is invoked on
+every tool call, twice. Fixed with
+`#![windows_subsystem = "windows"]`, unconditionally rather than release-only: any build that
+gets registered must be silent, and the attribute is a no-op off Windows. Nothing is lost —
+the hook writes to neither stdout nor stderr by contract (Agent Guideline #3), and reading
+piped stdin is unaffected by the subsystem (verified: it still produces a correct status file
+when run from Git Bash). The Tauri template carries this same attribute on `app.exe` with a
+"DO NOT REMOVE" comment; the lesson is that it applies to *any* binary the user never
+launches themselves. `hooks/stage-hook.mjs` now reads the PE header and refuses to stage a
+binary whose subsystem is not `2`, because no test would have caught this — the hook behaved
+correctly the whole time, it just brought a window with it.
+
+**Upgrade safety:** the installer's "is this entry ours" test now matches **both**
+`report.sh` and `agentstatus-hook`. Without that, a Windows user upgrading from a `report.sh`
+build would end up with two hooks registered per event, both writing the same status file.
+Replacing a *running* hook binary is handled too — hooks fire on every tool call, so the
+copy is skipped when the bytes already match, and on a genuine upgrade the old file is moved
+aside and swept on a later launch.
+
+**How "faithful port" is enforced rather than asserted:** `hooks/gen-golden.sh` replays 42
+fixtures — 14 captured from a real Windows session, 28 synthetic for the branches a headless
+run cannot reach — through the *current* `report.sh` and records its output. The Rust
+implementation replays the same fixtures and must match **strictly**, with no per-field
+exceptions. Confirmed end-to-end as well as in-memory: both implementations run over the
+fixtures on disk produce identical status files, identical subagent markers, and an identical
+`calibration.log`. Re-run `hooks/gen-golden.sh` whenever `report.sh` changes.
+
+**Two real bugs this surfaced, both fixed in `report.sh` too:**
+
+- **Windows paths were never split.** `cwd` arrives as `C:\Users\...` (verified live), and
+  `split("/")` leaves it whole — so every Windows light was labeled with its *entire path*,
+  and a file detail read `Read C:\Users\...\sample.txt` instead of `Read sample.txt`. Fixed in
+  both implementations with the same shape test: normalise `\` to `/` only when the path
+  starts with a drive letter or a UNC root. No macOS path starts either way, so macOS
+  behaviour is provably unchanged — including that a POSIX path merely *containing* a
+  backslash keeps it as part of the filename.
+- **`json!` sorts keys; jq preserves insertion order.** The status file is now built from a
+  typed `Status` struct so serde emits `report.sh`'s field order and the files are
+  byte-identical.
+
+**Known deliberate divergence:** an empty `tool_input.file_path` on an `Edit`/`Write`/`Read`
+makes jq add a string to `null`, which errors out the whole program — so `report.sh` writes
+*nothing at all* for that event. The port writes the status with an empty basename. The
+port's behaviour is strictly better and no fixture covers the case, so it is recorded here
+rather than replicated.
+
+**Not yet resolved:** `pid`. The shell hook records `$PPID`; the binary records its own
+parent, which under Git Bash may be `bash` rather than `claude.exe`. Everything consuming
+`pid` is macOS-only or fails open, so the Windows build records `0` until the real value is
+observed on a live interactive Windows session (Agent Guideline #4) — see `NEXT_STEPS.md`.
+
+**Fixtures and privacy:** the captured payloads are sanitised (home path, session ids, agent
+ids, transcript paths replaced) before being committed, keeping the field names, event order,
+and backslash path shape that make them evidence while honouring Agent Guideline #12.
+
+## 069 — Windows support: native only, and what is deliberately left out
+
+**Date:** 2026-08-14
+**Status:** Accepted
+
+**Context:** The project is macOS-only (README badge, arm64 DMG, `macos-15` release runner). A
+survey of what Windows would take found the signal layer nearly free — Claude Code runs hooks
+through Git Bash, so the hook mechanism transfers — and the display layer to be the real work:
+the crate did not compile on Windows at all, and 42 `#[cfg(target_os = "macos")]` sites had
+only 8 non-macOS fallbacks.
+
+**Decision:** Support **native Windows only** at the "core features" level — floating bar,
+tray mode, lights, tooltips, and click-to-focus. Specifically:
+
+- `tauri-nspanel` moves under `[target.'cfg(target_os = "macos")'.dependencies]` and its
+  `.plugin()` registration is `cfg`-gated. An NSPanel is macOS by construction (#008); the
+  Windows bar is a plain Tauri window — `alwaysOnTop`, `transparent`, `skipTaskbar`,
+  `focus: false` — all already in `tauri.conf.json`. Windows has no Spaces problem to solve.
+- `pid_alive` gains a non-macOS fallback that answers "alive", matching the fail-open contract
+  of `owns_terminal` and `live_workspace_folders`: never prune a light on an answer the
+  platform cannot give.
+- `install.rs` resolves `HOME` then `USERPROFILE` (a Windows GUI process has no `HOME`), and
+  the `chmod` is `#[cfg(unix)]` — Windows has no execute bit and Claude Code invokes the hook
+  by path through Git Bash.
+
+**Explicitly out of scope, and why:**
+
+- **Cursor's menu-bar integration** (#038/#045/#047). It reads Cursor's `NSStatusItem` through
+  the macOS Accessibility API. Windows Cursor has no menu-bar status item and Windows has no
+  AX equivalent. A Windows Cursor click falls back to focusing the window.
+- **Per-tab terminal focus** for `cli` sessions (#054/#064). There is no tty concept and
+  Windows Terminal exposes no per-tab focus API. Focusing the window is the ceiling.
+- **WSL.** Hooks inside WSL write to the WSL filesystem; a Windows GUI app reaching it through
+  `\\wsl$\` is meaningful extra scope for a distinctly different user. Native install only.
+
+Rather than ship a light that leads nowhere, these degrade to "focus the app" or are absent —
+UI Principle #3 says a click goes to *that* session or nowhere.
+
+## 070 — Windows click-to-focus is a direct Win32 raise, not a port of the macOS scheme
+
+**Date:** 2026-08-14
+**Status:** Accepted
+
+**Context:** On macOS a light click does two things at once (#021): an osascript raise, which
+is fast (~0.2 s) but cannot see full-screen windows on inactive Spaces, *and* the IDE CLI,
+which is slow (~1.1 s, it boots a Node runtime) but is the only thing that crosses Spaces.
+Both run because neither alone is sufficient. The exact-tab focus is separate again — the
+VS Code extension relay (#015/#019), which the bar cannot do itself.
+
+**What Windows already had:** the relay. `write_focus_request` is platform-neutral and the
+extension is plain TypeScript reading `~/.claude/status/focus-request.json`, so per-*tab*
+focus needed no work at all. What was missing was getting the right *window* forward: the
+whole macOS block was `cfg`-gated out, so a Windows click wrote the relay file and did
+nothing else.
+
+**Decision:** `EnumWindows` + `SetForegroundWindow`, matching a window whose title contains
+the workspace root's basename **and** ends with the editor's name ("Visual Studio Code" /
+"Cursor"). Same matching rule as the macOS raise, which also keys on the project folder in
+the title; the trailing app name is what stops a same-named window of another application
+from swallowing the click.
+
+Deliberately *not* a port of the two-path scheme:
+
+- **No permission grant.** The macOS raise goes through System Events and needs Accessibility
+  trust, which an unsigned rebuild invalidates (#039). Win32 needs none.
+- **No subprocess.** It is a direct call, so it is far below the ~1 s an IDE CLI costs. There
+  is no reason to fire a slow path in parallel with a fast one when the fast one is complete.
+- **The CLI is a fallback, not a partner.** Windows has no Spaces, so the only reason to reach
+  for the CLI is that no window matched — the folder is open under a title we did not
+  recognise, or is not open at all. Then, and only then, VS Code is invoked.
+- **`Code.exe`, not `code`.** The `code` shim is `code.cmd`, which `CreateProcess` cannot
+  execute, so it would need `cmd /c` and the nested quoting that comes with a path containing
+  spaces. Invoking the executable by absolute path mirrors what macOS already does with the
+  CLI binary, and skips the shell entirely.
+- **Cursor raises but never falls back.** On macOS its CLI opens a *new* agent instead of
+  focusing (#047). That has not been retested on Windows, and spawning a second agent is
+  worse than doing nothing, so Cursor stops after the raise (#069).
+- **`cli` is unreachable by design** (#069): no tty, no per-tab focus API in Windows Terminal,
+  and the recorded pid is still 0 pending measurement — so there is nothing to identify a
+  window with. Focusing an arbitrary terminal would be a click that lies about where it went.
+
+**Two supporting changes:**
+
+- `workspace_root` is **un-gated from macOS**. The Claude Code VS Code extension writes the
+  same `~/.claude/ide/*.lock` files on Windows, and the raise needs the same cwd → window
+  mapping. It returns `cwd` unchanged when the directory is absent, so a machine without
+  locks gets the old behaviour rather than a wrong answer.
+- Path matching moves into `path_within`, shared by the raise and the live-window pruning
+  (#027). On Windows it is **case-insensitive and accepts either separator** — the filesystem
+  is case-insensitive and nothing guarantees the lock file and the hook payload spell the
+  drive or folder the same way. macOS keeps the exact, `/`-only rule byte for byte, so its
+  pruning is unchanged (Agent Guideline #7).
+
+`windows-sys` is pinned to **0.61**, the version Tauri already resolves, so no fourth copy
+joins the 0.45/0.59/0.61 already in the graph.
+
+**Verified:** `raises_a_window_by_title` (ignored, run explicitly) starts a real Notepad on a
+uniquely-named file and asserts the raise matches it — proving `EnumWindows`, the UTF-16
+title decoding, and the predicate path — and asserts it reports *no* match for a title no
+window carries, which is what makes the CLI fallback fire when it should. Matched in 0.8 s.
+The test needs no editor installed, so it runs on a bare machine. Whether Windows then
+*honours* `SetForegroundWindow` is OS focus policy, not this code's decision; the call is
+made from a click on our own window, which is the case Windows permits.
+
+**Unverified, and it matters:** the actual window-title formats of VS Code and Cursor on
+Windows. **Neither is installed on the test box**, so the `contains(folder) && ends_with(app)`
+rule is reasoning from the macOS titles, not observation. It is the one assumption in this
+decision that could silently make every click fall through to the CLI fallback (VS Code) or
+do nothing (Cursor). Confirm against a real window before shipping — see NEXT_STEPS.
+
+## 071 — A Windows terminal session is focused through its host process, not left dead
+
+**Date:** 2026-08-14
+**Status:** Accepted (amends #069, which declared this out of scope)
+
+**Context:** Reported on the first real Windows install: *"clicking a light doesn't take me to
+the window associated with it."* The machine had exactly one light, `ide: "cli"` — Claude
+Code in a terminal — and decision 069 had explicitly declared `cli` unreachable on Windows,
+so `focus_session` did nothing for it. Clicking it was a no-op **by design**, which is
+precisely the click-that-goes-nowhere UI Principle #3 forbids.
+
+**069's reasoning does not survive contact with the evidence.** It argued there was "nothing
+to identify a window with" — but that was a *consequence* of `pid` being recorded as `0`
+(deferred in #068 pending measurement), not a property of the platform. Measuring the process
+tree settled it immediately:
+
+```
+claude.exe 24292 → powershell.exe 32964 → WindowsTerminal.exe 21168   ("… ◐ Add Windows support to project")
+claude.exe 13540 → claude.exe 13408 (Chrome_WidgetWin_1 | "Claude")   ← Claude Desktop
+```
+
+Two hops in both cases. The session's own process owns no window, but an ancestor always
+does.
+
+**Decision:** Record the owning `claude` pid on Windows, and focus a `cli` or
+`claude-desktop` light by walking up from it to the first ancestor that owns a visible titled
+window.
+
+- **In the hook:** `parent_pid` walks the process tree to the nearest `claude.exe` ancestor
+  rather than reporting its immediate parent. Claude Code runs hooks through Git Bash, so the
+  parent is a shell — sometimes two — and those shells exit with the hook, so recording one
+  would hand the app a pid that is already dead. This reproduces exactly what `$PPID` means
+  on macOS, where bash `exec`s the hook in its own place. Returns 0 when no `claude.exe`
+  ancestor is found, because every consumer treats 0 as "unknown" and falls back — an honest
+  answer beats a shell pid.
+- **In the app:** `focus_host_window` walks the same tree upward and raises the first
+  ancestor owning a visible titled window. Claude Desktop takes the same path and keeps its
+  title match as a fallback, for a status file written before the pid walk existed.
+
+**What this does not do:** select the *tab*. Windows Terminal exposes no API for that, so
+#069's ceiling stands — a click lands on the right window, and the user picks the tab. That
+is the same degradation macOS accepts for terminals it cannot script (#054), and it is
+enormously better than the nothing that was there before.
+
+**Verified:** `focus_host_window_reaches_a_window` (ignored, run explicitly) reads whichever
+live `cli`/`claude-desktop` session has a recorded pid and asserts the walk reaches a window.
+Run against this session it resolved `pid=24292` and raised the hosting Windows Terminal. The
+hook's half was verified separately: after deploying it, the live status file went from
+`pid=0` to `pid=24292`, which `Get-CimInstance` confirms is `claude.exe`.
+
+**Consequence for #064/#067 on Windows:** `pid` is now a real, live handle there, so
+pid-liveness pruning and the status reconcile have something to work with. Neither is enabled
+on Windows yet — `pid_alive` still answers "alive" unconditionally off macOS — and turning
+them on is a separate change that needs its own verification.
+
+## 072 — Tray mode on Windows, and the trap that made it mandatory
+
+**Date:** 2026-08-14
+**Status:** Accepted (extends #024 to Windows; completes the option-B scope in #069)
+
+**Context:** Decision 069 listed tray mode in scope for Windows, but the first pass shipped
+`set_mode`, `set_tray_image`, `toggle_popover` and the tray builder all gated to macOS. The
+settings panel still offered the **Mode** control, so on Windows it was a control that did
+nothing. A frontend audit found that this was not merely inert — it was a **trap**:
+
+`hidePopover()` is called whenever a light is clicked in menu-bar mode. On Windows that hid
+the window while no tray icon existed to bring it back, and `skipTaskbar: true` means there
+is no taskbar button either (verified: the shell's own UI tree lists 21 taskbar entries and
+AgentStatus is not among them). The mode is persisted in `localStorage`, so the next launch
+came up in menu-bar mode and the very next light click hid it again. **The only recovery was
+killing the process.**
+
+**Decision:** Build the tray on Windows rather than hide the control, and make the frontend
+incapable of entering the trap even if the tray fails.
+
+- **Tray plumbing un-gated** to `any(target_os = "macos", windows)`. `icon_as_template` and
+  `set_icon_as_template` stay macOS-only — template icons are a macOS concept and would draw
+  the coloured dots as a monochrome alpha mask.
+- **The popover opens away from the edge the tray lives on.** macOS anchors below the menu
+  bar at the top; the Windows notification area is at the bottom. Chosen by which half of
+  the monitor the click landed in rather than by platform, so a taskbar the user has docked
+  to the top works too. The popover is also clamped to the monitor it was clicked on.
+- **`set_mode` now returns whether the mode actually engaged** — specifically whether a tray
+  exists to represent the panel. The frontend reverts to floating and *persists* that when
+  it gets `false`, so a tray that fails to build can no longer strand the app. This is the
+  belt to the existing braces (`set_mode` already refused to hide the panel with no tray);
+  the frontend needed to know as well, because it hides the panel independently on a light
+  click.
+- **Windows always uses the single condensed dot.** A Windows notification-area icon *is*
+  square — 16x16 logical, scaled by DPI — while the bar's strip is 170x44 for five sessions.
+  Stretched into a square that is roughly two pixels per dot: an unreadable smear. The
+  Dots/Single control is therefore hidden on Windows rather than offered and ignored, and
+  `square_icon` letterboxes whatever arrives onto a transparent square so Windows scales it
+  without distortion.
+- **A `platform()` command** answers this once at startup. The frontend had *no* platform
+  detection at all, which is why every macOS-only no-op looked like success to it.
+- **Labels follow the platform:** "Menu bar" becomes "Tray" on Windows.
+
+**Rejected:** hiding the Mode control on Windows, which #069 offered as the cheaper option.
+It closes the trap but abandons a feature that was in scope and that the tray API supports
+cross-platform. The real work turned out to be the icon *shape*, not the tray.
+
+**Not addressed here, and worth knowing:** in menu-bar mode the frontend skips drag-clamping
+and position persistence (correct — a popover is positioned by the tray), and edge-snapping
+in floating mode uses full monitor bounds rather than the work area, so the bar can snap
+underneath the Windows taskbar. Both are recorded in NEXT_STEPS rather than fixed here.
+
+## 073 — The tray popover dismisses itself, and anchors to the work area
+
+**Date:** 2026-08-15
+**Status:** Accepted (fixes two defects in #072, both reported live)
+
+**Context:** Both reported from real use of Windows tray mode, immediately after #072:
+
+1. *"after clicking the lightbar into the tray and clicking that tray version, the regular
+   light bar stays on top even after clicking out of the tray"* — the popover never went
+   away. Every other tray popover on Windows closes when you click elsewhere; this one had
+   to be dismissed from the tray icon.
+2. *"clicking from the tray opens the menu underneath the tray, which obscures the lightbar
+   settings"* — the popover opened overlapping the taskbar.
+
+**Cause of (2):** `toggle_popover` anchored to the **click point**, offsetting by 8px. But
+the tray icon lives *inside* the taskbar, so anchoring to the click puts the popover on top
+of it. `Monitor::size()` is no help — it is the full screen and knows nothing about the
+taskbar. Fixed by anchoring to the monitor's **work area** (`GetMonitorInfoW`'s `rcWork`,
+the screen minus the taskbar and any other appbars), against whichever edge the tray is on.
+Verified: work area ends at y=1392 on this machine and the popover now lands at y=1353 with
+its bottom edge at 1384 — 8px clear of the taskbar.
+
+**Cause of (1), and the part that was not obvious:** the fix is to hide on `Focused(false)`,
+but the window is configured `focus: false` and `show()` does not activate it — so the
+popover **never held focus and therefore never lost any**. The first attempt at this
+compiled, deployed, and did exactly nothing; the event never fired. `set_focus()` after
+`show()` is what makes the dismissal possible at all. Windows only: the macOS panel is
+deliberately non-activating (#008) and focusing it would defeat that, so macOS behaviour is
+unchanged.
+
+**The race this creates, and the guard for it:** clicking the tray icon while the popover is
+open delivers the focus loss *first*. Without a guard the popover would hide on blur and the
+tray click would immediately reopen it, so the icon could never close it — the bug would look
+identical to the one being fixed. A click landing within 400 ms of an auto-hide is treated as
+the closing click and consumed.
+
+**Third defect, found while fixing these:** opening the settings panel grows the window from
+~31px to ~390px tall. Anchored just above the taskbar, that growth runs off the bottom of the
+screen and takes the settings with it. The existing `chooseGrowthDirection` already flips the
+panel to grow *upward* when the lights are in the bottom half, which does most of the work;
+a new `fit_popover` command pulls the window back inside the work area afterwards, since the
+frontend cannot see where the taskbar is. Verified: settings open at y=1023, bottom edge 1384
+— still clear.
+
+**Verified by driving the real UI**, since none of this is reachable from a unit test: switch
+to tray mode, click the tray icon with a real mouse event (UIA's `Invoke()` does *not* move
+the cursor, so the tray event carries a nonsense position and the popover anchors to the
+wrong place — a test artifact that briefly looked like a product bug), confirm placement,
+click elsewhere and confirm dismissal, reopen, open settings, confirm it stays on screen.
+
+## 074 — Opening the tray popover on Windows opens the settings panel with it
+
+**Date:** 2026-08-15
+**Status:** Accepted (refines #072 for Windows; macOS keeps #024's behaviour)
+
+**Context:** Requested from live use: *"opening the popup from the tray should by default
+open the settings."*
+
+The reasoning holds up. On Windows the tray item is a **single summary dot** (#072 — a
+notification-area icon is square, so a row of dots would smear), which means the popover was
+showing the user a second, larger copy of information they had just clicked on, and the panel
+they actually wanted was another right-click away. On macOS the menu-bar item already shows
+every dot at full fidelity, so the trade is different there.
+
+**Decision:** On Windows, revealing the popover from the tray opens the settings panel with
+it. macOS is unchanged — its popover still opens as the bare light bar (#024). Gated on the
+frontend by the `platform()` answer added in #072, not by guessing.
+
+**The mechanism, because the obvious one does not work:** the frontend needs to know the
+popover was revealed. `visibilitychange` looks like the natural signal and the codebase
+already used it for the same moment — but **WebView2 keeps the document "visible" while the
+window is hidden**, so on Windows it never fires. The first implementation hung the behaviour
+off it, built, deployed, and did nothing at all; the popover came up as the bare 45x31 bar.
+The backend now emits a `popover-shown` event from `toggle_popover`, which the frontend
+listens for; `visibilitychange` is kept as the macOS path. Emitting on both platforms costs
+nothing since the frontend decides what to do with it.
+
+Opening the panel this way goes through the ordinary `toggleSettings`, so it inherits
+`chooseGrowthDirection` (grows upward from a bottom-docked tray), the lights anchor, and
+`fit_popover` (#073) — the popover comes up 189x361 with its bottom edge 8px clear of the
+taskbar rather than running off the screen.
+
+**Verified live:** clicking the tray icon with a real mouse event now yields a 189x361
+popover with the panel open, inside the work area; clicking elsewhere still dismisses it.
+
+## 075 — The settings panel collapses without the lights jumping
+
+**Date:** 2026-08-15
+**Status:** Accepted (fixes a flicker in #024's panel, surfaced on Windows; also refines #073)
+
+**Context:** Reported live: *"the lightbar flickers every time I change from the settings menu
+to the compressed version (it only happens when compressing the settings, not the other way
+around)."* The asymmetry was the clue.
+
+**Cause.** `#bar.panel-above` is `flex-direction: column-reverse`, so with the panel open the
+lights sit at the **bottom** of a ~390px window. Collapsing mutates the DOM first: the panel
+goes, the lights snap to the **top** of a window that is still ~390px tall, and only then do
+`resizeToContent` and `anchorLightsTo` — two async IPC round trips, three-plus frames later —
+shrink the window and move it back down. The user sees the lights leap up and return.
+Opening never shows it because `chooseGrowthDirection` runs *before* the panel appears, so
+the lights never move.
+
+There is no way to make the DOM change and the window geometry change atomic: the window
+calls are async IPC and the DOM change is synchronous, so some frames will always disagree.
+
+**Decision:** Suppress the paint for those frames rather than chase atomicity. `#bar` is set
+`visibility: hidden` immediately before the DOM mutation and restored once the window is its
+final size and back in position, so the first frame the user sees is the finished one.
+`visibility` specifically — not `display` or `opacity` — because it stops painting while
+keeping the layout `resizeToContent` has to measure.
+
+Two robustness details, both needed to avoid trading a flicker for something worse:
+
+- The restore is in a `finally`, and `resizeToContent`'s double-`requestAnimationFrame` wait
+  is now **bounded by a 250 ms timeout**. Animation frames stop firing when a window is
+  hidden, so a popover dismissed mid-collapse would otherwise leave that promise pending
+  forever — and a bar left `visibility: hidden` comes back **invisible** on the next open.
+- #073's close-debounce now only stamps when the popover is actually **visible**. A hidden
+  window still reports focus changes — opening the tray's own hidden-icons flyout produces
+  one — and stamping then made the *next* tray click look like a close and get swallowed, so
+  the icon did nothing. Found while testing this.
+
+**Verified, with a negative control.** A harness parks the bar low on the monitor (forcing
+`panel-above`), opens the panel, then captures 14 frames at 25 ms across the whole panel area
+during the collapse and reports where the green running-light painted in each:
+
+| | light Y values | spread |
+|---|---|---|
+| fix disabled (negative control) | 22, 382 | **360 px — jumped** |
+| fix enabled | 76–98 | 22 px — no jump (dot glow / hover scale) |
+
+The negative control matters: without it, "spread = 0" only proves the measurement ran, not
+that it could ever fail.

@@ -1,0 +1,28 @@
+{"event":"SessionStart","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","hook_event_name":"SessionStart","source":"startup"}}
+{"event":"UserPromptSubmit","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","prompt":"Refactor the parser\n\n\tand then\r\nnormalise every token — including the ünïcödé ones — so the output stays stable across platforms; this line is deliberately long enough to exceed one hundred and sixty codepoints for truncation."}}
+{"event":"PreToolUse","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","tool_name":"Bash","tool_input":{"command":"for f in $(ls -1 src/*.rs); do echo \"checking $f\"; rustfmt --check \"$f\" || echo \"needs formatting: $f\"; done"}}}
+{"event":"PreToolUse","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","tool_name":"Write","tool_input":{"file_path":"C:\\proj\\AgentStatus\\src\\main.rs"}}}
+{"event":"PreToolUse","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","tool_name":"Read","tool_input":{"file_path":"/Users/x/proj/AgentStatus/src/lib.rs"}}}
+{"event":"PreToolUse","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","tool_name":"WebFetch","tool_input":{"url":"https://example.com"}}}
+{"event":"PreToolUse","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","tool_name":"Bash","tool_input":{}}}
+{"event":"PermissionRequest","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","tool_name":"Bash"}}
+{"event":"PermissionRequest","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","tool_name":"AskUserQuestion"}}
+{"event":"PostToolUseFailure","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","tool_name":"Bash","is_interrupt":false,"error":"exit 3"}}
+{"event":"PostToolUseFailure","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","tool_name":"Bash","is_interrupt":true}}
+{"event":"Stop","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","last_assistant_message":"Done — the parser now normalises tokens.\nAll tests pass."}}
+{"event":"StopFailure","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","error_type":"api_error","is_interrupt":false}}
+{"event":"StopFailure","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","is_interrupt":false}}
+{"event":"PreCompact","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus"}}
+{"event":"SubagentStart","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","subagent_id":"sub-1","subagent_type":"Explore"}}
+{"event":"SubagentStart","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","agent_id":"sub-2"}}
+{"event":"SubagentStop","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","subagent_id":"sub-1"}}
+{"event":"UserPromptSubmit","payload":{"session_id":"s-fixture","prompt":"no cwd on this one"}}
+{"event":"SessionEnd","payload":{"session_id":"s-fixture","cwd":"C:\\proj\\AgentStatus","reason":"clear"}}
+{"event":"preToolUse","payload":{"session_id":"s-cursor","cursor_version":"3.10.11","workspace_roots":["/Users/x/proj/Widget"],"cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"cargo build"}}}
+{"event":"postToolUse","payload":{"session_id":"s-cursor","cursor_version":"3.10.11","workspace_roots":["/Users/x/proj/Widget"],"cwd":"/tmp","tool_name":"Bash"}}
+{"event":"stop","payload":{"session_id":"s-cursor","cursor_version":"3.10.11","workspace_roots":["/Users/x/proj/Widget"],"status":"aborted"}}
+{"event":"preToolUse","payload":{"session_id":"s-cursor","tool_name":"Edit","tool_input":{"file_path":"/Users/x/proj/Widget/src/app.ts"}}}
+{"event":"stop","payload":{"session_id":"s-cursor","status":"completed","last_assistant_message":"ok"}}
+{"event":"sessionStart","payload":{"session_id":"empty-state-draft","cwd":"/Users/x/proj/Widget"}}
+{"event":"SessionStart","payload":{"cwd":"/Users/x/proj/NoSession"}}
+{"event":"UserPromptSubmit","payload":{"session_id":"s-trail","cwd":"/Users/x/proj/Trailing/","prompt":"trailing separator in cwd"}}

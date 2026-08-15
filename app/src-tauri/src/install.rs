@@ -1,17 +1,37 @@
 // AgentStatus — self-installer (packaged app).
 //
-// On launch the bundled app makes itself work with zero external steps: it writes
-// an embedded copy of the status hook to a stable location and registers it in the
-// user's Claude hook config. Idempotent (safe every launch), reversible (a one-time
-// backup), and non-clobbering (only touches its own hook entries).
+// On launch the bundled app makes itself work with zero external steps: it puts the status
+// hook in a stable location and registers it in the user's Claude hook config. Idempotent
+// (safe every launch), reversible (a one-time backup), and non-clobbering (only touches its
+// own hook entries).
 //
-// The hook script is embedded at compile time, so the .app is self-contained and
-// the installed hook always matches the shipped app version. Gated to release
-// builds — in dev we keep pointing at the repo's hooks/ via `node hooks/setup.mjs`.
+// **Which hook depends on the platform (decision 068).** Windows installs the native
+// `agentstatus-hook` binary, shipped as a Tauri bundle resource: `report.sh` costs ~210 ms
+// per event there against the binary's ~26 ms, and needs a `jq` that Windows does not have.
+// macOS keeps writing the embedded `report.sh` until the port has been diffed against a live
+// macOS session — there are no Windows users to regress and macOS users to protect.
+//
+// Either way the installed hook lives *outside* the app bundle, so it keeps working if the
+// app is moved. Gated to release builds — in dev we point at the repo's hooks/ via
+// `node hooks/setup.mjs`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+#[cfg(not(windows))]
 const REPORT_SH: &str = include_str!("../../../hooks/report.sh");
+
+/// Hook entries this app owns, in **any** version it has ever shipped. Matching both is what
+/// makes an upgrade *replace* its own registration rather than sit alongside the old one —
+/// without this, a Windows user upgrading from a `report.sh` build would have two hooks
+/// firing per event, each writing the same status file.
+const HOOK_MARKERS: &[&str] = &["report.sh", "agentstatus-hook"];
+
+/// The staged resource path (see `hooks/stage-hook.mjs` and `tauri.windows.conf.json`) and
+/// the name it is installed under.
+#[cfg(windows)]
+const HOOK_BIN: &str = "agentstatus-hook.exe";
+#[cfg(windows)]
+const HOOK_RESOURCE: &str = "resources/agentstatus-hook.exe";
 
 // Same event set as hooks/setup.mjs. Tool events take a "*" matcher.
 const SIMPLE_EVENTS: &[&str] = &[
@@ -20,8 +40,18 @@ const SIMPLE_EVENTS: &[&str] = &[
 ];
 const TOOL_EVENTS: &[&str] = &["PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"];
 
+/// `HOME` is what the shell hook and macOS use; a Windows GUI process has only
+/// `USERPROFILE` (`HOME` is unset unless something like Git Bash sets it), so fall back
+/// rather than resolve every config path against an empty string.
 fn home() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default())
+    for key in ["HOME", "USERPROFILE"] {
+        if let Ok(v) = std::env::var(key) {
+            if !v.is_empty() {
+                return PathBuf::from(v);
+            }
+        }
+    }
+    PathBuf::new()
 }
 
 fn claude_dir() -> PathBuf {
@@ -39,28 +69,93 @@ fn status_dir() -> PathBuf {
 }
 
 /// Best-effort: never panics, never blocks the app if it fails.
-pub fn ensure_installed() {
-    if let Err(e) = try_install() {
+pub fn ensure_installed(app: &tauri::AppHandle) {
+    if let Err(e) = try_install(app) {
         eprintln!("AgentStatus: self-install skipped: {e}");
     }
 }
 
-fn try_install() -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
+/// Put the platform's hook in `~/.claude/status/` and return the command Claude Code should
+/// run for it.
+///
+/// The command string is handed to a **shell** — Git Bash on Windows — so on that platform
+/// the path is written with forward slashes (a backslash is an escape inside a bash word)
+/// and quoted (a home directory can contain spaces). Verified live: a forward-slash Windows
+/// path executes correctly as a hook command. macOS keeps the exact unquoted form it has
+/// always registered, so nothing about its settings.json changes.
+#[cfg(windows)]
+fn install_hook(app: &tauri::AppHandle, status: &Path) -> std::io::Result<String> {
+    use tauri::Manager;
 
-    // 1. Write the hook script to a stable, app-independent location.
-    let status = status_dir();
-    std::fs::create_dir_all(status.join("sessions"))?;
+    let src = app
+        .path()
+        .resolve(HOOK_RESOURCE, tauri::path::BaseDirectory::Resource)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, e.to_string()))?;
+    let dst = status.join(HOOK_BIN);
+    install_binary(&src, &dst)?;
+    sweep_replaced_binaries(status);
+    Ok(format!("\"{}\"", dst.to_string_lossy().replace('\\', "/")))
+}
+
+#[cfg(not(windows))]
+fn install_hook(_app: &tauri::AppHandle, status: &Path) -> std::io::Result<String> {
     let script = status.join("report.sh");
     std::fs::write(&script, REPORT_SH)?;
+    use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
-    let script_str = script.to_string_lossy().to_string();
+    Ok(script.to_string_lossy().to_string())
+}
+
+/// Copy the bundled hook binary into place, skipping the write when the bytes already match
+/// — which is every launch after the first, and keeps us from rewriting a file that hook
+/// processes are actively executing.
+///
+/// When it *has* changed, the destination may still be locked by a hook mid-run (they fire
+/// on every tool call), so fall back to the standard Windows replace-a-running-executable
+/// move: rename the old one aside, copy, and let `sweep_replaced_binaries` collect it later
+/// once no process holds it.
+#[cfg(windows)]
+fn install_binary(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if let (Ok(a), Ok(b)) = (std::fs::read(src), std::fs::read(dst)) {
+        if a == b {
+            return Ok(());
+        }
+    }
+    if std::fs::copy(src, dst).is_ok() {
+        return Ok(());
+    }
+    let aside = dst.with_extension(format!("old-{}", std::process::id()));
+    std::fs::rename(dst, &aside)?;
+    let result = std::fs::copy(src, dst).map(|_| ());
+    let _ = std::fs::remove_file(&aside);
+    result
+}
+
+/// Delete any `agentstatus-hook.old-*` left behind by a previous upgrade. Best-effort: one
+/// still held by a running process simply stays until the next launch.
+#[cfg(windows)]
+fn sweep_replaced_binaries(status: &Path) {
+    let Ok(entries) = std::fs::read_dir(status) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("agentstatus-hook.old-") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+fn try_install(app: &tauri::AppHandle) -> std::io::Result<()> {
+    // 1. Put the hook somewhere stable and app-independent.
+    let status = status_dir();
+    std::fs::create_dir_all(status.join("sessions"))?;
+    let command = install_hook(app, &status)?;
 
     // 2. Merge our hooks into the Claude user-level hook config.
     merge_hooks(
         claude_dir().join("settings.json"),
         claude_dir().join("settings.json.agentstatus-bak"),
-        &script_str,
+        &command,
         SIMPLE_EVENTS,
         TOOL_EVENTS,
     )?;
@@ -88,7 +183,7 @@ fn cleanup_legacy_hosts() {
                     for list in hooks.values_mut() {
                         if let Some(arr) = list.as_array_mut() {
                             let before = arr.len();
-                            arr.retain(|e| !e.to_string().contains("report.sh"));
+                            arr.retain(|e| !is_ours(e));
                             changed |= arr.len() != before;
                         }
                     }
@@ -120,10 +215,16 @@ fn cleanup_legacy_hosts() {
     }
 }
 
+/// Whether a registered hook entry is one of ours, in any version this app has shipped.
+fn is_ours(entry: &serde_json::Value) -> bool {
+    let s = entry.to_string();
+    HOOK_MARKERS.iter().any(|m| s.contains(m))
+}
+
 fn merge_hooks(
     settings_path: PathBuf,
     backup_path: PathBuf,
-    script_str: &str,
+    command_str: &str,
     simple_events: &[&str],
     tool_events: &[&str],
 ) -> std::io::Result<()> {
@@ -160,11 +261,13 @@ fn merge_hooks(
             .or_insert_with(|| serde_json::json!([]))
             .as_array_mut()
             .unwrap();
-        // Drop any prior AgentStatus entries so re-running never duplicates.
-        list.retain(|entry| !entry.to_string().contains("report.sh"));
+        // Drop any prior AgentStatus entries so re-running never duplicates — including a
+        // `report.sh` entry from a build before decision 068, which would otherwise keep
+        // firing alongside the binary.
+        list.retain(|entry| !is_ours(entry));
         let hook = serde_json::json!({
             "type": "command",
-            "command": format!("{script_str} {event}"),
+            "command": format!("{command_str} {event}"),
         });
         let registered = if with_matcher {
             serde_json::json!({ "matcher": "*", "hooks": [hook] })

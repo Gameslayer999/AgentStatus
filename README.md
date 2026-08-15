@@ -10,9 +10,9 @@ wait for you, which are idle, and which have an error.**
 
 [![Latest release](https://img.shields.io/github/v/release/Gameslayer999/AgentStatus?sort=semver&label=release)](https://github.com/Gameslayer999/AgentStatus/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Gameslayer999/AgentStatus/total?label=downloads)](https://github.com/Gameslayer999/AgentStatus/releases)
-![Platform](https://img.shields.io/badge/platform-macOS%20·%20Apple%20Silicon-black)
+![Platform](https://img.shields.io/badge/platform-macOS%20·%20Windows-black)
 
-[Install](#install-macos-apple-silicon) · [The lights](#the-lights) · [Customize](#customize-it) · [How it works](#how-it-works) · [VS Code extension](#optional--vs-code-extension)
+[Install](#install) · [The lights](#the-lights) · [Customize](#customize-it) · [How it works](#how-it-works) · [VS Code extension](#optional--vs-code-extension)
 
 </div>
 
@@ -31,12 +31,15 @@ AgentStatus operates with **Claude Code in VS Code**, **in the terminal**, and *
 Desktop**, and with the **Cursor agent**. They all use the same hook. An optional VS Code
 extension adds a status-bar item to each VS Code window.
 
-## Install (macOS, Apple Silicon)
+## Install
 
-The DMG is the fastest method. You do not need build tools. The application installs its
-own hooks at the first start.
+A downloaded installer is the fastest method. You do not need build tools. The application
+installs its own hooks at the first start.
 
-**Requirements:** macOS on Apple Silicon (M1 or later), and Claude Code or Cursor.
+**Requirements:** Claude Code or Cursor, and either **macOS on Apple Silicon** (M1 or later)
+or **Windows 11 on x64**.
+
+### macOS (Apple Silicon)
 
 > [!IMPORTANT]
 > AgentStatus is **not signed and not notarized**. Thus macOS Gatekeeper stops it at the
@@ -57,16 +60,6 @@ own hooks at the first start.
    Click **Open Anyway**. On macOS 15 and later, right-click → Open does not remove this
    block for downloaded applications.
 
-At the first start, the application **installs its own hooks**. It writes
-`~/.claude/status/report.sh`. It registers that script for Claude Code
-(`~/.claude/settings.json`) and for Cursor (`~/.cursor/hooks.json`). It makes a backup of
-the initial files first. **Claude Code sessions that are already open use the hook
-immediately. A restart is not necessary.**
-
-Claude Code reads that one settings file in VS Code, in the terminal, and in Claude
-Desktop, so this single registration covers all three. There is nothing to install per
-terminal and nothing to alias.
-
 AgentStatus is an accessory application and has **no Dock icon**. To start it at login,
 add it in **System Settings → General → Login Items**.
 
@@ -84,9 +77,40 @@ front on whatever tab was last used. It is a separate grant from Accessibility, 
 per terminal application, and you can change it later in System Settings → Privacy &
 Security → Automation.
 
+### Windows (x64)
+
+> [!IMPORTANT]
+> The installer is **not signed**. Windows SmartScreen therefore shows "Windows protected
+> your PC" the first time you run it. Choose **More info → Run anyway**.
+
+1. Download **`AgentStatus_0.7.1_x64-setup.exe`** from the
+   [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest). An
+   `.msi` is published alongside it if you prefer that.
+2. Run the installer.
+3. Start **AgentStatus** from the Start menu.
+
+To start it at login, press <kbd>Win</kbd>+<kbd>R</kbd>, enter `shell:startup`, and put a
+shortcut to AgentStatus in the folder that opens.
+
+Windows needs no permission grants: a click on a light raises the window directly, where
+macOS asks for Accessibility to do the same thing.
+
+### What the first start does
+
+The application **installs its own hooks**. On macOS it writes `~/.claude/status/report.sh`;
+on Windows it writes `~/.claude/status/agentstatus-hook.exe`, a small native program that
+does the same job — Windows has no `jq`, and a shell hook there would add roughly half a
+second to every tool call. It registers that hook for Claude Code in
+`~/.claude/settings.json`, and makes a backup of that file first. **Claude Code sessions
+that are already open use the hook immediately. A restart is not necessary.**
+
+Claude Code reads that one settings file in VS Code, in the terminal, and in Claude
+Desktop, so this single registration covers all three. Cursor reads it too, through its
+Claude-compatible bridge. There is nothing to install per terminal and nothing to alias.
+
 ### Build from source instead
 
-If you have an Intel Mac, or if you want to build the application yourself:
+**macOS** — if you have an Intel Mac, or if you want to build the application yourself:
 
 ```bash
 ./install.sh
@@ -96,6 +120,16 @@ This needs [Rust](https://rustup.rs), Node, and `jq` (`brew install jq`). The sc
 builds the application and copies it to `/Applications`. The application installs its own
 hooks at the first start, as the DMG does. For a new installation, do the Gatekeeper step
 above.
+
+**Windows** — this needs [Rust](https://rustup.rs) (the MSVC toolchain), the **Visual Studio
+Build Tools** with the C++ workload, and Node. No `jq`: the Windows hook is a compiled
+binary. Run the installer it produces under
+`app/src-tauri/target/release/bundle/`:
+
+```bash
+npm --prefix app ci
+npm --prefix app run tauri build
+```
 
 ## The lights
 
@@ -160,8 +194,9 @@ a Cursor agent.
 
 ![The AgentStatus settings panel. It has Orientation, Sort, and Unknown controls, sliders for Size, Padding, and Opacity, color swatches for Running, Blocked, Done, Idle, and Error, and Reload, Reset to defaults, and Quit links.](docs/lightbar-settings.svg)
 
-- **Mode** — show the lights as the floating bar (default) or in the **macOS menu bar**.
-  Refer to [Run it in the menu bar instead](#run-it-in-the-menu-bar-instead).
+- **Mode** — show the lights as the floating bar (default), or in the **macOS menu bar** /
+  the **Windows notification area**. Refer to
+  [Run it in the menu bar instead](#run-it-in-the-menu-bar-instead).
 - **Orientation** — change the bar between a horizontal row and a vertical column. The
   window changes its size to fit the new shape.
 
@@ -174,7 +209,7 @@ a Cursor agent.
 - **Unknown** — **Show** (default) or **Hide** the hollow rings.
 - **Size, padding, and opacity** — change the size of the lights, the space in the bar,
   and the opacity of the bar. The lights stay fully opaque.
-- **Colors** — change the color of each of the five states with the macOS color picker.
+- **Colors** — change the color of each of the five states with the system color picker.
 - **Audio alerts** — off by default. Set **Audio** to on to get a short tone when a
   session becomes blocked, has an error, or completes a turn. In the sub-panel, select
   which of the three events make a tone, and set the volume. The tone sounds one time at
@@ -182,14 +217,25 @@ a Cursor agent.
 
 ### Run it in the menu bar instead
 
-For a smaller and permanent presence, set **Mode → Menu bar** in the settings panel. The
-same lights become a live item in the macOS menu bar. Click the item to show the full bar
-as a popover. Click-to-focus, tooltips, and subagent badges continue to operate.
+For a smaller and permanent presence, set **Mode → Menu bar** (macOS) or **Mode → Tray**
+(Windows) in the settings panel. The same lights become a live item in the macOS menu bar or
+the Windows notification area. Click the item to show the full bar as a popover.
+Click-to-focus, tooltips, and subagent badges continue to operate.
 
-- **Dots or Single** — show one dot for each session (default), or one dot for the most
-  urgent state (error, then blocked, then done, then running, then idle). One dot uses
+On Windows the popover opens **with the settings panel already shown** — the tray item there
+is a single dot, so the panel is what the popover is for. It closes when you click anywhere
+else, and always opens clear of the taskbar.
+
+- **Dots or Single** (macOS) — show one dot for each session (default), or one dot for the
+  most urgent state (error, then blocked, then done, then running, then idle). One dot uses
   less menu-bar width.
-- Menu-bar mode is always horizontal. The Orientation control is not available.
+- **On Windows the item is always one dot** for the most urgent state. A notification-area
+  icon is square, so a row of dots would be squeezed until unreadable. The Dots/Single
+  control is therefore not shown.
+- **Windows 11 hides new notification icons.** After the first switch, the AgentStatus icon
+  is in the **hidden icons** flyout (the `^` chevron). Drag it onto the taskbar to keep it
+  visible.
+- Menu-bar and tray mode are always horizontal. The Orientation control is not available.
 - macOS controls the position of menu-bar items. Hold ⌘ and drag the item one time to set
   its position. The system keeps that position.
 
@@ -202,10 +248,13 @@ as a popover. Click-to-focus, tooltips, and subagent badges continue to operate.
 
 AgentStatus has two parts:
 
-- **The signal layer** — one hook script (`report.sh`) starts at each session event. It
-  writes the state of that session to `~/.claude/status/sessions/<id>.json`. The hook is
-  global, thus one installation covers all projects and all Claude Code and Cursor
-  windows. The hook does the minimum work and stops immediately. It does not delay a turn.
+- **The signal layer** — one hook starts at each session event and writes the state of that
+  session to `~/.claude/status/sessions/<id>.json`. On macOS this is a shell script
+  (`report.sh`); on Windows it is a compiled binary (`agentstatus-hook.exe`), because
+  Windows starts processes far more slowly and a shell hook there would delay every tool
+  call. The hook is global, thus one installation covers all projects and all Claude Code
+  and Cursor windows. It does the minimum work and stops immediately. It does not delay a
+  turn.
 - **The display layer** — a Tauri application reads that directory and shows the lights,
   as the floating bar or as the menu-bar item.
 
@@ -232,9 +281,18 @@ code --install-extension extension/claudestatus-0.1.2.vsix
 
 ## Uninstall
 
+**macOS:**
+
 ```bash
 node hooks/setup.mjs uninstall     # remove the hooks from settings.json
 rm -rf /Applications/AgentStatus.app ~/.claude/status
+```
+
+**Windows:** remove **AgentStatus** in Settings → Apps → Installed apps, then:
+
+```bash
+node hooks/setup.mjs uninstall     # remove the hooks from settings.json
+rm -rf ~/.claude/status
 ```
 
 The backup of your initial settings is at `~/.claude/settings.json.agentstatus-bak`.
@@ -244,14 +302,26 @@ The backup of your initial settings is at `~/.claude/settings.json.agentstatus-b
 ```bash
 cd app
 npm install
-node ../hooks/setup.mjs install   # register the repo hooks (development uses hooks/report.sh)
+node ../hooks/setup.mjs install   # register the repo hooks for development
 npm run tauri dev
 ```
 
-In development, the application does **not** install its own hooks. Thus changes to
-`hooks/report.sh` are immediately in use, and a rebuild is not necessary. The release
+In development, the application does **not** install its own hooks, so the hooks the repo
+registers stay in use. On macOS that is `hooks/report.sh`, and an edit to it takes effect
+immediately with no rebuild. On Windows it is the compiled hook, so an edit to
+`hooks/agentstatus-hook/` needs `npm --prefix app run stage-hook` before it takes effect;
+`node hooks/setup.mjs install` reports what to run if the binary is missing. The release
 build installs its own hooks. Use `node hooks/setup.mjs status|uninstall` to control the
 development hooks.
+
+On Windows, `hooks/windows-diagnostics.ps1` answers three things that reading the code
+cannot: whether the bar flashes a console window, whether it takes a taskbar slot (it must
+not) and whether its tray icon exists, and what windows the app actually owns. Each check
+exists because it caught a real defect.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File hooks\windows-diagnostics.ps1
+```
 
 ### Make a release
 
@@ -263,15 +333,27 @@ to `main`. Then push a tag with the same version:
 git tag v0.7.1 && git push origin v0.7.1
 ```
 
-The workflow builds the arm64 DMG on a macOS runner and publishes it with generated
-notes. The workflow stops if the tag does not agree with the version in
-`tauri.conf.json`. A merge to `main` publishes nothing. The tag starts the workflow.
+The workflow builds the arm64 DMG on a macOS runner and the MSI and NSIS installers on a
+Windows runner, then publishes all of them in one release with generated notes. It stops
+before building if the tag does not agree with the version in `tauri.conf.json`, and it
+publishes nothing unless every platform built. A merge to `main` publishes nothing. The tag
+starts the workflow.
 
 ## Limits
 
-- **macOS only, and the DMG is for Apple Silicon.** For Intel, build from source.
-- **Downloaded builds are not signed and not notarized**, thus the Gatekeeper step above
-  is necessary.
+- **macOS and Windows. The DMG is for Apple Silicon; the Windows build is x64.** For an
+  Intel Mac, build from source.
+- **Downloaded builds are not signed**, thus the Gatekeeper step (macOS) or the SmartScreen
+  step (Windows) above is necessary.
+- **On Windows, Cursor lights bring Cursor's window forward rather than opening the exact
+  agent.** The precise version reads Cursor's menu bar through the macOS Accessibility API,
+  and Windows has neither that menu-bar item nor an equivalent API.
+- **On Windows, a terminal session's light brings its window forward, not its tab.** The
+  bar finds the terminal that hosts the session and focuses that window. Windows Terminal
+  offers no way to select a tab, so if the session is in a background tab you pick the tab
+  yourself. On macOS, Terminal.app and Ghostty get tab-precise focus.
+- **Windows Subsystem for Linux is not supported.** A session running inside WSL writes its
+  status inside WSL, where the Windows application cannot see it.
 - **Cursor has no blocked light.** Cursor sends no permission event, so its lights show
   running, done, and idle only.
 - **Cursor needs the Accessibility permission** for click-to-focus and to keep its lights

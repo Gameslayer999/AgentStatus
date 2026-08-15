@@ -22,14 +22,30 @@ tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-window-state = "2"
-tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Raise the IDE window a clicked light points at (decision 070). This is the Windows
+# counterpart to the macOS osascript raise (#021) — same job, no permission needed here.
+[target.'cfg(windows)'.dependencies]
+# Pinned to the version Tauri already resolves (0.61) so no extra copy is added.
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+  # Walk a session's process ancestry to the window that hosts it (decision 071).
+  "Win32_System_Diagnostics_ToolHelp",
+  # The monitor's *work area* — the screen minus the taskbar — so the tray popover never
+  # opens underneath it (decision 073).
+  "Win32_Graphics_Gdi",
+] }
 
 # Probe IDE-lock owner PIDs (kill(pid, 0)) to tell a live IDE window from a
 # force-quit one that left its lock behind — used for stale-light pruning (#027).
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+# The non-activating overlay panel — an NSPanel, so macOS-only by construction. Kept out
+# of the shared dependency list so the crate resolves at all on Windows (decision 069).
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
 # Set the overlay panel's window collection behavior through the maintained
 # objc2-app-kit API instead of tauri-nspanel's deprecated `cocoa`-typed setter.
 # Pinned to the version Tauri already pulls in transitively (no extra copy).

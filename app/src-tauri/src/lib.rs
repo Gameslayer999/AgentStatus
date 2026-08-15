@@ -5,7 +5,7 @@
 use serde::Serialize;
 use std::path::PathBuf;
 use tauri::Manager;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
 // Release-only: the self-installer runs solely from the packaged app (see the
@@ -17,7 +17,7 @@ mod install;
 
 /// Tray icon id — used to fetch the tray (`app.tray_by_id`) from the mode/image
 /// commands after it's built in `setup`.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 const TRAY_ID: &str = "agentstatus";
 
 #[derive(Serialize)]
@@ -65,6 +65,21 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
+/// The user's home directory. macOS and the shell hook use `HOME`; a Windows GUI process
+/// has only `USERPROFILE` (`HOME` is set inside the hook, because Claude Code sets it, but
+/// not for the app itself). Empty when neither is set — every caller already treats the
+/// resulting path as one that simply does not exist.
+fn home() -> String {
+    for key in ["HOME", "USERPROFILE"] {
+        if let Ok(v) = std::env::var(key) {
+            if !v.is_empty() {
+                return v;
+            }
+        }
+    }
+    String::new()
+}
+
 /// Root status directory (~/.claude/status), honoring $AGENTSTATUS_DIR (same
 /// override the hook uses). $CLAUDESTATUS_DIR is kept as a legacy alias.
 fn status_root() -> PathBuf {
@@ -74,8 +89,7 @@ fn status_root() -> PathBuf {
     if let Ok(dir) = std::env::var("CLAUDESTATUS_DIR") {
         return PathBuf::from(dir);
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".claude").join("status")
+    PathBuf::from(home()).join(".claude").join("status")
 }
 
 /// Directory holding one JSON file per session (status_root/sessions).
@@ -115,6 +129,15 @@ fn pid_alive(pid: i64) -> bool {
         return true;
     }
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Non-macOS builds have no pid-liveness probe, so they answer "alive" and the caller
+/// keeps its timeout-only pruning — the same fail-open contract as `owns_terminal` and
+/// `live_workspace_folders`. Never prune a light on an answer the platform cannot give
+/// (UI Principle #4 cuts both ways: a missing light is as wrong as a lying one).
+#[cfg(not(target_os = "macos"))]
+fn pid_alive(_pid: i64) -> bool {
+    true
 }
 
 /// Workspace folders of every **live** IDE window, from the lock files each IDE
@@ -158,6 +181,38 @@ fn live_workspace_folders() -> Vec<String> {
     Vec::new()
 }
 
+/// Whether `cwd` is `folder`, or a subfolder a session `cd`'d into.
+///
+/// On Windows the comparison is case-insensitive and accepts a backslash separator: the
+/// filesystem is case-insensitive, and nothing guarantees the IDE lock file and the hook
+/// payload spell the drive or folder the same way. macOS keeps the exact, `/`-only rule it
+/// has always used, so its matching is unchanged (Agent Guideline #7).
+fn path_within(cwd: &str, folder: &str) -> bool {
+    // Normalise before comparing, or the match fails on differences that mean nothing: a
+    // trailing separator in the lock file's `workspaceFolders` (which would otherwise
+    // disable matching for that workspace entirely), a mix of `\` and `/` in the same pair
+    // of paths, or a drive root written `C:\`. macOS keeps its exact, `/`-only rule.
+    fn norm(p: &str) -> String {
+        if !cfg!(windows) {
+            return p.to_string();
+        }
+        let mut s = p.replace('\\', "/").to_ascii_lowercase();
+        // Keep the slash on a drive root ("c:/"), or it becomes the bare drive letter and
+        // stops looking like an absolute path.
+        while s.len() > 1 && s.ends_with('/') && !s.ends_with(":/") {
+            s.pop();
+        }
+        s
+    }
+    let (c, f) = (norm(cwd), norm(folder));
+    if c == f {
+        return true;
+    }
+    let Some(rest) = c.strip_prefix(&f) else { return false };
+    // A drive root already ends in its separator, so the remainder starts a segment directly.
+    rest.starts_with('/') || (cfg!(windows) && f.ends_with(":/") && !rest.is_empty())
+}
+
 /// True if `cwd` sits inside one of the live IDE workspace folders — an exact match,
 /// or a subfolder a session `cd`'d into (same prefix rule as `workspace_root`). An
 /// empty cwd matches nothing: it's an anonymous session no live window claims.
@@ -165,9 +220,7 @@ fn cwd_is_live(cwd: &str, folders: &[String]) -> bool {
     if cwd.is_empty() {
         return false;
     }
-    folders
-        .iter()
-        .any(|f| cwd == f || cwd.starts_with(&format!("{f}/")))
+    folders.iter().any(|f| path_within(cwd, f))
 }
 
 /// agent_type of each currently-running subagent, read from the per-session
@@ -219,8 +272,7 @@ struct ClaudeFact {
 /// and 2.1.223. Returns empty when the directory is missing or unreadable — the
 /// tooltip then just shows the folder, as before.
 fn claude_session_facts() -> std::collections::HashMap<String, ClaudeFact> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let dir = std::path::PathBuf::from(home).join(".claude").join("sessions");
+    let dir = std::path::PathBuf::from(home()).join(".claude").join("sessions");
     let mut map = std::collections::HashMap::new();
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return map;
@@ -295,12 +347,21 @@ fn turn_ended(fact: Option<&ClaudeFact>, light_updated_at: i64) -> bool {
 /// so lock-pruning would nuke every Cursor light the moment any VS Code window is
 /// open. Instead, Cursor lights are dropped when Cursor itself has quit (no process).
 /// Fails open (keep the lights) if pgrep can't run.
+#[cfg(target_os = "macos")]
 fn cursor_running() -> bool {
     std::process::Command::new("pgrep")
         .args(["-x", "Cursor"])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(true)
+}
+
+/// Off macOS there is no `pgrep`, so this answered "alive" only after failing to spawn one —
+/// once per poll, i.e. once a second, forever. Same answer, no process (Agent Guideline #3:
+/// the bar must not busy the machine it is only supposed to be watching).
+#[cfg(not(target_os = "macos"))]
+fn cursor_running() -> bool {
+    true
 }
 
 /// What Cursor itself says about a composer (decision 048), read from its own store.
@@ -764,10 +825,13 @@ fn make_overlay_panel(win: &tauri::WebviewWindow) {
 /// session that `cd`'d into a subfolder still maps back to the window that has the
 /// *root* open (the raw subfolder path would otherwise open as its own new window).
 /// Returns the longest matching workspace folder, or `cwd` unchanged if none match.
-#[cfg(target_os = "macos")]
+///
+/// Not macOS-only: the Claude Code VS Code extension writes these locks on Windows too, and
+/// the Windows raise (decision 070) needs the same cwd → window mapping. If the directory is
+/// absent the function returns `cwd` unchanged, so a platform or setup without locks simply
+/// gets the old behaviour rather than a wrong answer.
 fn workspace_root(cwd: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let ide_dir = std::path::PathBuf::from(home).join(".claude").join("ide");
+    let ide_dir = std::path::PathBuf::from(home()).join(".claude").join("ide");
     let mut best = String::new();
     if let Ok(entries) = std::fs::read_dir(&ide_dir) {
         for e in entries.flatten() {
@@ -782,8 +846,7 @@ fn workspace_root(cwd: &str) -> String {
             };
             for folder in folders {
                 let Some(f) = folder.as_str() else { continue };
-                let matches = cwd == f || cwd.starts_with(&format!("{f}/"));
-                if matches && f.len() > best.len() {
+                if path_within(cwd, f) && f.len() > best.len() {
                     best = f.to_string();
                 }
             }
@@ -824,6 +887,289 @@ fn raise_window_fast(root: &str, ide: &str) {
     let _ = std::process::Command::new("osascript")
         .args(["-e", &script])
         .spawn();
+}
+
+/// Bring the first visible top-level window whose title satisfies `want` to the front, and
+/// report whether one was found (decision 070).
+///
+/// The Windows counterpart to `raise_window_fast`'s osascript path. It needs no permission
+/// grant — the Accessibility prompt macOS requires (#021/#039) has no analogue here — and it
+/// is a direct Win32 call rather than a subprocess, so it is far below the ~1 s an IDE CLI
+/// invocation costs. `SetForegroundWindow` is normally refused for a background process, but
+/// this runs from a click on our own window, and Windows lets the foreground process hand
+/// focus away. A minimised window is restored first, or it would be "raised" while staying
+/// an icon.
+#[cfg(windows)]
+fn raise_window_titled(want: &dyn Fn(&str) -> bool) -> bool {
+    match find_window(&|_pid, title| want(title)) {
+        Some(hwnd) => raise(hwnd),
+        None => false,
+    }
+}
+
+/// Bring a window to the front, reporting whether it actually came forward.
+///
+/// `SetForegroundWindow` is refused — it returns 0 and merely flashes the taskbar button —
+/// when the caller does not hold foreground rights: the foreground lock timeout, another app
+/// grabbing focus first, or a target running at higher integrity (an editor started "as
+/// administrator" while the bar is not) where UIPI blocks the activation outright. Reporting
+/// that honestly is what lets `focus_session` fall through to the IDE's own CLI, which *can*
+/// foreground itself. Claiming success would strand the click.
+///
+/// A minimised window is restored first, or it would be "raised" while staying an icon.
+#[cfg(windows)]
+fn raise(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+    unsafe {
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+        SetForegroundWindow(hwnd) != 0
+    }
+}
+
+/// The first visible top-level window whose owning pid and title satisfy `want`.
+#[cfg(windows)]
+fn find_window(want: &dyn Fn(u32, &str) -> bool) -> Option<windows_sys::Win32::Foundation::HWND> {
+    let mut found = None;
+    each_window(&mut |hwnd, pid, title| {
+        if want(pid, title) {
+            found = Some(hwnd);
+            return false; // stop
+        }
+        true
+    });
+    found
+}
+
+/// Visit every visible top-level window that has a title, passing its handle, owning pid,
+/// and title. Returning `false` from `visit` stops the enumeration.
+#[cfg(windows)]
+fn each_window(visit: &mut dyn FnMut(windows_sys::Win32::Foundation::HWND, u32, &str) -> bool) {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+        IsWindowVisible,
+    };
+
+    // The EnumWindows callback returns a Win32 BOOL (an i32): non-zero continues the
+    // enumeration, zero stops it. Spelled as i32 because windows-sys 0.61 no longer exports
+    // a `BOOL` alias from Win32::Foundation.
+    const CONTINUE: i32 = 1;
+    const STOP: i32 = 0;
+
+    type Visitor<'a> = &'a mut dyn FnMut(HWND, u32, &str) -> bool;
+
+    unsafe extern "system" fn shim(hwnd: HWND, lparam: LPARAM) -> i32 {
+        // SAFETY: `lparam` is the `&mut Visitor` handed to EnumWindows below, which outlives
+        // the enumeration; EnumWindows calls this synchronously on one thread. The closure
+        // must not panic — a panic across this `extern "system"` boundary aborts.
+        let visit = unsafe { &mut *(lparam as *mut Visitor) };
+        if unsafe { IsWindowVisible(hwnd) } == 0 {
+            return CONTINUE;
+        }
+        let len = unsafe { GetWindowTextLengthW(hwnd) };
+        if len <= 0 {
+            return CONTINUE;
+        }
+        let mut buf = vec![0u16; len as usize + 1];
+        let n = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
+        if n <= 0 {
+            return CONTINUE;
+        }
+        let mut pid: u32 = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+        let title = String::from_utf16_lossy(&buf[..n as usize]);
+        if visit(hwnd, pid, &title) {
+            CONTINUE
+        } else {
+            STOP
+        }
+    }
+
+    let mut visitor: Visitor = visit;
+    // SAFETY: `shim` matches the EnumWindows callback signature and the pointer we pass is
+    // valid for the duration of the call.
+    unsafe { EnumWindows(Some(shim), &mut visitor as *mut Visitor as LPARAM) };
+}
+
+/// Every process's parent pid and lowercase image name, for walking a session's ancestry.
+#[cfg(windows)]
+fn process_tree() -> std::collections::HashMap<u32, (u32, String)> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let mut map = std::collections::HashMap::new();
+    // SAFETY: a process snapshot borrows nothing; the handle is closed below.
+    let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snap == INVALID_HANDLE_VALUE {
+        return map;
+    }
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    // SAFETY: `entry` is zeroed with dwSize set, as the API requires.
+    if unsafe { Process32FirstW(snap, &mut entry) } != 0 {
+        loop {
+            let end = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let name = String::from_utf16_lossy(&entry.szExeFile[..end]).to_ascii_lowercase();
+            map.insert(entry.th32ProcessID, (entry.th32ParentProcessID, name));
+            if unsafe { Process32NextW(snap, &mut entry) } == 0 {
+                break;
+            }
+        }
+    }
+    unsafe { CloseHandle(snap) };
+    map
+}
+
+/// Focus the window that hosts a session with no window of its own (decision 071).
+///
+/// The `claude` process the hook records owns no window — it is a console program inside a
+/// terminal, or a child of Claude Desktop. Measured ancestry on Windows:
+/// `claude.exe → powershell.exe → WindowsTerminal.exe`, and
+/// `claude.exe → claude.exe (Claude Desktop's own window)`. So walk up from the recorded pid
+/// and raise the first ancestor that owns a visible titled window.
+///
+/// This is the window, not the tab — Windows Terminal exposes no way to select a tab, so
+/// that ceiling stands (#069). But the window is far better than the nothing a `cli` light
+/// did before, which is exactly the click-that-goes-nowhere UI Principle #3 forbids.
+#[cfg(windows)]
+fn focus_host_window(pid: i64) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    let tree = process_tree();
+
+    // The recorded pid must still *be* a Claude Code process. Windows recycles pids
+    // aggressively and `th32ParentProcessID` is never cleared when a parent exits, so a
+    // stale pid can point at something else entirely — without this check a click could
+    // walk into an unrelated application's tree and raise its window.
+    match tree.get(&(pid as u32)) {
+        Some((_, name)) if name == "claude.exe" => {}
+        _ => return false,
+    }
+
+    // The ancestor chain, nearest first. It stops at the shell: `explorer.exe` owns the
+    // permanently visible, permanently titled "Program Manager" window, so walking into it
+    // would match *always* — focusing the desktop and reporting success, which would also
+    // suppress the callers' own fallbacks. Anything above the shell is likewise not a host.
+    let mut chain = Vec::new();
+    let mut cur = pid as u32;
+    for _ in 0..12 {
+        chain.push(cur);
+        match tree.get(&cur) {
+            Some(&(parent, _)) if parent != 0 && parent != cur => {
+                match tree.get(&parent) {
+                    Some((_, name)) if name == "explorer.exe" => break,
+                    Some(_) => cur = parent,
+                    None => break,
+                }
+            }
+            _ => break,
+        }
+    }
+
+    // One sweep for the whole chain rather than one per ancestor: each sweep walks every
+    // visible top-level window and reads its title.
+    let mut owned: std::collections::HashMap<u32, windows_sys::Win32::Foundation::HWND> =
+        std::collections::HashMap::new();
+    each_window(&mut |hwnd, owner, _title| {
+        if chain.contains(&owner) {
+            owned.entry(owner).or_insert(hwnd);
+        }
+        true // visit them all: the nearest ancestor is chosen afterwards, not the first seen
+    });
+
+    // Nearest ancestor that owns a window wins — the terminal hosting this session, not
+    // whatever is further up the tree.
+    for candidate in &chain {
+        if let Some(&hwnd) = owned.get(candidate) {
+            return raise(hwnd);
+        }
+    }
+    false
+}
+
+/// Raise the IDE window that has `root` open, matched the same way as on macOS: by the
+/// project folder's basename, which both editors put in the window title. The trailing app
+/// name keeps a same-named window of some other application from stealing the click.
+#[cfg(windows)]
+fn raise_window_fast(root: &str, ide: &str) -> bool {
+    let name = std::path::Path::new(root)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if name.is_empty() {
+        return false;
+    }
+    // Editor window titles are " - "-separated: "main.rs - App - Visual Studio Code", or
+    // "App - Visual Studio Code" with no editor open. Match a **whole segment**, not a
+    // substring: `contains("App")` also matches a sibling project called "AppOther", and
+    // since a successful raise stops the caller from running its CLI fallback, a wrong match
+    // is not self-correcting here the way it is on macOS (which always fires both).
+    //
+    // The trailing app name keeps a same-named window of another application from taking the
+    // click. Insiders spells itself "Visual Studio Code - Insiders", so match the prefix.
+    let app = if ide == "cursor" { "Cursor" } else { "Visual Studio Code" };
+    raise_window_titled(&|title: &str| editor_title_matches(title, name, app))
+}
+
+/// Whether an editor window title belongs to project `folder` running in `app`. Split out
+/// from `raise_window_fast` so the matching rule — the part that decides where a click
+/// lands — is testable without a live editor.
+#[cfg(windows)]
+fn editor_title_matches(title: &str, folder: &str, app: &str) -> bool {
+    let app_ok = title.ends_with(app) || title.contains(&format!("{app} - "));
+    app_ok && title.split(" - ").any(|segment| segment == folder)
+}
+
+/// Where VS Code installs on Windows — per-user first, since that is the default the
+/// installer offers. None when it isn't installed, which callers treat as "do nothing".
+#[cfg(windows)]
+fn vscode_exe() -> Option<PathBuf> {
+    [
+        ("LOCALAPPDATA", r"Programs\Microsoft VS Code\Code.exe"),
+        ("ProgramFiles", r"Microsoft VS Code\Code.exe"),
+        ("ProgramFiles(x86)", r"Microsoft VS Code\Code.exe"),
+        // Insiders, so an Insiders-only machine still gets a working fallback rather than a
+        // light that does nothing.
+        (
+            "LOCALAPPDATA",
+            r"Programs\Microsoft VS Code Insiders\Code - Insiders.exe",
+        ),
+        (
+            "ProgramFiles",
+            r"Microsoft VS Code Insiders\Code - Insiders.exe",
+        ),
+    ]
+    .iter()
+    .filter_map(|(var, rest)| std::env::var(var).ok().map(|p| PathBuf::from(p).join(rest)))
+    .find(|p| p.is_file())
+}
+
+/// Focus `root` in VS Code through the app itself — the fallback when no window title
+/// matched, because the folder is open under a title we didn't recognise or isn't open at
+/// all. VS Code forwards the request to a running instance and reuses the window that
+/// already has the folder open.
+///
+/// Deliberately the `.exe` rather than the `code` shim: the shim is `code.cmd`, which
+/// `CreateProcess` cannot run directly, so it would need `cmd /c` and the nested quoting
+/// that comes with a path containing spaces. This is also what macOS does — it invokes the
+/// CLI binary by absolute path rather than going through a shell.
+#[cfg(windows)]
+fn open_in_vscode(root: &str) {
+    if let Some(exe) = vscode_exe() {
+        let _ = std::process::Command::new(exe).arg(root).spawn();
+    }
 }
 
 /// The controlling terminal of a process, as a device path ("/dev/ttys000") — the
@@ -965,7 +1311,10 @@ fn claude_ai_title(session_id: &str) -> Option<String> {
     if session_id.is_empty() || !session_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return None;
     }
-    let home = std::env::var("HOME").ok()?;
+    let home = home();
+    if home.is_empty() {
+        return None;
+    }
     let projects = std::path::PathBuf::from(home).join(".claude").join("projects");
     // One directory per project folder; the session's transcript is under whichever one
     // it belongs to, named by session id. Cheaper and more robust than re-deriving the
@@ -1299,6 +1648,27 @@ fn bg_light_state(f: &CliFact) -> Option<&'static str> {
     }
 }
 
+/// Keep a spawned console program from flashing a window on the user's desktop.
+///
+/// The bar is a GUI process, so it owns no console; every console program it starts therefore
+/// makes Windows allocate a **new** one, and the window blinks into view and out again. That
+/// is not a theoretical concern — `claude agents --json` runs every `CLI_FACTS_TTL` seconds
+/// forever, so it blinked every ten seconds all day. Reported live as "a terminal window
+/// keeps popping in and out of my desktop", and measured: `app` → `claude.exe` → `conhost.exe`
+/// at 10-second intervals. Nothing is lost, because every one of these spawns is read through
+/// a pipe rather than a terminal (Agent Guideline #3: never intrude on the user's screen).
+///
+/// A no-op off Windows, so call sites need no `cfg`.
+#[cfg(windows)]
+fn no_window(cmd: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn no_window(_cmd: &mut std::process::Command) {}
+
 /// How long a `claude agents --json` answer is reused, and how long an unlisted CLI light is
 /// tolerated before it is treated as a pre-warmed spare rather than a session.
 const CLI_FACTS_TTL: i64 = 10;
@@ -1324,11 +1694,10 @@ const CLI_BG_DONE_SECS: i64 = 5 * 60;
 /// returned None and reconciled nothing. Verified: the binary runs fine on a bare
 /// `PATH=/usr/bin:/bin`, so no shell is needed to reach it.
 fn cli_facts_query() -> Option<std::collections::HashMap<String, CliFact>> {
-    let out = std::process::Command::new(claude_bin())
-        .args(["agents", "--json"])
-        .env("AGENTSTATUS_IGNORE", "1")
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new(claude_bin());
+    cmd.args(["agents", "--json"]).env("AGENTSTATUS_IGNORE", "1");
+    no_window(&mut cmd);
+    let out = cmd.output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -1413,6 +1782,42 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
     // extension now filters by host too; this guard also covers an older extension build.
     if ide == "vscode" {
         write_focus_request(&session_id);
+    }
+    // Windows (decision 070). Per-tab focus is already handled above by the extension relay,
+    // which is plain TypeScript and needs nothing platform-specific; what is left is getting
+    // the right *window* forward. There is no Spaces problem here, so the direct Win32 raise
+    // is the whole answer rather than macOS's raise-plus-CLI belt and braces.
+    //
+    // A `cli` session has no window of its own, so it is focused through the process that
+    // hosts it (decision 071, amending #069): the hook records the owning `claude` pid, and
+    // the first ancestor of that pid owning a visible window is the terminal. Claude Desktop
+    // takes the same route, falling back to matching its window by title when the pid is
+    // missing — a status file written before the pid walk existed carries none.
+    #[cfg(windows)]
+    {
+        if ide == "cli" || ide == "claude-desktop" {
+            if focus_host_window(session_pid(&session_id)) {
+                return;
+            }
+            if ide == "claude-desktop" {
+                raise_window_titled(&|t: &str| t == "Claude" || t.ends_with(" - Claude"));
+            }
+            return;
+        }
+        if cwd.is_empty() {
+            return;
+        }
+        let root = workspace_root(&cwd);
+        if raise_window_fast(&root, &ide) {
+            return;
+        }
+        // No matching window. Cursor stops here (decision 069 — its CLI opened a new agent
+        // rather than focusing on macOS, #047, and that has not been retested here, so we do
+        // not risk spawning something). VS Code falls back to its CLI, which focuses the
+        // window that has the folder open, or opens one if none does.
+        if ide != "cursor" {
+            open_in_vscode(&root);
+        }
     }
     #[cfg(target_os = "macos")]
     {
@@ -1952,23 +2357,73 @@ fn cursor_open_next_attention() -> bool {
 /// a generated image (`set_tray_image`) and reveals the panel as a popover on click.
 /// The frontend owns the persisted preference (`localStorage`) and calls this on load
 /// and on toggle; here we only flip the tray's visibility and hide/show the panel.
+/// Which platform the bar is running on, so the frontend can drop controls the backend
+/// cannot honour and shape the tray image to what this platform's tray actually accepts
+/// (decision 072). One call at startup, not a per-poll check.
 #[tauri::command]
-fn set_mode(app: tauri::AppHandle, mode: String) {
-    #[cfg(target_os = "macos")]
+fn platform() -> &'static str {
+    if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "other"
+    }
+}
+
+/// Fit a tray image into a square.
+///
+/// A Windows notification-area icon **is** square — 16x16 logical, scaled by DPI — and a
+/// non-square image is stretched to fill it. The bar's dot strip is 170x44 for five
+/// sessions, so stretching would squash each dot to a couple of pixels wide: an unreadable
+/// smear. Centring the pixels on a transparent square of the longer side lets Windows scale
+/// it down without distorting it. (The frontend also forces the single-dot condensed shape
+/// on Windows, so in practice this squares a 34x44 image, not a long strip.)
+#[cfg(windows)]
+fn square_icon(rgba: Vec<u8>, width: u32, height: u32) -> (Vec<u8>, u32) {
+    let side = width.max(height);
+    if width == side && height == side {
+        return (rgba, side);
+    }
+    let mut out = vec![0u8; (side as usize) * (side as usize) * 4];
+    let ox = ((side - width) / 2) as usize;
+    let oy = ((side - height) / 2) as usize;
+    let row = (width as usize) * 4;
+    for y in 0..height as usize {
+        let src = y * row;
+        let dst = ((y + oy) * side as usize + ox) * 4;
+        out[dst..dst + row].copy_from_slice(&rgba[src..src + row]);
+    }
+    (out, side)
+}
+
+/// Returns whether the requested mode could actually be applied — specifically, whether a
+/// tray item exists to represent the bar in menu-bar mode.
+///
+/// The frontend needs this answer: if it switches to menu-bar mode where no tray was built,
+/// the panel it hides on the next light click has nothing to bring it back — no tray icon,
+/// no taskbar button (`skipTaskbar`), no Dock icon — and the app becomes unreachable without
+/// killing the process. So a `false` here tells the frontend to stay floating.
+#[tauri::command]
+fn set_mode(app: tauri::AppHandle, mode: String) -> bool {
+    #[cfg(any(target_os = "macos", windows))]
     {
         let menubar = mode == "menubar";
+        // Answered here rather than inside the closure: the caller needs it synchronously,
+        // and looking a tray up by id is a registry read, not a UI call.
+        let has_tray = app.tray_by_id(TRAY_ID).is_some();
+        // Tells the focus-loss handler whether the panel is a popover (dismiss it) or the
+        // floating bar (leave it alone).
+        #[cfg(windows)]
+        TRAY_MODE.store(menubar && has_tray, std::sync::atomic::Ordering::Relaxed);
         let app2 = app.clone();
         // NSStatusItem must be manipulated on the main thread; Tauri commands run on a
         // background thread, so marshal there. Window show/hide is marshaled by Tauri
         // internally, but we do it here too so it stays ordered with the tray change.
         let _ = app.run_on_main_thread(move || {
-            let has_tray = match app2.tray_by_id(TRAY_ID) {
-                Some(tray) => {
-                    let _ = tray.set_visible(menubar);
-                    true
-                }
-                None => false,
-            };
+            if let Some(tray) = app2.tray_by_id(TRAY_ID) {
+                let _ = tray.set_visible(menubar);
+            }
             if let Some(win) = app2.get_webview_window("main") {
                 // Hide the panel only when there's actually a tray to represent it —
                 // otherwise keep it visible so a tray failure never strands the user
@@ -1980,6 +2435,12 @@ fn set_mode(app: tauri::AppHandle, mode: String) {
                 }
             }
         });
+        return !menubar || has_tray;
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = app;
+        mode != "menubar"
     }
 }
 
@@ -1990,11 +2451,16 @@ fn set_mode(app: tauri::AppHandle, mode: String) {
 /// (the frontend signature-skips unchanged frames), so this is cheap at the 1 Hz poll.
 #[tauri::command]
 fn set_tray_image(app: tauri::AppHandle, rgba: Vec<u8>, width: u32, height: u32) {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     {
         if width == 0 || height == 0 || rgba.len() != (width as usize) * (height as usize) * 4 {
             return;
         }
+        #[cfg(windows)]
+        let (rgba, width, height) = {
+            let (pixels, side) = square_icon(rgba, width, height);
+            (pixels, side, side)
+        };
         let app2 = app.clone();
         // set_icon touches the NSStatusItem → main thread only (see set_mode).
         let _ = app.run_on_main_thread(move || {
@@ -2004,29 +2470,158 @@ fn set_tray_image(app: tauri::AppHandle, rgba: Vec<u8>, width: u32, height: u32)
                 // Force color rendering: a template icon is drawn as a monochrome
                 // alpha mask (all opaque pixels → black/white), which swallows our
                 // per-state colors. The builder flag doesn't survive set_icon, so
-                // re-assert it on every image.
+                // re-assert it on every image. Template icons are a macOS concept;
+                // Windows notification-area icons are always drawn in colour.
+                #[cfg(target_os = "macos")]
                 let _ = tray.set_icon_as_template(false);
             }
         });
     }
 }
 
-/// Toggle the panel as a popover anchored under the tray icon. A left-click on the
-/// tray item shows the panel centered below the click point (just under the menu bar);
-/// a second click hides it. The panel keeps its NSPanel properties across hide/show, so
-/// per-light click, hover, and badges work exactly as in floating mode. `cx`/`cy` are
-/// the click's physical screen coordinates (the cursor sits in the menu bar on click).
-#[cfg(target_os = "macos")]
+/// Whether the bar is currently presenting as a tray item, so the focus-loss handler knows
+/// to dismiss the popover — and does nothing at all in floating mode, where the bar is
+/// supposed to stay on screen.
+#[cfg(windows)]
+static TRAY_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// When the popover was last auto-hidden by losing focus. See `toggle_popover`.
+#[cfg(windows)]
+static LAST_AUTO_HIDE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// The usable area of the monitor containing a point — the screen minus the taskbar and any
+/// other appbars. `Monitor::size()` is the *full* screen, so anchoring to it puts the tray
+/// popover underneath the taskbar, which is exactly where the tray icon the user just
+/// clicked lives (decision 073).
+#[cfg(windows)]
+fn work_area_at(x: i32, y: i32) -> Option<(i32, i32, i32, i32)> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    // SAFETY: `info` is zeroed with cbSize set, as the API requires; the monitor handle is
+    // borrowed for the duration of the call and needs no release.
+    let monitor = unsafe { MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST) };
+    if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+        return None;
+    }
+    let w = info.rcWork;
+    Some((w.left, w.top, w.right, w.bottom))
+}
+
+/// Toggle the panel as a popover anchored at the tray icon. A left-click on the tray item
+/// shows the panel centred on the click point; a second click hides it. The panel keeps its
+/// window properties across hide/show, so per-light click, hover, and badges work exactly as
+/// in floating mode. `cx`/`cy` are the click's physical screen coordinates (the cursor is
+/// over the tray item on click).
+///
+/// The panel opens *away* from the edge the tray lives on: down from the macOS menu bar at
+/// the top of the screen, up from the Windows notification area at the bottom. Choosing by
+/// which half of the monitor the click landed in rather than by platform also covers a
+/// Windows taskbar the user has docked to the top.
+#[cfg(any(target_os = "macos", windows))]
 fn toggle_popover(win: &tauri::WebviewWindow, cx: f64, cy: f64) {
     if matches!(win.is_visible(), Ok(true)) {
         let _ = win.hide();
         return;
     }
-    let win_w = win.outer_size().map(|s| s.width as f64).unwrap_or(0.0);
-    let x = (cx - win_w / 2.0).max(0.0);
-    let y = cy + 8.0; // just below the menu bar the cursor is in
-    let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+    // A click on the tray icon while the popover is open arrives *after* the focus loss that
+    // already hid it. Without this the icon could never close the popover: it would hide on
+    // blur and immediately reopen, so the popover would appear stuck. A click landing this
+    // soon after an auto-hide is the closing click, and is consumed.
+    #[cfg(windows)]
+    {
+        use std::sync::atomic::Ordering;
+        if now_millis() - LAST_AUTO_HIDE.load(Ordering::Relaxed) < 400 {
+            return;
+        }
+    }
+
+    let size = win.outer_size().unwrap_or(tauri::PhysicalSize::new(0, 0));
+    let (win_w, win_h) = (size.width as f64, size.height as f64);
+
+    // Anchor to the monitor's *work area*, not the click point. The tray icon sits inside the
+    // taskbar, so offsetting from the click leaves the popover overlapping it — appearing
+    // "underneath the tray". Sitting the popover against the work-area edge instead puts it
+    // clear of the taskbar wherever the user has docked it.
+    #[cfg(windows)]
+    let (x, y) = {
+        match work_area_at(cx as i32, cy as i32) {
+            Some((left, top, right, bottom)) => {
+                let (left, top) = (left as f64, top as f64);
+                let (right, bottom) = (right as f64, bottom as f64);
+                // Whichever edge the tray is against: below a top-docked taskbar, above a
+                // bottom-docked one.
+                let y = if cy > (top + bottom) / 2.0 { bottom - win_h - 8.0 } else { top + 8.0 };
+                let x = (cx - win_w / 2.0).clamp(left, (right - win_w).max(left));
+                (x, y.max(top))
+            }
+            None => (cx - win_w / 2.0, cy - win_h - 8.0),
+        }
+    };
+
+    // macOS: the menu bar is at the top of the screen, so the panel drops below the click.
+    #[cfg(target_os = "macos")]
+    let (x, y) = {
+        let monitor = win.current_monitor().ok().flatten();
+        let mut x = cx - win_w / 2.0;
+        if let Some(m) = &monitor {
+            let left = m.position().x as f64;
+            let right = left + m.size().width as f64 - win_w;
+            if right > left {
+                x = x.clamp(left, right);
+            }
+        }
+        let _ = win_h;
+        (x, cy + 8.0)
+    };
+
+    let _ = win.set_position(tauri::PhysicalPosition::new(x.max(0.0), y.max(0.0)));
     let _ = win.show();
+    // Take focus, so that losing it is what dismisses the popover. The window is configured
+    // `focus: false` and `show()` does not activate it, so without this it never holds focus
+    // and never fires the `Focused(false)` the dismissal depends on — the popover would sit
+    // on top of whatever the user clicked next. Windows only: the macOS panel is deliberately
+    // non-activating (#008), and focusing it would defeat that.
+    #[cfg(windows)]
+    let _ = win.set_focus();
+
+    // Tell the frontend the popover was revealed, so it can open the settings panel with it
+    // (decision 074). `visibilitychange` cannot carry this: WebView2 keeps the document
+    // "visible" while the window is hidden, so that event simply never fires on Windows —
+    // the first attempt relied on it and did nothing at all. The frontend decides what to do
+    // with the signal, so emitting it on every platform costs nothing.
+    use tauri::Emitter;
+    let _ = win.emit("popover-shown", ());
+}
+
+/// Pull the popover back inside the work area after its own content resized it.
+///
+/// Opening the settings panel grows the window from ~31px tall to ~390px. Anchored just
+/// above the taskbar, that growth runs straight off the bottom of the screen and takes the
+/// settings with it. The frontend calls this after any resize while in tray mode; it only
+/// moves the window when the window would otherwise hang off an edge.
+#[tauri::command]
+fn fit_popover(window: tauri::WebviewWindow) {
+    #[cfg(windows)]
+    {
+        let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+            return;
+        };
+        let Some((left, top, right, bottom)) = work_area_at(pos.x, pos.y) else {
+            return;
+        };
+        let (w, h) = (size.width as i32, size.height as i32);
+        let x = pos.x.clamp(left, (right - w).max(left));
+        let y = pos.y.clamp(top, (bottom - h).max(top));
+        if x != pos.x || y != pos.y {
+            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = window;
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2053,13 +2648,43 @@ pub fn run() {
         }));
     }
 
-    builder
+    let builder = builder
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
-        .plugin(tauri_nspanel::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build());
+
+    // The overlay panel is an NSPanel, so the plugin is macOS-only (decision 069). On
+    // Windows the same always-on-top/transparent/skip-taskbar window comes from the
+    // plain Tauri window config, with no plugin involved.
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+
+    // Dismiss the tray popover when it loses focus, the way every other tray popover on
+    // Windows behaves — otherwise it stays on top of whatever the user clicked next and has
+    // to be dismissed from the tray icon (decision 073). Windows only: the macOS panel is
+    // non-activating, so it never takes focus in the first place and its behaviour is
+    // deliberately unchanged.
+    #[cfg(windows)]
+    let builder = builder.on_window_event(|window, event| {
+        use std::sync::atomic::Ordering;
+        if let tauri::WindowEvent::Focused(false) = event {
+            // Only when the popover is actually on screen. A hidden window still reports
+            // focus changes — opening the tray's own hidden-icons flyout produces one — and
+            // stamping the debounce then made the *next* tray click look like a close and be
+            // swallowed, so the icon did nothing.
+            let showing = matches!(window.is_visible(), Ok(true));
+            if window.label() == "main" && TRAY_MODE.load(Ordering::Relaxed) && showing {
+                LAST_AUTO_HIDE.store(now_millis(), Ordering::Relaxed);
+                let _ = window.hide();
+            }
+        }
+    });
+
+    builder
         .invoke_handler(tauri::generate_handler![
             list_sessions,
             focus_session,
+            platform,
+            fit_popover,
             set_mode,
             set_tray_image,
             cursor_attention_count,
@@ -2077,16 +2702,27 @@ pub fn run() {
             // user grants, and prompting from `tauri dev` would nag on every run.
             #[cfg(all(target_os = "macos", not(debug_assertions)))]
             prompt_accessibility();
-            // Menu-bar tray item (decision 024). Built once here (on the main thread)
-            // but hidden until the frontend switches to menu-bar mode via `set_mode`.
-            // Colored (not template) so the status dots show in color; left-click is
-            // handled by us (popover), not a menu. Placeholder icon until the webview
-            // pushes the first dot image.
-            #[cfg(target_os = "macos")]
+            // Tray item — the macOS menu bar, or the Windows notification area (decision
+            // 024, extended to Windows by #072). Built once here (on the main thread) but
+            // hidden until the frontend switches to menu-bar mode via `set_mode`. Colored
+            // (not template) so the status dots show in color; left-click is handled by us
+            // (popover), not a menu. Placeholder icon until the webview pushes the first
+            // dot image.
+            #[cfg(any(target_os = "macos", windows))]
             {
+                // A tooltip names the icon on hover, which is how Windows expects a
+                // notification-area item to identify itself — without one it is an
+                // anonymous dot in a row of anonymous dots (and nothing, including
+                // accessibility tools, can tell which icon it is). Harmless on macOS,
+                // where menu-bar items are not hover-labelled.
                 let mut tb = TrayIconBuilder::with_id(TRAY_ID)
-                    .icon_as_template(false)
-                    .show_menu_on_left_click(false)
+                    .tooltip("AgentStatus")
+                    .show_menu_on_left_click(false);
+                // Template icons are macOS-only, and would render our colored dots as a
+                // monochrome alpha mask.
+                #[cfg(target_os = "macos")]
+                let mut tb = tb.icon_as_template(false);
+                tb = tb
                     .on_tray_icon_event(|tray, event| {
                         if let TrayIconEvent::Click {
                             button: MouseButton::Left,
@@ -2113,7 +2749,7 @@ pub fn run() {
             // Packaged app self-installs its hooks. In dev we keep the repo hooks
             // (via `node hooks/setup.mjs`) so hook edits are live without a rebuild.
             #[cfg(not(debug_assertions))]
-            install::ensure_installed();
+            install::ensure_installed(app.handle());
             if let Some(win) = app.get_webview_window("main") {
                 #[cfg(target_os = "macos")]
                 make_overlay_panel(&win);
@@ -2575,5 +3211,178 @@ mod tests {
             .map(|n| super::cursor_press_tray_row(&|t| super::tray_row_is(t, &n)))
             .unwrap_or(false);
         println!("pressed={pressed}");
+    }
+}
+
+/// Path matching is shared by the live-window pruning (#027) and the click-to-focus
+/// workspace lookup, and its rules differ per platform (decision 070), so it is pinned here
+/// rather than only exercised through them.
+#[cfg(test)]
+mod path_matching {
+    use super::path_within;
+
+    #[test]
+    fn matches_a_folder_and_its_subfolders() {
+        assert!(path_within("/Users/x/proj", "/Users/x/proj"));
+        assert!(path_within("/Users/x/proj/src", "/Users/x/proj"));
+        assert!(!path_within("/Users/x/project", "/Users/x/proj"));
+        assert!(!path_within("/Users/x", "/Users/x/proj"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_matching_ignores_case_and_takes_either_separator() {
+        assert!(path_within(r"C:\Code\AgentStatus", r"c:\code\agentstatus"));
+        assert!(path_within(r"C:\Code\AgentStatus\app", r"C:\Code\AgentStatus"));
+        assert!(path_within("C:/Code/AgentStatus/app", "C:/Code/AgentStatus"));
+        // Still a prefix check, not a substring one.
+        assert!(!path_within(r"C:\Code\AgentStatusOther", r"C:\Code\AgentStatus"));
+    }
+
+    /// Differences that carry no meaning must not defeat the match. A trailing separator in
+    /// the IDE lock file's `workspaceFolders` used to disable matching for that workspace
+    /// outright, and a drive-root workspace never matched at all.
+    #[test]
+    #[cfg(windows)]
+    fn windows_matching_survives_meaningless_spelling_differences() {
+        assert!(path_within(r"C:\Code\App", r"C:\Code\App\"));
+        assert!(path_within(r"C:\Code\App\src", r"C:\Code\App\"));
+        // Mixed separators across the two sides of the comparison.
+        assert!(path_within("C:/Code/App/src", r"C:\Code\App"));
+        assert!(path_within(r"C:\Code\App\src", "C:/Code/App"));
+        // A drive root is a real workspace.
+        assert!(path_within(r"C:\Code", r"C:\"));
+        assert!(path_within(r"C:\", r"C:\"));
+        // And it still must not swallow a different drive.
+        assert!(!path_within(r"D:\Code", r"C:\"));
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn macos_matching_stays_exact_and_slash_only() {
+        assert!(!path_within("/Users/X/Proj", "/users/x/proj"));
+        assert!(!path_within("/Users/x/proj\\src", "/Users/x/proj"));
+    }
+}
+
+/// The Windows click-to-focus plumbing (decision 070).
+#[cfg(all(test, windows))]
+mod windows_focus {
+    /// Proves the raise path really finds a window by title — EnumWindows, UTF-16 decoding,
+    /// and predicate matching — without needing VS Code installed, which is what makes it
+    /// runnable on a bare machine. Whether Windows then *honours* `SetForegroundWindow` is
+    /// OS focus policy, not something this code decides, so the assertion is on the match.
+    ///
+    /// Ignored by default because it opens a real Notepad window on the tester's screen —
+    /// the same reason `cursor_press` is ignored:
+    ///
+    ///   cargo test --lib -- --ignored --nocapture raises_a_window_by_title
+    #[test]
+    #[ignore]
+    fn raises_a_window_by_title() {
+        // A title no other window can plausibly carry, so a match is unambiguous.
+        let unique = format!("agentstatus_raise_probe_{}", std::process::id());
+        let path = std::env::temp_dir().join(format!("{unique}.txt"));
+        std::fs::write(&path, "AgentStatus window-raise probe").expect("write probe file");
+
+        let mut child = std::process::Command::new("notepad.exe")
+            .arg(&path)
+            .spawn()
+            .expect("could not start notepad");
+
+        let mut matched = false;
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            if super::raise_window_titled(&|t: &str| t.contains(&unique)) {
+                matched = true;
+                break;
+            }
+        }
+
+        let _ = child.kill();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(matched, "never matched a window whose title contains {unique}");
+        // And it must not claim success when nothing matches, or `focus_session` would skip
+        // its CLI fallback and the click would lead nowhere.
+        assert!(
+            !super::raise_window_titled(&|t: &str| t.contains("agentstatus_no_such_window_zz")),
+            "reported a match for a title no window has"
+        );
+    }
+
+    /// The ancestry walk must reach a real window for a live terminal session (decision
+    /// 071) — that walk is the whole of click-to-focus for a `cli` light, and a silent
+    /// failure there is a light that leads nowhere (UI Principle #3).
+    ///
+    /// Ignored: it needs a live session and it raises a real window on the tester's screen.
+    ///
+    ///   cargo test --lib -- --ignored --nocapture focus_host_window_reaches_a_window
+    #[test]
+    #[ignore]
+    fn focus_host_window_reaches_a_window() {
+        let Ok(entries) = std::fs::read_dir(super::sessions_dir()) else {
+            println!("no status directory — skipped");
+            return;
+        };
+        let mut found = None;
+        for e in entries.flatten() {
+            let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+            let ide = v.get("ide").and_then(|x| x.as_str()).unwrap_or("");
+            let pid = v.get("pid").and_then(|x| x.as_i64()).unwrap_or(0);
+            if matches!(ide, "cli" | "claude-desktop") && pid > 0 {
+                found = Some((ide.to_string(), pid));
+                break;
+            }
+        }
+        let Some((ide, pid)) = found else {
+            println!("no live cli/desktop session with a recorded pid — skipped");
+            return;
+        };
+        println!("ide={ide} pid={pid}");
+        assert!(
+            super::focus_host_window(pid),
+            "no ancestor of pid {pid} owns a visible window — a {ide} light would click into nothing"
+        );
+    }
+
+    /// The title rule decides where a click lands, and a wrong match is not self-correcting
+    /// on Windows: a successful raise stops `focus_session` before its CLI fallback. So a
+    /// sibling project whose name merely *contains* this one must not match.
+    #[test]
+    fn editor_titles_match_whole_segments_only() {
+        const VSC: &str = "Visual Studio Code";
+        assert!(super::editor_title_matches("main.rs - App - Visual Studio Code", "App", VSC));
+        // No editor open: the folder is the first segment.
+        assert!(super::editor_title_matches("App - Visual Studio Code", "App", VSC));
+        // Insiders spells its app name with a suffix.
+        assert!(super::editor_title_matches(
+            "main.rs - App - Visual Studio Code - Insiders",
+            "App",
+            VSC
+        ));
+        assert!(super::editor_title_matches("proj - Cursor", "proj", "Cursor"));
+
+        // The bug this rule exists for: a sibling folder that shares a prefix.
+        assert!(!super::editor_title_matches(
+            "main.rs - AppOther - Visual Studio Code",
+            "App",
+            VSC
+        ));
+        // Right project, wrong application.
+        assert!(!super::editor_title_matches("App - Cursor", "App", VSC));
+        // A folder name appearing only inside a filename is not the project.
+        assert!(!super::editor_title_matches("App.rs - Other - Visual Studio Code", "App", VSC));
+    }
+
+    /// `vscode_exe` must answer None rather than panic or guess when VS Code is absent —
+    /// that is what makes `open_in_vscode` a safe fallback on a machine without it.
+    #[test]
+    fn vscode_lookup_is_total() {
+        match super::vscode_exe() {
+            Some(p) => assert!(p.is_file(), "returned a path that is not a file: {p:?}"),
+            None => {}
+        }
     }
 }

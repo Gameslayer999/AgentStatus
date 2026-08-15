@@ -239,13 +239,102 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Now (build queue, in order)
 
+**Current focus — Windows support, option B (decisions 068/069).** Native Windows only;
+Cursor-AX and per-tab terminal focus are out of scope by decision. Sequenced so macOS is
+never at risk. (Kept out of the numbered queue below, whose numbering runs on into **Next**.)
+   - **a. ✅ Done 2026-08-14 (decision 068)** — the hook is ported to a native binary and
+     proven equivalent to `report.sh` across 42 fixtures. Toolchain installed on the Windows
+     box (Rust 1.97.1 MSVC; VS Build Tools 2022 were already present).
+   - **b. ✅ Done 2026-08-14** — **the app builds and runs on Windows, and the bar renders.**
+     Driven end to end: the hook binary wrote four sessions into a status dir, the app read
+     them and drew green/orange/red/white in label order with the subagent badge on the
+     running light, transparent pill over the desktop, `WS_EX_TOPMOST` confirmed set.
+     WebView2 151 was already present. Also fixed here: `status_root`, `claude_session_facts`,
+     and `claude_ai_title` all resolved `HOME` only, which is unset for a Windows GUI process —
+     the app would have looked for `\.claude\status`. They now share a `home()` helper that
+     falls back to `USERPROFILE` (matching `install.rs`).
+     Still to check by eye on this box: **drag-to-move**, and the two items under
+     Decisions needed below.
+   - **c. ✅ Done 2026-08-14** — **the packaged app ships and installs the hook.**
+     `npm run tauri build` produces both Windows installers (3.1 MB MSI, 2.1 MB NSIS) with
+     `resources/agentstatus-hook.exe` (203 KB) alongside `app.exe`. Verified by extracting the
+     MSI and running the packaged app against a **throwaway `HOME`**, three launches in a row:
+     11 events registered with exactly one entry each, the binary copied to
+     `~/.claude/status/` hash-identical to the bundled copy, a third-party `SessionStart` hook
+     and the user's other settings untouched, the backup written, and an injected legacy
+     `report.sh` entry **replaced rather than stacked**. The registered command string was
+     then run through Git Bash directly and wrote a correct status file — the specific risk
+     being a Windows path inside a shell command, which is why it is written with forward
+     slashes and quoted.
+     The hook moved to its own crate, `hooks/agentstatus-hook/` — `tauri-build` validates
+     `bundle.resources` for every target in its package, so building the hook inside the Tauri
+     package required the staged binary that the build produces. `hooks/setup.mjs` (the dev
+     installer) now registers the binary on Windows too, since `report.sh` there needs a `jq`
+     Windows does not ship.
+     Note: `stage-hook.mjs` runs on macOS builds as well, so a macOS build now also compiles
+     the hook crate. Nothing bundles it there yet (only `tauri.windows.conf.json` lists the
+     resource) — it acts as a compile canary ahead of step **g**.
+   - **d. ✅ Done 2026-08-14 (decision 070)** — **Windows click-to-focus is wired.** Per-tab
+     focus needed nothing: the extension relay is platform-neutral TypeScript. The window
+     raise is now a direct `EnumWindows` + `SetForegroundWindow` call — no permission grant,
+     no subprocess — with `Code.exe` as a fallback only when no window matched, and Cursor
+     raising but never falling back to its CLI (#047). `workspace_root` is un-gated from
+     macOS, and path matching moved into `path_within`, which is case-insensitive and
+     separator-agnostic on Windows while staying byte-identical on macOS.
+     **Carries one unverified assumption — see Decisions needed.**
+   - **e. ✅ Done 2026-08-14** — **release pipeline and README cover Windows.**
+     `release.yml` is now three jobs: a `version` check that fails in seconds on a mismatched
+     tag before anything builds, a `build` matrix (macos-15 → DMG, windows-latest → MSI +
+     NSIS), and a single `publish` that assembles one release from the uploaded artifacts.
+     Split that way because `gh release create` can only run once, and because a failure on
+     one platform should leave *no* release rather than half of one. The rust-cache now
+     covers both crates, or the hook crate would rebuild every run. Artifact globs were
+     checked against the real local build output, and the workflow YAML was parsed rather
+     than eyeballed.
+     README: platform badge, split macOS/Windows install sections (SmartScreen instead of
+     Gatekeeper, `shell:startup` instead of Login Items), a shared "what the first start
+     does" that names the per-platform hook, Windows build-from-source prerequisites, and
+     three new entries under Limits (Cursor focuses the window only, terminal sessions cannot
+     be focused, WSL unsupported).
+     Also corrected a **pre-existing** README inaccuracy while rewriting that paragraph: it
+     claimed the app registers hooks in `~/.cursor/hooks.json`, which `install.rs` has never
+     done — Cursor picks the hook up through its Claude-compatible bridge reading
+     `~/.claude/settings.json` (#018). The native `~/.cursor/hooks.json` entries come from
+     `hooks/cursor-setup.mjs`, a dev script.
+     **Do not tag a release yet** — see the three unverified items under Decisions needed.
+   - **f. ✅ Done 2026-08-14 (decision 072)** — **tray mode works on Windows.** It turned
+     out to be mandatory, not optional: the Mode control was not merely inert, it was a
+     **trap**. A light click in menu-bar mode calls `hidePopover()`, which on Windows hid the
+     window with no tray icon and no taskbar button to bring it back, and the mode is
+     persisted — so the app came back in that mode and vanished again on the next click.
+     Only recovery was killing the process.
+     Built rather than hidden: tray plumbing un-gated, popover opening away from whichever
+     screen edge the tray sits on, `set_mode` reporting whether a tray actually exists (the
+     frontend reverts to floating if not, so a failed tray can never strand the app), the
+     single condensed dot forced on Windows because a notification-area icon is square,
+     a `platform()` command for the frontend (which previously had **no** platform detection
+     at all), and "Menu bar" relabelled "Tray".
+     Verified by driving the real UI end to end: right-click → Tray → the icon appears in the
+     notification area (found by its new tooltip) → clicking it reveals the popover →
+     switching back restores the floating bar.
+   - **g. Switch macOS to the binary hook — NOT DONE, and deliberately so.** (a)–(f) are
+     complete and verified on Windows, but this step is the one that touches existing macOS
+     users, and it cannot be verified from a Windows machine: it needs a `cargo check` for
+     macOS, `hooks/gen-golden.sh` re-run there, and a live session diffed old-vs-new. Doing
+     it blind would be exactly the "ship it and see" the Windows-first sequencing was chosen
+     to avoid. macOS still writes and registers `report.sh`, unchanged.
+     When picking it up: `tauri.macos.conf.json` needs the resource entry that
+     `tauri.windows.conf.json` has, and `install.rs`'s `#[cfg(not(windows))]` branch swaps
+     from writing `report.sh` to copying the binary. Both are small; the verification is the
+     work.
+
 0. **From the 2026-08-13 competitor survey (decisions 056–059).** In priority order:
-   - **a. Add the `jq` guard to `install.rs`** (decision 059). `report.sh` uses `jq` nine times
-     with no availability check; `install.sh:11` guards it but `install.rs` — the **DMG path,
-     which is the primary distribution channel (#024)** — does not. `jq` ships at `/usr/bin/jq`
-     only since **macOS 15**, and the README requires only "Apple Silicon", so a DMG user on
-     macOS 11–14 without Homebrew gets a completely inert app and **no error message at all**.
-     Smallest, highest-value fix on this list.
+   - **a. ✅ Superseded 2026-08-14 (decision 068)** — the `jq` guard is no longer needed,
+     because `jq` is no longer a dependency. The Windows port forced the question and the
+     answer was to remove the dependency rather than detect it: a guard turns a silent failure
+     into a loud one but still leaves the user with a non-working app. `report.sh` is replaced
+     by a native `agentstatus-hook` binary. Still open from this item: **macOS is still running
+     `report.sh`** until the port is diffed against a live macOS session (Windows step **g**).
    - **b. ✅ Done 2026-08-13 (decision 067)** — an interactive session *does* report `status`,
      and the reconcile is built and installed. Still open from this item: **no VS Code session
      has ever been observed**, so whether one writes `~/.claude/sessions/<pid>.json` is
@@ -270,6 +359,34 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
    Error signal still interim (`PostToolUseFailure`, `is_interrupt==false`); `report.sh`
    mirrors failure events to `~/.claude/status/calibration.log` to confirm a real `StopFailure`
    trigger from live data over time.
+
+### Windows polish found by audit, deliberately not fixed yet
+
+Two agents audited the Windows work on 2026-08-14 — one over the frontend, one over the new
+`#[cfg(windows)]` Rust. The defects they found are fixed (decision 072, and the
+`focus_host_window` / title-match / `path_within` / `SetForegroundWindow` corrections under
+#070–071). These are the remainder: real, none of them a trap, none blocking a release.
+
+- **Edge snapping uses full monitor bounds, not the work area** (`main.js:1053-1067`). On
+  Windows the bar can therefore snap flush to the bottom edge and sit *over* the taskbar —
+  precisely where the tray and clock are. macOS never showed this because it has no
+  persistent bottom chrome. Should snap to the work area instead.
+- **The colour swatches open a native modal on Windows.** `<input type="color">` opens the
+  Win32 colour dialog, which is OK/Cancel rather than macOS's live `NSColorPanel` — so the
+  "previews instantly" behaviour does not happen, and the dialog may open behind an
+  always-on-top bar. Untested; needs one look.
+- **`oklch()` and `color-mix()` need WebView2 ≥ Chromium 111.** On an older pinned runtime
+  the accent colour and the subagent badge background silently fall back to unset. Either
+  state a minimum WebView2 version or add plain-sRGB fallbacks.
+- **The Cursor attention pip polls a no-op on Windows forever** (`cursor_attention_count`
+  returns 0 unconditionally off macOS, polled every 20 ticks). Harmless, but it is work the
+  bar does for a feature that cannot exist there (#069).
+- **`-apple-system` leads the font stack**, so Windows falls through to Segoe UI. It renders,
+  but the panel was metric-tuned for SF at 11px and has never been sized against Segoe.
+- **Stale/recycled parent pids remain a theoretical mis-target** for `focus_host_window`.
+  The walk now verifies the recorded pid is still `claude.exe` and refuses to climb into
+  `explorer.exe`, which removes the reachable cases; a full fix would compare process
+  creation times.
 
 ## Next
 
@@ -331,6 +448,46 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Decisions needed
 
+- **What should the Windows hook record as `pid`? (decision 068 — unresolved, blocks nothing
+  yet.)** The shell hook records `$PPID`; the binary records its own parent, which under Git
+  Bash may be `bash` rather than `claude.exe`. Which one it actually resolves to has **not been
+  observed on Windows**, so the port records `0` rather than guess (Guideline #4). Safe today —
+  everything consuming `pid` (`pid_alive`, `owns_terminal`, the #067 reconcile) is macOS-only or
+  fails open on a pid it cannot resolve — but it must be measured before any Windows feature
+  depends on session liveness. Needs one live interactive Windows session, not a headless run.
+- **`PermissionRequest` and `StopFailure` have never been observed on Windows.** Neither is
+  reachable from a headless `claude -p` run, so their fixtures are built from the contract
+  verified on macOS (#006) and are marked synthetic. They carry no paths, so platform *should*
+  not matter — but that is reasoning, not evidence. Confirm from a live interactive session.
+- **VS Code / Cursor window-title formats on Windows are unconfirmed (decision 070).**
+  Click-to-focus matches a title that `contains(<project folder>)` and `ends_with("Visual
+  Studio Code")` / `"Cursor"` — reasoned from the macOS titles, **not observed**, because
+  neither editor is installed on the Windows test box. If the rule is wrong, every VS Code
+  click silently falls through to the `Code.exe` fallback (slow but still correct) and every
+  Cursor click does nothing (a light that leads nowhere — UI Principle #3). Install one, open
+  a project, and check the real title before shipping. The raise mechanism itself is proven:
+  `cargo test --lib -- --ignored raises_a_window_by_title` matches a real window in 0.8 s.
+- **Does the Windows bar sit in the taskbar? (Needs one look, not code.)** `skipTaskbar: true`
+  is set, but it could not be confirmed by inspection: tao implements it on Windows through
+  `ITaskbarList::DeleteTab`, which removes the button *without* setting `WS_EX_TOOLWINDOW`, so
+  the extended style (`0x40118` — `WS_EX_APPWINDOW` set, `WS_EX_TOOLWINDOW` clear) says nothing
+  either way. A speculative `set_skip_taskbar(true)` call changed nothing measurable and was
+  reverted rather than left in as cargo-cult. **Glance at the taskbar while the bar is running
+  and say which it is.** A glanceable overlay must not occupy a taskbar slot — that is the
+  Windows equivalent of the Accessory policy that keeps it out of the Dock (#008).
+- **The Windows bar can take focus; the macOS panel cannot.** `WS_EX_NOACTIVATE` is clear, so
+  clicking a light activates the bar, where the macOS non-activating NSPanel never does (#008).
+  Whether that is actually disruptive in use is untested — a click is usually navigating away
+  anyway. Worth one real interaction test before deciding to add `WS_EX_NOACTIVATE`.
+- **First-run window position landed at the right screen edge** (x=3326 for a 114px-wide bar on
+  a 3440px desktop), not centred as `"center": true` implies. Not chased yet; may be the
+  content-resize anchoring (#022) rather than anything Windows-specific, and may reproduce on
+  macOS. Check before shipping — a bar that opens half-offscreen reads as broken.
+- **The macOS build is unverified since these changes.** `report.sh`'s path fix, the
+  `tauri-nspanel` dependency move, and the `install.rs` changes were all written and tested on
+  Windows; nothing has been compiled or run on a Mac. Needs a `cargo check` and a live session
+  on macOS before the next release.
+
 - **Which product is "Gemini"? (decision 056 — blocks all Gemini work.)** Three different
   products now exist with different config paths and event sets: the **Antigravity IDE**
   (`~/.gemini/config/hooks.json`, what #033 built, installed on this machine), the **Gemini
@@ -359,6 +516,129 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 ---
 
 ## Recently completed
+
+- **2026-08-15** — **Collapsing the settings panel no longer flickers (decision 075).**
+  Reported live, and the asymmetry — only on collapse, never on open — was the clue.
+  `panel-above` is `column-reverse`, so the lights sit at the *bottom* of the open panel;
+  collapsing mutates the DOM first, snapping them to the top of a window that is still
+  ~390px tall, and only three-plus frames later do the async resize and re-anchor put them
+  back. Since the DOM change is synchronous and the window calls are async IPC, they cannot
+  be made atomic — so the fix suppresses the paint (`visibility: hidden`) across the
+  transition instead, restoring once the window is final.
+  Two things that stop this trading one bug for a worse one: the rAF wait in
+  `resizeToContent` is now bounded (250 ms) and the restore is in a `finally`, because
+  animation frames stop firing on a hidden window and a bar left `visibility: hidden` comes
+  back **invisible**; and #073's close-debounce now only stamps when the popover is actually
+  visible, since a hidden window still reports focus changes (opening the tray's own
+  hidden-icons flyout produces one) and that was swallowing the next tray click entirely.
+  **Verified with a negative control** — fix disabled: the light jumped 360 px; fix enabled:
+  22 px (dot glow / hover scale). Worth keeping that habit: without the control, "no jump"
+  only proves the measurement ran, not that it could ever fail.
+  Also fixed: `hooks/windows-diagnostics.ps1` now has a UTF-8 BOM. PowerShell 5.1 reads a
+  BOM-less script as ANSI, which turns a UTF-8 em dash into mojibake containing a curly
+  quote and can break parsing outright. Keep committed `.ps1` files BOM'd or pure ASCII.
+
+- **2026-08-15** — **The Windows tray popover opens with its settings panel (decision 074).**
+  Requested live. On Windows the tray item is a single summary dot, so the popover was
+  showing a bigger copy of what the user had just clicked while the panel they wanted stayed
+  one right-click away. macOS is unchanged (#024) — its menu-bar item already shows every dot.
+  Second time in two changes that the obvious signal was the wrong one: `visibilitychange` is
+  the natural "the popover appeared" event and the codebase already used it for exactly this
+  moment, but **WebView2 keeps the document "visible" while the window is hidden**, so it
+  never fires on Windows. Built it that way first, deployed, and got the bare bar. The
+  backend now emits `popover-shown`.
+
+- **2026-08-15** — **Two tray-mode defects fixed (decision 073).** Reported from live use of
+  #072: the popover stayed on top after clicking elsewhere, and it opened overlapping the
+  taskbar.
+  The dismissal one had a trap in it. Hiding on `Focused(false)` is the obvious fix, but the
+  window is configured `focus: false` and `show()` does not activate it — so the popover
+  **never held focus to lose**, and the first attempt deployed and did nothing at all.
+  `set_focus()` after `show()` is what makes the event fire; a 400 ms guard then stops the
+  focus loss from racing the tray click, which would otherwise leave the icon unable to close
+  the popover (a bug indistinguishable from the original).
+  The placement one: the popover anchored to the *click point*, and the tray icon lives
+  inside the taskbar, so it landed on top of it. `Monitor::size()` is the full screen and
+  cannot express this; it now anchors to the work area via `GetMonitorInfoW`. A third defect
+  fell out of testing — opening settings grows the window ~360px, which ran off the bottom —
+  so `fit_popover` pulls it back inside the work area.
+  Also worth recording for whoever tests tray UI next: UIA's `Invoke()` does **not** move the
+  cursor, so a tray icon "clicked" that way reports a nonsense position and the popover
+  anchors to the wrong place. That looked like a product bug for a while. Use a real mouse
+  event when the thing under test depends on the cursor position.
+
+- **2026-08-14** — **A `cli` light on Windows now goes somewhere (decision 071).** Reported
+  on the live install: clicking the light did nothing. It was not a bug in the matching rule
+  — the only light was `ide:"cli"`, and decision 069 had declared `cli` unreachable on
+  Windows, so the click was a no-op *by design*. That reasoning turned out to rest on `pid`
+  being recorded as `0`, which was a measurement deferred in #068, not a platform limit. The
+  process tree answered it in one look: `claude.exe → powershell.exe → WindowsTerminal.exe`,
+  and `claude.exe → claude.exe` for Claude Desktop — two hops in both cases.
+  The hook now walks to the nearest `claude.exe` ancestor (its immediate parent is a Git Bash
+  shell that exits with it, so recording that would hand the app a dead pid); the app walks
+  up from the recorded pid to the first ancestor owning a visible titled window. Verified end
+  to end: the live status file went from `pid=0` to `pid=24292` (confirmed `claude.exe`), and
+  `focus_host_window_reaches_a_window` resolves a live session and raises its host window.
+  Still the window, not the tab — Windows Terminal has no tab API, so #069's ceiling stands.
+  **Side effect worth picking up:** `pid` is now a real live handle on Windows, so #064's
+  liveness pruning and #067's reconcile finally have something to work with there.
+  `pid_alive` still answers "alive" unconditionally off macOS; enabling it is a separate
+  change needing its own verification.
+
+- **2026-08-14** — **Installed on the Windows box, and the first live bug fixed.** The
+  packaged app installed per-user to `%LOCALAPPDATA%\AgentStatus` with no elevation, wrote
+  `~/.claude/status/agentstatus-hook.exe`, registered 11 events, backed up
+  `settings.json`, and left every other setting intact. **A session already open picked the
+  hook up with no restart** — its light appeared on the next tool call, which confirms the
+  claim the README has always made.
+  Then, reported within minutes: *"a terminal window keeps popping in and out of my
+  desktop"* — and it took **two** fixes, because the first diagnosis was incomplete and the
+  report came back unchanged:
+  1. The hook binary defaulted to the **console** subsystem, so Windows allocated a console
+     for every invocation, twice per tool call. Fixed with
+     `#![windows_subsystem = "windows"]` (the hook writes to neither stdout nor stderr by
+     contract, and piped stdin is unaffected — verified through Git Bash).
+     `stage-hook.mjs` now reads the PE header and refuses to stage a binary that is not
+     subsystem 2, since no test would catch this.
+  2. **Still flashing.** Recording every process creation for 25 s — rather than reasoning
+     about it again — showed the real steady source: the bar itself runs
+     `claude agents --json` every 10 s (`CLI_FACTS_TTL`), and a GUI process owns no console,
+     so Windows allocated a **new** one each time. Measured as `app` → `claude.exe` →
+     `conhost.exe` on a 10-second cadence, independent of anything the user was doing. Fixed
+     with `CREATE_NO_WINDOW` via a `no_window()` helper.
+  Note for anyone measuring this again: **counting `conhost.exe` processes proves nothing**.
+  `CREATE_NO_WINDOW` still creates a console device, so conhost still appears — only
+  enumerating *visible* top-level windows distinguishes a console that was allocated from one
+  that blinked on screen.
+  Also found while measuring: `cursor_running()` shelled out to `pgrep` **once per second**
+  on Windows purely to fail, and is now macOS-gated with the same fail-open answer.
+
+- **2026-08-14** — **The hook is a native binary, and `jq` is gone (decision 068);
+  Windows support started (decision 069).** Investigating "can we support Windows" turned up
+  that Claude Code runs hooks through **Git Bash** on Windows (verified by probe, not assumed:
+  `SHELL=…\Git\bin\bash.exe`, `$HOME` expanded, `%USERPROFILE%` did not, and a shebang `.sh`
+  ran directly with its stdin payload). So `report.sh` *runs* there — it just costs **210.6 ms
+  per event** against the new binary's **26.4 ms** (bash-spawn floor 18.6 ms), i.e. ~421 ms vs
+  ~53 ms of added latency on every tool call, which Agent Guideline #3 forbids. That, plus
+  `jq` being absent on Windows and pre-macOS-15, made removing the dependency the answer rather
+  than guarding it (which retires the queue's old top item).
+  - `src/hook.rs` + `src/bin/agentstatus-hook.rs` (358 KB release binary, links no Tauri).
+  - Equivalence is **proven, not claimed**: `hooks/gen-golden.sh` replays 42 fixtures through
+    the current `report.sh`; the port must match strictly, with no per-field exceptions. Run
+    on disk as well as in memory, both produce identical status files, subagent markers, and
+    `calibration.log`. 13 tests, all passing.
+  - Fixtures: 14 events captured from a **real Windows session** (`SessionStart` … `SessionEnd`,
+    including `SubagentStart`/`SubagentStop` — which #006 recorded as never firing on 2.1.201,
+    so that contract has changed) plus 28 synthetic ones. Sanitised before commit per Guideline
+    #12 — home path, session ids, agent ids and transcript paths replaced, payload shape kept.
+  - **Two real bugs found and fixed in `report.sh` as well**, both from Windows sending
+    backslash `cwd`s: every Windows light was labeled with its *entire path*, and file details
+    read `Read C:\…\sample.txt` instead of `Read sample.txt`. The fix normalises `\` only for
+    drive-letter/UNC paths, so macOS behaviour is provably untouched.
+  - The crate also **compiles on Windows** now: `tauri-nspanel` is macOS-only, `pid_alive` has
+    a fail-open fallback, `install.rs` resolves `USERPROFILE` and no longer `chmod`s.
+  - Windows box set up: Rust 1.97.1 MSVC (VS Build Tools 2022 already present), `jq` installed
+    **dev-only** for generating goldens from `report.sh`.
 
 - **2026-08-13** — **An interrupted turn greys its own light (decision 067).** Reported live:
   "when I stop a session manually, the light still shows up as green." Structural: `report.sh`
