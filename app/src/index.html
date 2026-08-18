@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="styles.css" />
     <title>AgentStatus</title>
+    <script src="/prefs.js" defer></script>
     <script src="/main.js" defer></script>
   </head>
   <body>
@@ -12,96 +13,13 @@
            behind the lights so the backdrop blur can't leak past the rounded corners
            (a WebKit bug that otherwise draws a faint rectangle on light backgrounds). -->
       <div id="pill"></div>
-      <!-- Lights, plus the close-button row that appears beside them while the
-           settings panel is open (decision 080). Wrapped together so the closers can
-           sit under a horizontal row / beside a vertical column without either one
-           moving the other. -->
+      <!-- Lights, plus the controls row a right-click reveals beside them: one close
+           button per light and the settings gear (decisions 080/082). Wrapped together
+           so the controls can sit under a horizontal row / beside a vertical column
+           without either one moving the other. -->
       <div id="strip" data-tauri-drag-region>
         <div id="lights" data-tauri-drag-region></div>
         <div id="closers" data-tauri-drag-region hidden></div>
-      </div>
-      <!-- Settings panel: hidden until right-click on the bar toggles it. -->
-      <div id="settings" hidden>
-        <div class="sep"></div>
-        <div class="row">
-          <span class="row-label">Mode</span>
-          <div class="seg" id="mode-seg">
-            <button type="button" data-mode="floating">Floating</button>
-            <button type="button" data-mode="menubar">Menu bar</button>
-          </div>
-        </div>
-        <div class="row" id="condense-row" hidden>
-          <span class="row-label">Menu bar</span>
-          <div class="seg" id="condense-seg">
-            <button type="button" data-condense="false">Dots</button>
-            <button type="button" data-condense="true">Single</button>
-          </div>
-        </div>
-        <div class="row" id="orient-row">
-          <span class="row-label">Orientation</span>
-          <div class="seg" id="orient-seg">
-            <button type="button" data-orient="horizontal">Horizontal</button>
-            <button type="button" data-orient="vertical">Vertical</button>
-          </div>
-        </div>
-        <div class="row">
-          <span class="row-label">Sort</span>
-          <div class="seg" id="sort-seg">
-            <button type="button" data-sort="stable">Stable</button>
-            <button type="button" data-sort="urgency">Urgency</button>
-          </div>
-        </div>
-        <div class="row">
-          <span class="row-label">Unknown</span>
-          <div class="seg" id="unknown-seg">
-            <button type="button" data-unknown="true">Show</button>
-            <button type="button" data-unknown="false">Hide</button>
-          </div>
-        </div>
-        <div class="row">
-          <span class="row-label">Size</span>
-          <input type="range" id="size-range" min="8" max="24" step="1" />
-        </div>
-        <div class="row">
-          <span class="row-label">Padding</span>
-          <input type="range" id="pad-range" min="2" max="20" step="1" />
-        </div>
-        <div class="row">
-          <span class="row-label">Opacity</span>
-          <input type="range" id="opacity-range" min="0" max="100" step="5" />
-        </div>
-        <div class="sep"></div>
-        <div class="colors" id="colors">
-          <div class="crow"><span class="row-label">Running</span><input type="color" data-state="running" /></div>
-          <div class="crow"><span class="row-label">Blocked</span><input type="color" data-state="blocked" /></div>
-          <div class="crow"><span class="row-label">Done</span><input type="color" data-state="done" /></div>
-          <div class="crow"><span class="row-label">Idle</span><input type="color" data-state="idle" /></div>
-          <div class="crow"><span class="row-label">Error</span><input type="color" data-state="error" /></div>
-        </div>
-        <div class="sep"></div>
-        <div class="row">
-          <span class="row-label">Audio</span>
-          <div class="seg" id="audio-seg">
-            <button type="button" data-audio="off">Off</button>
-            <button type="button" data-audio="on">On</button>
-          </div>
-        </div>
-        <!-- Per-state chime toggles + volume: revealed only when Audio is On (same
-             conditional-row pattern as the menu-bar Condense control). -->
-        <div id="audio-panel" hidden>
-          <div class="crow"><span class="row-label">Blocked chime</span><input type="checkbox" data-chime="blocked" /></div>
-          <div class="crow"><span class="row-label">Error chime</span><input type="checkbox" data-chime="error" /></div>
-          <div class="crow"><span class="row-label">Done chime</span><input type="checkbox" data-chime="done" /></div>
-          <div class="row">
-            <span class="row-label">Volume</span>
-            <input type="range" id="vol-range" min="0" max="100" step="5" />
-          </div>
-        </div>
-        <div class="footer">
-          <button type="button" id="reload-btn">Reload</button>
-          <button type="button" id="reset-btn">Reset to defaults</button>
-          <button type="button" id="quit-btn">Quit</button>
-        </div>
       </div>
     </div>
   </body>

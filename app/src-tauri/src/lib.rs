@@ -19,6 +19,9 @@ mod install;
 /// commands after it's built in `setup`.
 #[cfg(any(target_os = "macos", windows))]
 const TRAY_ID: &str = "agentstatus";
+/// Window label of the settings window (decision 082). Also its capability name, so
+/// the two must stay in step with `capabilities/settings.json`.
+const SETTINGS_ID: &str = "settings";
 
 #[derive(Serialize)]
 struct SessionStatus {
@@ -2064,13 +2067,52 @@ fn dismiss_session(id: String) -> bool {
     removed
 }
 
-/// Quit the whole app from the settings panel. As an Accessory app (no Dock icon,
+/// Quit the whole app from the settings window. As an Accessory app (no Dock icon,
 /// no app menu — see `setup`) the bar has no OS-provided Quit, so this button is the
 /// only in-UI way out. `exit(0)` tears down the panel and tray and ends the process;
 /// the hooks keep writing status files regardless, so relaunching repopulates the bar.
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+/// The app's own version, for the settings window's About section. The webview cannot
+/// read Cargo's version and the bundle identifier is not it.
+#[tauri::command]
+fn app_version(app: tauri::AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+/// Open the settings window (decision 082) — raising it if it already exists, so the
+/// gear on the bar always lands you in front of it. Never closes: the window has a title
+/// bar for that, and the gear is only reachable while the bar's controls are revealed.
+///
+/// Built lazily: an always-on bar should not carry a second webview it may never show.
+/// It is a plain decorated window — deliberately not the `main` window's NSPanel
+/// (decision 008), which exists to float over other apps without taking focus. Settings
+/// wants the opposite: normal stacking, keyboard focus, and a title bar to close.
+#[tauri::command]
+fn open_settings(app: tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    cdbg("settings: open requested");
+    if let Some(win) = app.get_webview_window(SETTINGS_ID) {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+        return;
+    }
+    let _ = tauri::WebviewWindowBuilder::new(
+        &app,
+        SETTINGS_ID,
+        tauri::WebviewUrl::App("settings.html".into()),
+    )
+    .title("AgentStatus Settings")
+    .inner_size(560.0, 430.0)
+    .resizable(false)
+    .maximizable(false)
+    .center()
+    .focused(true)
+    .build();
 }
 
 /// Bring Cursor.app to the front (activating it also switches to the Space its
@@ -2254,6 +2296,12 @@ fn cursor_attention_count() -> i64 {
 /// notification (`"\u{2022} "` — a bullet, then the composer name).
 #[cfg(target_os = "macos")]
 const CURSOR_NOTIFY_PREFIX: &str = "\u{2022}";
+
+/// The title of the one tray row that clears Cursor's notifications. Its click sends
+/// `vscode:clearAllNotifications`, which is the *only* thing that marks composers read
+/// (decision 083) — pressing a composer's own row does not.
+#[cfg(target_os = "macos")]
+const CURSOR_CLEAR_ALL_ROW: &str = "Clear All Notifications";
 
 /// A tray row's title without the unread-notification bullet: `"• Fix the parser"` and
 /// `"Fix the parser"` both compare as `"Fix the parser"`.
@@ -2468,17 +2516,28 @@ fn press_in_menu(menu: accessibility_sys::AXUIElementRef, want: &dyn Fn(&str) ->
     false
 }
 
-/// Open the next Cursor composer that's awaiting the user, clearing that one
-/// notification (decision 045). Returns true if an entry was pressed.
+/// Open the next Cursor composer that's awaiting the user and clear Cursor's menu-bar
+/// notifications (decisions 045, 083). Returns true if a composer entry was pressed.
 ///
 /// Cursor's tray menu (`TrayMainService.createContextMenu`, verified in the Cursor
-/// 3.12.10 bundle) is a native Electron `Menu`, so every entry is a real `AXMenuItem`
+/// 3.15.6 bundle) is a native Electron `Menu`, so every entry is a real `AXMenuItem`
 /// reachable from the status item *without opening the menu* — status item →
 /// `AXChildren[0]` (its `AXMenu`) → the item rows. Entries for composers with an unread
 /// notification are titled `"• <name>"`; pressing one sends `vscode:openComposer` to
-/// that composer's window and focuses it, which marks it read. So one `AXPress` both
-/// jumps the user to the waiting composer and decrements Cursor's own count — verified
-/// live: count `" 2"` → `" 1"` with the pressed entry's bullet gone.
+/// that composer's window and focuses it, so the press still jumps the user to the
+/// waiting composer.
+///
+/// It no longer *clears* that composer's notification, though. A row's bullet is
+/// `hasUnreadMessages || badgeCount > 0`, and the `vscode:openComposer` handler touches
+/// neither: only `vscode:clearAllNotifications` — the "Clear All Notifications" row —
+/// calls `markAgentRead` and `clearAllBadges`. In Glass mode the per-composer badge
+/// listener that used to clear a badge on focus is never even registered
+/// (`isGlass || this.setupFocusListener()`), so a bullet outlives opening the composer
+/// by up to its 1 h auto-clear timer. Verified live on 3.15.6: pressing the composer row
+/// left the count at 2, pressing the clear-all row took it 2 → 0. So press both — the
+/// composer row to navigate, then the clear-all row to actually dismiss the pip
+/// (decision 083). Cursor exposes no per-composer clear, so this necessarily clears the
+/// other waiting composers' bullets too.
 ///
 /// Presses the *first* bulleted entry, which is the one Cursor itself ranks highest:
 /// its menu is sorted notification-first, then in-progress, then most-recently-updated.
@@ -2490,7 +2549,10 @@ fn cursor_open_next_attention() -> bool {
     if !cursor_press_tray_row(&|t| t.starts_with(CURSOR_NOTIFY_PREFIX)) {
         return false;
     }
-    // The press opens the composer and clears its notification, but it does not bring
+    // Best-effort: the row is disabled when Cursor has no notifications left, and a
+    // localized Cursor would title it differently — either way the composer is open.
+    cursor_press_tray_row(&|t| t.trim() == CURSOR_CLEAR_ALL_ROW);
+    // The presses open the composer and clear the notifications, but they do not bring
     // Cursor forward: an AXPress issued from a background app leaves the frontmost app
     // unchanged (observed — the badge cleared, the user stayed put). Activating
     // afterwards completes the click-through (decision 046).
@@ -2843,7 +2905,9 @@ pub fn run() {
             cursor_attention_count,
             cursor_open_next_attention,
             dismiss_session,
-            quit_app
+            quit_app,
+            app_version,
+            open_settings
         ])
         .setup(|app| {
             // Accessory (agent) app: no Dock icon, not space-managed.

@@ -7,7 +7,11 @@
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 
-const src = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+// Preferences live in prefs.js (shared with the settings window, decision 082) and
+// the logic that reads them in main.js, so both are searched.
+const src =
+  readFileSync(new URL("../src/prefs.js", import.meta.url), "utf8") +
+  readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 const grab = (re) => {
   const m = src.match(re);
   if (!m) throw new Error(`not found: ${re}`);

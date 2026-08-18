@@ -42,20 +42,9 @@ const CURSOR_POLL_EVERY = 20; // every 20th tick (~20s)
 // asynchronously — wait this long before re-reading the true count.
 const CURSOR_RECHECK_MS = 1500;
 
-// Display preferences (app-local; persisted in the webview's localStorage so they
-// survive restarts without touching the hook-written status files). Right-clicking
-// the bar toggles the settings panel.
-const ORIENT_KEY = "agentstatus.orientation"; // "horizontal" | "vertical"
-const SORT_KEY = "agentstatus.sort"; // "stable" | "urgency" ("window" = a pre-062 stable)
+// Where the bar sits on screen — the one preference the bar keeps to itself. Every
+// other one lives in prefs.js, shared with the settings window (decision 082).
 const POS_KEY = "agentstatus.pos"; // last #lights screen anchor {x,y,scale} (physical px), restored on launch
-
-// Light ordering (app-local display pref, like orientation). "stable" is arrival
-// order — a session takes the next free slot the first time it is seen and holds it
-// for as long as it exists; "urgency" surfaces the attention states first.
-// A stored "window" is a pre-062 preference and reads as stable.
-function currentSort() {
-  return localStorage.getItem(SORT_KEY) === "urgency" ? "urgency" : "stable";
-}
 
 // Most-urgent first (UI Principle #2). Uses the rendered displayState so a finished
 // "done" turn clusters correctly, not the raw idle state.
@@ -99,16 +88,6 @@ function sortSessions(sessions) {
     arr.sort(byArrival);
   }
   return arr;
-}
-
-// Whether "unknown" lights (sessions we get no signal from — decision 042) appear on
-// the bar at all. Defaults to showing them: a session you can't read is still a session
-// you may want to know exists. Hiding is for users who'd rather see only lights that
-// mean something (decision 044).
-const UNKNOWN_KEY = "agentstatus.showunknown"; // "true" | "false"
-
-function showUnknown() {
-  return localStorage.getItem(UNKNOWN_KEY) !== "false";
 }
 
 // What the bar and the tray actually draw from the latest poll. Kept separate from
@@ -158,134 +137,31 @@ async function dismissSession(id) {
   }
 }
 
-function applyUnknownButtons() {
-  const on = showUnknown();
-  for (const btn of document.querySelectorAll("#unknown-seg button")) {
-    btn.classList.toggle("active", (btn.dataset.unknown === "true") === on);
-  }
+// Repaint the menu-bar/tray icon from the latest sessions. No-op while floating.
+function repaintTray() {
+  if (currentMode() !== "menubar") return;
+  lastTraySig = null; // the image changed for a reason the signature can't see
+  pushTrayImage();
 }
 
-function setShowUnknown(on) {
-  localStorage.setItem(UNKNOWN_KEY, String(on));
-  applyUnknownButtons();
-  render(visibleSessions());
-  if (currentMode() === "menubar") {
-    lastTraySig = null;
-    pushTrayImage();
-  }
-}
-
-function applySortButtons(mode) {
-  for (const btn of document.querySelectorAll("#sort-seg button")) {
-    btn.classList.toggle("active", btn.dataset.sort === mode);
-  }
-}
-
-// Persist the choice and re-order immediately from the latest poll, so the bar (and
-// the menu-bar tray) reflow without waiting for the next tick.
-function setSort(mode) {
-  localStorage.setItem(SORT_KEY, mode);
-  applySortButtons(mode);
-  latestSessions = sortSessions(latestSessions);
-  render(visibleSessions());
-  if (currentMode() === "menubar") {
-    lastTraySig = null;
-    pushTrayImage();
-  }
-}
-
-function currentOrientation() {
-  return localStorage.getItem(ORIENT_KEY) === "vertical" ? "vertical" : "horizontal";
-}
-
-// Menu-bar mode always renders horizontally to match the menu bar (a vertical popover
-// hanging off the bar looks wrong); the user's saved orientation is restored when they
-// switch back to floating. Everything that lays out the lights uses this, not the raw
-// saved pref.
-function effectiveOrientation() {
-  return currentMode() === "menubar" ? "horizontal" : currentOrientation();
-}
-
-// Lay the lights out as a row or a column and highlight the matching toggle. The
-// window auto-resizes to hug whichever shape results.
+// Lay the lights out as a row or a column. The window auto-resizes to hug whichever
+// shape results.
 function applyOrientation(orient) {
   const bar = document.getElementById("bar");
   bar.classList.toggle("vertical", orient === "vertical");
-  for (const btn of document.querySelectorAll("#orient-seg button")) {
-    btn.classList.toggle("active", btn.dataset.orient === orient);
-  }
   resizeToContent();
-}
-
-function setOrientation(orient) {
-  localStorage.setItem(ORIENT_KEY, orient);
-  applyOrientation(effectiveOrientation());
 }
 
 // ── Presentation mode: floating vs. macOS menu bar (decision 024) ───────────
 // Floating = the always-visible NSPanel (current behavior). Menu-bar = a tray
-// item showing the lights as a generated image; clicking it reveals this same
-// panel as a popover under the menu bar. The mode + the condense sub-option are
-// app-local display prefs, same localStorage pattern as orientation/size.
-const MODE_KEY = "agentstatus.mode"; // "floating" | "menubar"
-const CONDENSE_KEY = "agentstatus.menubarcondense"; // "true" | "false"
-
-// Which platform the backend is on, asked once at startup (decision 072). The tray exists
-// on both macOS and Windows, but it is a different shape there, and the control labels
-// differ — so a few decisions below need to know. Empty until the first answer arrives;
-// every use treats that as "not Windows", which is the pre-existing behaviour.
-let PLATFORM = "";
-
-function currentMode() {
-  return localStorage.getItem(MODE_KEY) === "menubar" ? "menubar" : "floating";
-}
-
-function currentCondense() {
-  // A Windows notification-area icon is square (16x16 logical, scaled by DPI). A row of
-  // dots stretched into that is an unreadable smear, so Windows always shows the single
-  // summary dot — the Dots/Single choice is hidden there rather than offered and ignored.
-  if (PLATFORM === "windows") return true;
-  return localStorage.getItem(CONDENSE_KEY) === "true";
-}
-
-// Rename the tray controls to what the platform calls that place. The mechanism is the
-// same; "menu bar" is simply the wrong word on Windows.
-function applyPlatformChrome() {
-  if (PLATFORM !== "windows") return;
-  const modeBtn = document.querySelector('#mode-seg button[data-mode="menubar"]');
-  if (modeBtn) modeBtn.textContent = "Tray";
-  const crowLabel = document.querySelector("#condense-row .row-label");
-  if (crowLabel) crowLabel.textContent = "Tray";
-}
-
-// Visual-only: highlight the active Mode button and show the Condense row only in
-// menu-bar mode (it's meaningless when floating). No backend call — used on first
-// paint before the backend is ready.
-function applyModeButtons(mode) {
-  for (const btn of document.querySelectorAll("#mode-seg button")) {
-    btn.classList.toggle("active", btn.dataset.mode === mode);
-  }
-  const crow = document.getElementById("condense-row");
-  // Windows forces the single dot (see currentCondense), so offering the choice there
-  // would be a control that does nothing.
-  if (crow) crow.hidden = mode !== "menubar" || PLATFORM === "windows";
-  // Orientation is forced horizontal in menu-bar mode, so hide its control there.
-  const orow = document.getElementById("orient-row");
-  if (orow) orow.hidden = mode === "menubar";
-}
-
-function applyCondenseButtons() {
-  const on = currentCondense();
-  for (const btn of document.querySelectorAll("#condense-seg button")) {
-    btn.classList.toggle("active", (btn.dataset.condense === "true") === on);
-  }
-}
+// item showing the lights as a generated image; clicking it reveals the bar as a
+// popover under the menu bar. The mode itself is a shared pref (prefs.js); what it
+// *does* lives here.
 
 // Apply a mode for real: flip the tray + panel visibility in the backend, then do
 // the mode-specific frontend work — floating re-anchors the panel to the saved
 // position; menu-bar paints the tray from the latest sessions.
 async function applyMode(mode) {
-  applyModeButtons(mode);
   applyOrientation(effectiveOrientation()); // menu-bar forces horizontal; floating restores the saved pref
   try {
     // The backend answers false when menu-bar mode has no tray to represent the panel.
@@ -295,8 +171,10 @@ async function applyMode(mode) {
     // Fall back to floating instead, and persist that so the next launch is not trapped too.
     const ok = await invoke("set_mode", { mode });
     if (mode === "menubar" && ok === false) {
-      localStorage.setItem(MODE_KEY, "floating");
-      applyModeButtons("floating");
+      writePref(MODE_KEY, "floating");
+      // The settings window is showing "Menu bar" for a mode that didn't take; hand it
+      // the values that actually stand (decision 082).
+      emitPref("prefs-snapshot", prefsSnapshot());
       applyOrientation(effectiveOrientation());
       await restoreAnchor();
       return;
@@ -310,18 +188,6 @@ async function applyMode(mode) {
   } else {
     await restoreAnchor();
   }
-}
-
-function setMode(mode) {
-  localStorage.setItem(MODE_KEY, mode);
-  applyMode(mode);
-}
-
-function setCondense(on) {
-  localStorage.setItem(CONDENSE_KEY, String(on));
-  applyCondenseButtons();
-  lastTraySig = null; // shape changed → repaint the tray
-  pushTrayImage();
 }
 
 // ── Menu-bar tray image ─────────────────────────────────────────────────────
@@ -432,53 +298,8 @@ function suppressHover() {
   document.addEventListener("mousemove", () => bar.classList.remove("nohover"), { once: true });
 }
 
-// Light size + per-state colors — the other display prefs, same localStorage
-// pattern as orientation. Defaults mirror the CSS so a cleared/absent pref looks
-// identical to the stock bar.
-const SIZE_KEY = "agentstatus.dotsize";
-const PAD_KEY = "agentstatus.barpad";
-const OPACITY_KEY = "agentstatus.baropacity";
-const COLORS_KEY = "agentstatus.colors";
-const DEFAULT_SIZE = 13; // px
-const DEFAULT_PAD = 9; // px, wrapper padding around the lights
-const DEFAULT_OPACITY = 82; // percent of pill-fill alpha (matches the CSS default 0.82)
-const DEFAULT_COLORS = {
-  running: "#2ecc71",
-  blocked: "#f39c12",
-  done: "#ecf0f1",
-  idle: "#7f8c8d",
-  error: "#e74c3c",
-};
-
-function currentSize() {
-  const n = parseInt(localStorage.getItem(SIZE_KEY), 10);
-  return Number.isFinite(n) ? Math.min(24, Math.max(8, n)) : DEFAULT_SIZE;
-}
-
-function currentPad() {
-  const n = parseInt(localStorage.getItem(PAD_KEY), 10);
-  return Number.isFinite(n) ? Math.min(20, Math.max(2, n)) : DEFAULT_PAD;
-}
-
-// Pill-fill opacity, stored as a whole percent (20–100) to match the int slider.
-function currentOpacity() {
-  const n = parseInt(localStorage.getItem(OPACITY_KEY), 10);
-  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : DEFAULT_OPACITY;
-}
-
-function currentColors() {
-  let saved = {};
-  try {
-    saved = JSON.parse(localStorage.getItem(COLORS_KEY)) || {};
-  } catch (_) {
-    /* corrupt value → fall back to defaults */
-  }
-  return { ...DEFAULT_COLORS, ...saved };
-}
-
-// Push size + colors into the CSS variables on #bar (which drive dot geometry and
-// every state color, including the color-mix glow) and sync the panel's inputs to
-// the live values.
+// Push size + colors into the CSS variables on #bar, which drive dot geometry and
+// every state color (including the color-mix glow).
 function applyStyle() {
   const bar = document.getElementById("bar");
   const size = currentSize();
@@ -491,38 +312,7 @@ function applyStyle() {
   for (const [state, hex] of Object.entries(colors)) {
     bar.style.setProperty(`--c-${state}`, hex);
   }
-  const range = document.getElementById("size-range");
-  if (range) range.value = String(size);
-  const padRange = document.getElementById("pad-range");
-  if (padRange) padRange.value = String(pad);
-  const opacityRange = document.getElementById("opacity-range");
-  if (opacityRange) opacityRange.value = String(opacity);
-  for (const input of document.querySelectorAll('#colors input[type="color"]')) {
-    input.value = colors[input.dataset.state] || DEFAULT_COLORS[input.dataset.state];
-  }
   resizeToContent(); // a size change reshapes the bar
-}
-
-function setSize(px) {
-  localStorage.setItem(SIZE_KEY, String(px));
-  applyStyle();
-}
-
-function setPad(px) {
-  localStorage.setItem(PAD_KEY, String(px));
-  applyStyle();
-}
-
-function setOpacity(pct) {
-  localStorage.setItem(OPACITY_KEY, String(pct));
-  applyStyle();
-}
-
-function setColor(state, hex) {
-  const colors = currentColors();
-  colors[state] = hex;
-  localStorage.setItem(COLORS_KEY, JSON.stringify(colors));
-  applyStyle();
 }
 
 // ── Audio alerts (decision 0xx) ─────────────────────────────────────────────
@@ -531,29 +321,7 @@ function setColor(state, hex) {
 // only on arrival, not every poll. Off by default (UI Principle #1: non-intrusive);
 // the master toggle reveals per-state checkboxes + a volume slider. App-local, same
 // localStorage pattern as the other display prefs. Never touches the status files.
-const AUDIO_KEY = "agentstatus.audio"; // "on" | "off"
-const CHIME_KEY = "agentstatus.chimes"; // JSON {blocked,error,done}
-const VOL_KEY = "agentstatus.volume"; // 0–100
-const DEFAULT_CHIMES = { blocked: true, error: true, done: true };
-const DEFAULT_VOLUME = 60;
 const CHIME_STATES = ["blocked", "error", "done"];
-
-function audioEnabled() {
-  return localStorage.getItem(AUDIO_KEY) === "on";
-}
-function currentChimes() {
-  let saved = {};
-  try {
-    saved = JSON.parse(localStorage.getItem(CHIME_KEY)) || {};
-  } catch (_) {
-    /* corrupt value → defaults */
-  }
-  return { ...DEFAULT_CHIMES, ...saved };
-}
-function currentVolume() {
-  const n = parseInt(localStorage.getItem(VOL_KEY), 10);
-  return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : DEFAULT_VOLUME;
-}
 
 // Short WebAudio tones — no bundled asset, so nothing to load and no CSP concern.
 // Each state gets a distinct shape: blocked rises (a question), error is a lower
@@ -616,106 +384,106 @@ function checkChimes(sessions) {
   audioSeeded = true;
 }
 
-// Sync the Audio toggle, the sub-panel visibility, and its inputs to the live prefs.
-function applyAudioButtons() {
-  const on = audioEnabled();
-  for (const btn of document.querySelectorAll("#audio-seg button")) {
-    btn.classList.toggle("active", (btn.dataset.audio === "on") === on);
+// ── Applying a preference the settings window changed (decision 082) ────────
+// The settings window writes the value and says which key moved; this is the one
+// place that knows what a preference actually *does* to the bar.
+
+// The chime map as of the last apply, so turning one on can preview it — the window
+// sends the whole map, not which checkbox moved.
+let lastChimes = currentChimes();
+
+function applyPref(key) {
+  switch (key) {
+    case MODE_KEY:
+      applyMode(currentMode());
+      break;
+    case CONDENSE_KEY:
+      repaintTray(); // the tray icon's shape changed
+      break;
+    case ORIENT_KEY:
+      applyOrientation(effectiveOrientation());
+      break;
+    case SORT_KEY:
+      latestSessions = sortSessions(latestSessions);
+      render(visibleSessions());
+      repaintTray();
+      break;
+    case UNKNOWN_KEY:
+      render(visibleSessions());
+      repaintTray();
+      break;
+    case PIP_KEY:
+      // Hiding the pip also stops the Accessibility read behind it — the one thing the
+      // bar does that can cancel Cursor's own menu while it is open (decisions 081/082).
+      if (showCursorPip()) {
+        refreshCursorAttention().then(() => render(visibleSessions()));
+      } else {
+        cursorAttention = 0;
+        render(visibleSessions());
+      }
+      break;
+    case SIZE_KEY:
+    case PAD_KEY:
+    case OPACITY_KEY:
+      applyStyle();
+      break;
+    case COLORS_KEY:
+      applyStyle();
+      repaintTray(); // the tray icon draws with the same per-state colors
+      break;
+    case AUDIO_KEY:
+      if (audioEnabled()) playChime("done"); // audible confirmation the toggle took
+      break;
+    case CHIME_KEY: {
+      const now = currentChimes();
+      for (const st of CHIME_STATES) if (now[st] && !lastChimes[st]) playChime(st);
+      lastChimes = now;
+      break;
+    }
+    case VOL_KEY:
+      playChime("done", currentVolume()); // preview at the new level
+      break;
   }
-  const panel = document.getElementById("audio-panel");
-  if (!panel) return;
-  if (on) panel.removeAttribute("hidden");
-  else panel.setAttribute("hidden", "");
-  const chimes = currentChimes();
-  for (const chk of panel.querySelectorAll('input[type="checkbox"][data-chime]')) {
-    chk.checked = !!chimes[chk.dataset.chime];
-  }
-  const vol = panel.querySelector("#vol-range");
-  if (vol) vol.value = String(currentVolume());
 }
 
-// Toggling Audio grows/shrinks the panel, so re-anchor the lights around the new
-// size (same anchor→mutate→resize→anchor dance as toggleSettings) — otherwise the
-// lights would jump when the sub-panel appears. Enabling plays a confirmation blip.
-async function setAudio(on) {
-  const settingsOpen = !document.getElementById("settings").hasAttribute("hidden");
-  const anchor = settingsOpen ? await lightsScreenPos() : null;
-  localStorage.setItem(AUDIO_KEY, on ? "on" : "off");
-  applyAudioButtons();
-  if (settingsOpen) {
-    await resizeToContent();
-    await anchorLightsTo(anchor);
-  }
-  if (on) playChime("done"); // audible confirmation the toggle took
-}
-
-function setChime(state, enabled) {
-  const chimes = currentChimes();
-  chimes[state] = enabled;
-  localStorage.setItem(CHIME_KEY, JSON.stringify(chimes));
-  if (enabled) playChime(state); // preview the chime you just turned on
-}
-
-function setVolume(pct) {
-  localStorage.setItem(VOL_KEY, String(pct));
-  playChime("done", pct); // preview at the new level
-}
-
-// "Reset to defaults" clears every display pref (orientation, size, colors).
-function resetPrefs() {
-  localStorage.removeItem(ORIENT_KEY);
-  localStorage.removeItem(SORT_KEY);
-  localStorage.removeItem(UNKNOWN_KEY);
-  localStorage.removeItem(SIZE_KEY);
-  localStorage.removeItem(PAD_KEY);
-  localStorage.removeItem(OPACITY_KEY);
-  localStorage.removeItem(COLORS_KEY);
-  localStorage.removeItem(MODE_KEY);
-  localStorage.removeItem(CONDENSE_KEY);
-  localStorage.removeItem(AUDIO_KEY);
-  localStorage.removeItem(CHIME_KEY);
-  localStorage.removeItem(VOL_KEY);
+// Re-apply everything from storage — for a reset, where every key moved at once.
+function applyAllPrefs() {
+  lastChimes = currentChimes();
   applyOrientation(effectiveOrientation());
-  applySortButtons(currentSort());
-  applyUnknownButtons();
   applyStyle();
-  applyCondenseButtons();
-  applyAudioButtons();
   latestSessions = sortSessions(latestSessions);
   render(visibleSessions());
-  applyMode(currentMode()); // back to floating: shows the panel, hides the tray
+  applyMode(currentMode()); // back to floating: shows the bar, hides the tray
 }
 
-// Toggle the panel while keeping the lights pinned in place. Anchor to the lights'
+// Show or hide the per-light close buttons, which ride with the settings window
+// (decisions 080/082), while keeping the lights pinned in place. Anchor to the lights'
 // current screen position, mutate the layout, resize the window to hug the new
 // content, then move the window so the lights land back on that anchor. The window
 // grows/shrinks around the lights — they never move. Capturing the anchor fresh each
-// time means a drag while the panel is open is respected (close keeps them where
-// they now are, not where they were opened).
-async function toggleSettings() {
-  const settings = document.getElementById("settings");
+// time means a drag while the buttons are up is respected (hiding keeps them where
+// they now are, not where they were revealed).
+async function showClosers(on) {
   const closerRow = document.getElementById("closers");
   const bar = document.getElementById("bar");
-  const opening = settings.hasAttribute("hidden");
+  if (on === !closerRow.hasAttribute("hidden")) return; // already in that state
   const anchor = await lightsScreenPos();
-  if (opening) {
+  // Both directions move the lights *inside* the window before the window itself can
+  // catch up: the row is inserted (or dropped) on the frame it is toggled, while the
+  // resize and the re-anchor are two more async IPC round trips behind it. Those frames
+  // are the flicker. Decision 075 suppressed the paint for the collapse only, because
+  // the settings panel then grew *below* the lights and revealing moved nothing; the
+  // controls row is placed by `panel-above`, so it lands on the side the lights sit on
+  // and shifts them either way. So both directions are suppressed now, symmetrically.
+  // `visibility` rather than `display`/`opacity`: it stops the paint while keeping the
+  // layout that `resizeToContent` has to measure.
+  bar.style.visibility = "hidden";
+  if (on) {
     if (anchor) await chooseGrowthDirection(anchor); // above/below, left/right toward center
-    settings.removeAttribute("hidden");
-    closerRow.removeAttribute("hidden"); // close buttons ride with the panel (decision 080)
-    bar.classList.add("settings-open");
+    closerRow.removeAttribute("hidden");
   } else {
-    // Closing jumps the lights unless they are hidden for the transition. With
-    // `panel-above` the bar is `column-reverse`, so the lights sit at the *bottom* of a
-    // ~360px window; dropping the panel puts them at the top of a window that is still
-    // ~360px tall, and only after the resize and re-anchor (three frames later, both async
-    // IPC) do they come back down. That round trip is the flicker. Opening never shows it
-    // because `chooseGrowthDirection` runs *before* the panel appears, so the lights never
-    // move. `visibility` rather than `display`/`opacity`: it stops the paint while keeping
-    // the layout that `resizeToContent` measures.
-    bar.style.visibility = "hidden";
-    settings.setAttribute("hidden", "");
     closerRow.setAttribute("hidden", "");
-    bar.classList.remove("settings-open", "panel-above", "panel-left");
+    bar.classList.remove("panel-above", "panel-left");
     bar.style.alignItems = "";
   }
   try {
@@ -723,30 +491,18 @@ async function toggleSettings() {
     await anchorLightsTo(anchor);
     await fitPopover();
   } finally {
-    // Reveal only once the window is its final size and back in position, so the first
-    // frame the user sees is the finished one. In a `finally` because `resizeToContent`
-    // waits on animation frames, which stall if the popover is dismissed mid-collapse —
-    // and a bar left `visibility: hidden` would come back invisible on the next open.
-    if (!opening) bar.style.visibility = "";
+    // Paint again only once the window is its final size and back in position, so the
+    // first frame the user sees is the finished one. In a `finally` because
+    // `resizeToContent` waits on animation frames, which stall if the popover is
+    // dismissed mid-toggle — and a bar left `visibility: hidden` would stay invisible.
+    bar.style.visibility = "";
   }
 }
 
-// In tray mode the popover sits against the work-area edge, so opening the settings panel
-// grows it straight off the bottom of the screen. The backend pulls it back inside the work
-// area — the screen minus the taskbar, which the frontend cannot see. No-op when floating,
-// where the user's own dragged position is authoritative (decision 073).
-// The popover just appeared. Re-size it (the webview pauses rAF while hidden, so it may be
-// stale) and, on Windows, bring the settings panel up with it: the tray item there is a
-// single summary dot, so the panel behind the lights is what the popover is actually for
-// (decision 074). macOS keeps decision 024's behaviour — its menu-bar item already shows
-// every dot, and changing it would alter what existing users see.
+// The popover just appeared. Re-size it — the webview pauses rAF while hidden, so the
+// layout may be stale — and pull it back inside the work area (decision 073).
 async function onPopoverShown() {
   if (currentMode() !== "menubar") return;
-  const settings = document.getElementById("settings");
-  if (PLATFORM === "windows" && settings && settings.hasAttribute("hidden")) {
-    await toggleSettings(); // resizes, re-anchors, and fits inside the work area
-    return;
-  }
   await resizeToContent();
   await fitPopover();
 }
@@ -760,77 +516,15 @@ async function fitPopover() {
   }
 }
 
-function initSettings() {
+function initBar() {
   applyOrientation(effectiveOrientation());
-  applySortButtons(currentSort());
-  applyUnknownButtons();
   applyStyle();
-  applyModeButtons(currentMode()); // visual only; backend mode applied after first tick
-  applyCondenseButtons();
-  applyAudioButtons();
-  // Right-click anywhere on the bar (including a dot) toggles the panel; suppress
-  // the native context menu.
+  // Right-click anywhere on the bar (including a dot) reveals its controls — one close
+  // button per light, plus the gear that opens the settings window (decision 082).
+  // Right-click again puts them away. Suppress the native context menu.
   document.getElementById("bar").addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    toggleSettings();
-  });
-  document.getElementById("orient-seg").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-orient]");
-    if (btn) setOrientation(btn.dataset.orient);
-  });
-  document.getElementById("sort-seg").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-sort]");
-    if (btn) setSort(btn.dataset.sort);
-  });
-  document.getElementById("unknown-seg").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-unknown]");
-    if (btn) setShowUnknown(btn.dataset.unknown === "true");
-  });
-  document.getElementById("mode-seg").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-mode]");
-    if (btn) setMode(btn.dataset.mode);
-  });
-  document.getElementById("condense-seg").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-condense]");
-    if (btn) setCondense(btn.dataset.condense === "true");
-  });
-  document.getElementById("size-range").addEventListener("input", (e) => {
-    setSize(parseInt(e.target.value, 10));
-  });
-  document.getElementById("pad-range").addEventListener("input", (e) => {
-    setPad(parseInt(e.target.value, 10));
-  });
-  document.getElementById("opacity-range").addEventListener("input", (e) => {
-    setOpacity(parseInt(e.target.value, 10));
-  });
-  // `input` fires live as the color picker changes, so the bar previews instantly.
-  document.getElementById("colors").addEventListener("input", (e) => {
-    const input = e.target.closest('input[type="color"]');
-    if (input) setColor(input.dataset.state, input.value);
-  });
-  document.getElementById("audio-seg").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-audio]");
-    if (btn) setAudio(btn.dataset.audio === "on");
-  });
-  // Per-state checkboxes and the volume slider both live in #audio-panel; one
-  // listener handles both (checkbox → setChime, range → setVolume).
-  document.getElementById("audio-panel").addEventListener("input", (e) => {
-    const chk = e.target.closest('input[type="checkbox"][data-chime]');
-    if (chk) {
-      setChime(chk.dataset.chime, chk.checked);
-      return;
-    }
-    if (e.target.id === "vol-range") setVolume(parseInt(e.target.value, 10));
-  });
-  document.getElementById("reset-btn").addEventListener("click", resetPrefs);
-  // Reload the webview — picks up frontend changes and recovers from any stuck
-  // state without quitting/relaunching the app.
-  document.getElementById("reload-btn").addEventListener("click", () => {
-    window.location.reload();
-  });
-  // Quit the app entirely (the accessory app has no Dock/menu-bar Quit).
-  document.getElementById("quit-btn").addEventListener("click", () => {
-    invoke("quit_app");
+    showClosers(document.getElementById("closers").hasAttribute("hidden"));
   });
 }
 
@@ -950,6 +644,37 @@ function titleFor(s, ds) {
   return lines.join("\n");
 }
 
+// The gear that opens the settings window, kept as the last item of the controls row
+// so it sits one slot past the lights and never takes a light's place (decision 082).
+// Built once and re-appended, because `render` rebuilds the row's order every poll.
+let gearEl = null;
+
+function ensureGear(closerRow) {
+  if (!gearEl) {
+    gearEl = document.createElement("div");
+    gearEl.className = "gear";
+    // Drawn, not typed: U+2699 renders as a color emoji in some system fonts, and at
+    // dot size an emoji gear is a smudge. Eight teeth around a ring, in `currentColor`
+    // so it inherits the row's ink. It overflows its dot-sized box on purpose — the box
+    // has to stay a dot wide to keep the close buttons on the lights' grid (decision 080).
+    gearEl.innerHTML =
+      '<svg viewBox="-12 -12 24 24" aria-hidden="true">' +
+      [0, 45, 90, 135, 180, 225, 270, 315]
+        .map(
+          (a) =>
+            `<rect x="-2.1" y="-11.2" width="4.2" height="5.4" rx="1.1" transform="rotate(${a})"/>`
+        )
+        .join("") +
+      '<circle r="6.1" fill="none" stroke="currentColor" stroke-width="3.4"/></svg>';
+    gearEl.title = "AgentStatus settings";
+    gearEl.addEventListener("click", () => {
+      invoke("open_settings").catch(() => {});
+      suppressHover();
+    });
+  }
+  if (closerRow.lastElementChild !== gearEl) closerRow.appendChild(gearEl);
+}
+
 // Remove a light's close button when the light itself goes.
 function dropCloser(id) {
   const x = closers.get(id);
@@ -974,6 +699,7 @@ function render(sessions) {
       sizeChanged = true;
     }
     if (renderCursorPip(lights)) sizeChanged = true; // removes a lingering pip
+    ensureGear(closerRow);
     if (!emptyEl) {
       emptyEl = document.createElement("div");
       emptyEl.className = "dot empty";
@@ -1066,6 +792,7 @@ function render(sessions) {
   }
 
   if (renderCursorPip(lights)) sizeChanged = true;
+  ensureGear(closerRow);
 
   if (sizeChanged) resizeToContent();
 }
@@ -1097,7 +824,7 @@ function renderCursorPip(lights) {
     if (badge.textContent !== txt) badge.textContent = txt;
     const title =
       `Cursor — ${cursorAttention} composer${cursorAttention > 1 ? "s" : ""} awaiting you\n` +
-      `↳ from Cursor's menu bar · click to open the next one (clears its notification)`;
+      `↳ from Cursor's menu bar · click to open the next one (clears Cursor's notifications)`;
     if (cursorPipEl.title !== title) cursorPipEl.title = title;
     if (lights.lastElementChild !== cursorPipEl) lights.appendChild(cursorPipEl);
     return created;
@@ -1138,7 +865,7 @@ async function resizeToContent() {
   // window to nothing before the content rendered). Bounded: animation frames stop firing
   // if the window is hidden mid-wait (a tray popover dismissed during a collapse), and an
   // unbounded wait here would leave every caller's cleanup — notably the visibility restore
-  // in `toggleSettings` — permanently pending. Whichever fires first wins; resolving twice
+  // in `showClosers` — permanently pending. Whichever fires first wins; resolving twice
   // is a no-op.
   await new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(resolve));
@@ -1401,6 +1128,11 @@ async function focusSession(cwd, ide, id) {
 
 // Re-read Cursor's menu-bar count. Fail-closed to 0 (no pip) on any error.
 async function refreshCursorAttention() {
+  // Off means off: no pip, and no Accessibility read either (decision 082).
+  if (!showCursorPip()) {
+    cursorAttention = 0;
+    return;
+  }
   try {
     cursorAttention = await invoke("cursor_attention_count");
   } catch (_) {
@@ -1408,13 +1140,16 @@ async function refreshCursorAttention() {
   }
 }
 
-// Click-through for the Cursor pip (decision 045): press the top entry in Cursor's tray
-// menu that carries a notification. Cursor opens that composer and marks it read — so its
-// own count drops by one and the next click lands on the next composer waiting. The
-// backend also activates Cursor after the press, which the press alone does not do
-// (decision 046). Decrement locally for immediate feedback, then re-read the real
-// count once Cursor has updated its menu-bar item. If nothing was pressable (no notified
-// entry, Cursor gone, AX not granted), fall back to the old behaviour: activate Cursor.
+// Click-through for the Cursor pip (decisions 045, 083): press the top entry in Cursor's
+// tray menu that carries a notification — Cursor opens that composer — then press its
+// "Clear All Notifications" entry, which is the only thing that actually marks composers
+// read (opening one no longer does, verified on Cursor 3.15.6). Cursor exposes no
+// per-composer clear, so one click empties the whole count, not just the opened
+// composer's. The backend also activates Cursor after the presses, which they alone do
+// not do (decision 046). Zero the count locally for immediate feedback, then re-read the
+// real one once Cursor has updated its menu-bar item. If nothing was pressable (no
+// notified entry, Cursor gone, AX not granted), fall back to the old behaviour: activate
+// Cursor.
 async function openNextCursorAttention() {
   let pressed = false;
   try {
@@ -1426,7 +1161,7 @@ async function openNextCursorAttention() {
     focusSession("", "cursor", ""); // empty cwd ⇒ just activate Cursor.app
     return;
   }
-  cursorAttention = Math.max(0, cursorAttention - 1);
+  cursorAttention = 0;
   render(visibleSessions());
   setTimeout(refreshCursorAttention, CURSOR_RECHECK_MS);
 }
@@ -1462,8 +1197,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   } catch (_) {
     /* older backend without the command; treat as not-Windows */
   }
-  applyPlatformChrome();
-  initSettings();
+  initBar();
   // Bound native drags to the monitor (can't be dragged off-screen) and remember the
   // lights' resting position. Registered before restore so restore's own moves are
   // clamped; anchorReady stays false until restore finishes so those moves aren't saved.
@@ -1480,8 +1214,24 @@ window.addEventListener("DOMContentLoaded", async () => {
   try {
     const { listen } = window.__TAURI__.event;
     listen("popover-shown", () => onPopoverShown());
+    // ── The settings window (decision 082) ──────────────────────────────────
+    // It writes each change and says which key moved; the bar owns what that key
+    // does. The bar also holds the values: it answers `prefs-request` with a
+    // snapshot, so the window renders what is actually on screen rather than
+    // whatever its own webview's storage happens to hold.
+    listen("pref-changed", ({ payload }) => {
+      if (!payload || !payload.key) return;
+      writePref(payload.key, payload.value ?? null);
+      applyPref(payload.key);
+    });
+    listen("prefs-reset", () => {
+      for (const key of PREF_KEYS) writePref(key, null);
+      applyAllPrefs();
+    });
+    listen("prefs-request", () => emitPref("prefs-snapshot", prefsSnapshot()));
+    listen("reload-bar", () => window.location.reload());
   } catch (_) {
-    /* older backend without the event; visibilitychange still covers macOS */
+    /* older backend without the events; the bar still works, settings just won't sync */
   }
   await tick(); // first render, so the bar has its real size before we anchor it
   anchorReady = true;

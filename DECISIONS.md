@@ -90,6 +90,9 @@
 | 078 | 2026-08-15 | **A plan-mode approval turns the light orange.** Reported live as "Windows isn't picking up on orange", with the light showing **green** while waiting. Instrumenting the chain exonerated the Windows port — `AskUserQuestion` and Bash permission prompts already held `blocked` for 43 s / 32 s and rendered orange on screen. The defect is `ExitPlanMode`: its `PermissionRequest` fires when the user *answers*, so `PreToolUse` is the only event that lands while the prompt is up and the light stayed green for the whole 48 s wait, turning orange for under 150 ms at the end. The approved first fix — extend #067's reconcile on Claude Code's own `status: "waiting"` — was **falsified by the same measurement** (status read `busy` throughout the plan prompt) and dropped rather than shipped as dead weight. Instead `ExitPlanMode`/`EnterPlanMode` rewrite their `PreToolUse` to `PermissionRequest` in both hook implementations, so state and detail stay in agreement and `PostToolUse` greens the light on approval. `AskUserQuestion` left out as redundant; `EnterPlanMode` included at the user's choice, accepting a sub-second orange flicker when auto-approved as cheaper than 48 s of wrong-green (UI Principle #2). Golden regeneration is +4 lines / 0 changed, proving the refactor touched nothing else. Verified live: 31.9 s of `blocked` across a real approval, against 48 s of green before | Accepted |
 | 079 | 2026-08-15 | **The release publishes with `find`, not a `dist/*` glob.** The first `v0.8.0` tag built both platforms and then published nothing: `read dist/msi: is a directory`. `actions/upload-artifact` preserves the structure below the **common ancestor of the paths it is given**, and the two jobs give it different numbers of paths — macOS one (its DMG lands flat), Windows two (`msi/` and `nsis/` arrive as directories) — so `dist/*` handed `gh` two files and two directories. Invisible until now because #069 checked the globs against the *local* build output; the asymmetry is created by `upload-artifact`, not by the build. Nothing broken reached users only because `gh release create` deletes the release it just made when an asset upload fails — `v0.7.1` stayed Latest. Now `find dist -type f`, plus a count guard that fails before publishing rather than shipping a release quietly missing an installer (the same class as #041's version guard). Flattening the Windows upload was rejected: it fixes this shape and leaves the next one to another failed tag | Accepted |
 | 080 | 2026-08-18 | **A light can be closed by hand.** Every prune the bar had was evidence-based — a closed window (#027), a dead pid (#054), an archived composer (#048), a retired background agent (#065), the 2 h backstop (#004) — so a session the *user* knows is finished can keep its light until the evidence arrives. Right-click now reveals, alongside the lights, one small red × per light; clicking it invokes `dismiss_session`, which deletes that session's status file and subagent markers exactly as a prune does. A deletion, not a hide: a session that is genuinely alive re-registers on its next hook event and its light returns (UI Principle #4 — the bar must not withhold a light for a live session any more than it may show one for a dead session). A local tombstone hides the light on the click so a poll already in flight cannot paint it back, and is lifted the moment the poll agrees the session is gone — or after 5 s if the delete never took. The buttons ride with the settings panel rather than sitting on the bar: a close button always visible next to a click-to-focus light is a misclick that deletes what you meant to open (UI Principle #1/#3). Their red is a fixed constant, not `--c-error`, so recoloring the error state cannot turn them blue nor make a row of controls read as five sessions in error | Accepted |
+| 081 | 2026-08-18 | **The bar stops reading Cursor's menu while it has nothing to decide** — reported live: "I can't click into the Cursor menu bar item, it keeps clicking off of it". #052's `", Running"` veto reads Cursor's status-item menu through the AX tree, and that walk **cancels the menu when the user has it open** — the same interference #038 found on the shallower pip read and answered with a deliberately gentle 20 s cadence. The veto sat at the end of a guard whose other conditions (`terminal && stale && !subs_live`) stay true forever on a **settled** Cursor light, so with idle Cursor lights on the bar the walk ran every `CURSOR_FACTS_TTL` (5 s) for as long as those lights existed — while its answer could only ever assign `idle` to a light already idle. The guard now tests `state != "idle"` **before** the walk, so the AX read happens only on a poll that could actually change a light. Measured: 45 s with two idle Cursor lights → 0 walks (was one every 5 s); one silent running light → exactly one walk, then none. Behaviour-identical by construction (Guideline #7): the arm it gates assigns the value the light already holds | Accepted |
+| 082 | 2026-08-18 | **Settings become a window; the bar keeps only lights and a right-click controls row** — "the settings are starting to be a bit much" on a strip whose whole job is to be glanceable (UI Principle #1). The 16-control panel that grew out of the bar is now a normal, decorated window with a sidebar (General / Lights / Colors / Audio / About) that follows the system appearance, built lazily by a new `open_settings` command under its own capability. A right-click on the bar no longer opens anything: it reveals the bar's controls — decision 080's one × per light, plus a **settings gear** one slot past them, drawn as an inline SVG because U+2699 renders as a color emoji at dot size. Preferences move to a shared `prefs.js`; the **bar stays the source of truth** (it answers `prefs-request` with a snapshot and owns `applyPref`), so nothing depends on two webviews sharing localStorage. New pref: **Cursor pip Show/Hide** (default show) — hiding it also stops the Accessibility read behind it, removing the last reader that can cancel Cursor's menu (#081). Three follow-ons fall out: the pill's radius becomes `--pill-radius` (half the light strip's thickness) so the two-row bar is a stadium instead of an oval; #075's paint suppression now covers **both** toggle directions, because the controls row lands on the lights' own side and shifts them either way; and #074's Windows "popover opens with the settings panel" is dropped with the panel it opened | Accepted |
+| 083 | 2026-08-18 | **The pip's click clears Cursor's notifications itself.** Reported live: clicking the pip never retired the Cursor menu-bar notification, so the pip kept coming back. #045's premise — press the `"• <name>"` row and Cursor both opens the composer and marks it read, verified on 3.12.10 — is false on **3.15.6**: that row's click sends only `vscode:openComposer`, whose handler opens the agent and touches neither half of a bullet (`hasUnreadMessages || badgeCount > 0`). Only `"Clear All Notifications"` sends `vscode:clearAllNotifications` → `markAgentRead` + `clearAllBadges`. In **Glass** mode (this user's Cursor) the per-composer badge-clear-on-focus listener is never registered at all, so a bullet survives opening the composer for up to its 1 h auto-clear. Measured: pressing the composer row leaves the count at 2 (with or without activating Cursor), pressing the clear-all row takes it 2 → 0 — so `AXPress` works and it is the row that changed. The click now presses both rows, navigating first and clearing second. Cursor exposes no per-composer clear, so this necessarily clears the other waiting composers' bullets — accepted, since on Glass they would sit for an hour anyway and their sessions keep their own lights. End-to-end press against a live notification still unverified (Cursor quit before one appeared) | Accepted |
 | 084 | 2026-08-18 | **An orange background-agent light has to be a question.** Reported live: "why is there an orange light in my lightbar from a session that already finished?" #063 maps Claude Code's `state: "blocked"` for a `--bg` job straight to orange, on the premise that `blocked` means the job stopped to ask something. It has a second meaning: a job that finished its turn and sits at an empty prompt reports the same `blocked`. Both were measured on 2.1.234 — the difference is the `needs` in the job's own `~/.claude/jobs/<id>/state.json`, which is the question verbatim when one was asked (`"Should the fallback be red or blue?"`) and the literal `"send a prompt to start"` when nothing is being asked at all. `claude agents --json` carries the job's `tempo` as `state` but not the `needs` behind it, so the bar now reads it from the job record. `needs == "send a prompt to start"` no longer paints orange (the light stays as the hook wrote it) and no longer blocks #065's five-minute retirement — which had left the light orange for the full two-hour backstop, since #065's "never retire a blocked light" guard applied to it too. An exact-string test, deliberately: an unrecognised or absent `needs` keeps #063's orange, because a missed attention light costs more than one that lingers (UI Principle #2 over #4) | Accepted |
 
 ---
@@ -5032,6 +5035,246 @@ indistinguishable from a successful prune.
   quadrant of a 1440×900 monitor: horizontal bar → buttons below at the top of the screen,
   above at the bottom; vertical bar → buttons right on the left of the screen, left on the
   right; and each × still on its own light's axis in every case.
+
+## 081 — The bar stops reading Cursor's menu while it has nothing to decide
+
+**Date:** 2026-08-18
+**Status:** Accepted (fixes a regression #052 introduced against #038's mitigation)
+
+**Symptom (reported live).** "I can't click into the Cursor menu bar item because it keeps
+clicking off of it" — Cursor's own status-item menu closes itself a beat after it opens.
+
+**Root cause.** Two code paths read Cursor's status item through the Accessibility API, and
+either one cancels that menu if it lands while the user has it open:
+
+| Reader | Depth | Cadence |
+|---|---|---|
+| `cursor_attention_count` (#038, the pip) | the item's `AXTitle` | every 20 s, from the frontend |
+| `cursor_tray_titles` (#052, the `", Running"` veto) | the item's whole `NSMenu`, row by row | every 5 s (`CURSOR_FACTS_TTL`), from `list_sessions` |
+
+#038 already knew the read interferes — it chose 20 s *because* "the AX read can dismiss
+Cursor's own menu-bar popover if it lands while the user has it open (observed live)". #052
+then added a deeper walk on a 5 s cache and never inherited that constraint.
+
+Worse, it ran when it had nothing to decide. The veto is the last condition of the guard that
+greys a silent Cursor light:
+
+    f.terminal && stale && !subs_live && state != "error" && !tray_says_running(…)
+
+On a Cursor light that has **already** settled to `idle`, the first four stay true forever —
+`terminal` is Cursor's flushed status, `stale` only grows — so every poll evaluated the guard,
+the 5 s cache expired, and the walk ran again, for the whole life of the light. Its answer
+could only ever set `state = "idle"` on a light already idle. Measured live before the fix:
+two idle Cursor sessions on the bar, both `terminal=true`, ages 356 s and 127 s — i.e. a walk
+into Cursor's menu every 5 s, indefinitely, for no effect.
+
+**Decision.** Move `state != "idle"` into the guard **ahead of** the tray read, so the AX walk
+only happens on a poll that could actually change a light. Rust's `&&` short-circuits, so an
+already-idle light never reaches `cursor_tray_titles_cached`.
+
+Behaviour is identical by construction (Guideline #7): the arm the new condition gates assigns
+`idle`, which is the value such a light already holds. Nothing about the veto, the reconcile,
+the schema, or the hooks changes — only when the app is willing to touch another app's menu.
+
+`cursor_tray_titles` now also emits a marker-gated `cdbg` line (`tray_walk rows=N`), the same
+switch #038 added for the pip, so the one thing the app does that can interfere with Cursor's
+menu is traceable without a rebuild.
+
+**Options considered.**
+
+| Option | Verdict |
+|---|---|
+| Gate the walk on a light that can change (chosen) | Removes the walk entirely from the steady state, keeps #052's veto intact for the case it was written for, four words of code |
+| Raise `CURSOR_FACTS_TTL` for the tray only | Makes a pointless read rarer instead of removing it; still fires forever, still lands on an open menu eventually |
+| Skip AX reads while the pointer is in the menu-bar strip | Targets the *remaining* 20 s pip read too, but needs new AppKit calls and a cooldown heuristic. Held back until the user confirms a residual — this fix removes ~4 of every 5 reads |
+| Drop the tray veto | Reinstates #052's bug: a live Cursor agent whose hooks go quiet mid-turn gets greyed (UI Principle #4) |
+
+**Verified** (marker on, against the installed build):
+
+- 45 s with two idle Cursor lights on the bar: **zero** `tray_walk` lines; only the pip's
+  `trusted=true count=…` at 20 s intervals. Before the fix the same state produced a walk
+  every 5 s.
+- **Positive control** — one Cursor session's state flipped to `running` while stale: exactly
+  one `tray_walk rows=19`, immediately followed by the reconcile settling the light back to
+  idle and no further walks. So the absence above is the guard, not a broken log line, and the
+  veto still runs where #052 needs it.
+
+---
+
+## 083 — The pip's click clears Cursor's notifications itself
+
+**Date:** 2026-08-18
+**Status:** Accepted (replaces #045's press-clears-it premise, falsified on Cursor 3.15.6)
+
+**Symptom (reported live).** "Clicking the Cursor composer pip in the lightbar does not close
+out the notification in the Cursor menu bar, so the pip just keeps coming back."
+
+**Root cause.** #045 verified on Cursor **3.12.10** that pressing a notified tray row
+(`"• <name>"`) both opened that composer *and* marked it read — count `" 2"` → `" 1"`, bullet
+gone. On **3.15.6** only the first half is still true. Two independent findings, one measured
+and one read out of the shipped bundle:
+
+| Probe (live, 3.15.6, AX press exactly as the app does it) | Result |
+|---|---|
+| Press the first `"• <name>"` row | `AXPress` → `kAXErrorSuccess`, count stays **2**, both bullets remain |
+| Same, then `activate_cursor()` (the full #045/#046 click path) | count stays **2** |
+| Press the `"Clear All Notifications"` row | count **2 → 0** |
+
+So the press mechanism is intact — it is the composer row that no longer clears. Cursor's own
+code says why. In `TrayMainService.createContextMenu` a composer row's click is
+`sendMessageToWindow("vscode:openComposer", {composerId}, window)`; the renderer's handler for
+that message runs `glass.openAgentById` / `composer.openComposer` and nothing else. Only
+`"Clear All Notifications"` sends `vscode:clearAllNotifications`, whose handler calls
+`markAgentRead` for every unread agent **and** `clearAllBadges`.
+
+A row's bullet is `hasUnreadMessages || badgeCount > 0` — two sources, and opening the composer
+clears neither from that path. The badge half is worse in **Glass** mode (this user's Cursor:
+`glassMode = true`), where the per-composer listener that clears a badge when its window is
+focused is never registered at all:
+
+    this.environmentService.isGlass || this.setupFocusListener()
+
+leaving only `clearAllBadges` and a **1 h** auto-clear timer (`scheduleAutoClear`, `36e5`). That
+is exactly the observed "it keeps coming back": nothing the bar could press, and nothing the
+user could do short of Clear All, retires that bullet within the hour.
+
+**Decision.** The pip's click presses **two** rows: first the top `"• <name>"` composer row (as
+before — it still opens that composer, confirmed by the user), then `"Clear All
+Notifications"`. The frontend zeroes `cursorAttention` optimistically instead of decrementing
+by one, then re-reads at `CURSOR_RECHECK_MS` as before.
+
+Cursor exposes **no per-composer clear** to the outside — not through the tray, not through an
+agent deeplink (`cursor://…/agent` routes to the same `glass.openAgentById`) — so clearing one
+composer's notification necessarily clears the rest. That cost is accepted deliberately: on
+Glass those other bullets would otherwise sit for up to an hour whatever the user does, and the
+sessions behind them keep their own hook-driven lights on the bar, which is where AgentStatus
+tells the user about them anyway.
+
+**Options considered.**
+
+| Option | Verdict |
+|---|---|
+| Open the top composer, then Clear All (chosen) | One click both navigates and empties the pip; two lines of Rust; loses the other composers' bullets, which Cursor was going to sit on for an hour regardless |
+| Open the top composer; alt-click the pip to Clear All | Keeps Cursor's queue for composers not yet seen, but a plain click still leaves the pip up — the reported bug survives as the default gesture, and right-click is already the close-× row (#080) |
+| Pip click = Clear All + activate Cursor only | Always clears and is the simplest, but the pip stops leading to a specific composer (UI Principle #3) |
+| Leave it; let the 1 h timer clear it | The pip lies for an hour about work already dealt with (UI Principle #4) |
+| Write Cursor's `state.vscdb` to mark a composer read | Editing another app's live database behind its back; corrupts on a schema change and races Cursor's own writes |
+
+**Verified.** The three AX probes in the table above, all against Cursor 3.15.6 with the
+Accessibility grant the app already holds, plus the bundle read of `createContextMenu`, the
+`vscode:openComposer` / `vscode:clearAllNotifications` handlers, and the badge lifecycle
+(`hasComposerNotification`, `setupFocusListener`, `scheduleAutoClear`). `cargo test --release`
+and all four `app/tests/*.mjs` pass.
+
+**Not yet verified:** the two-press sequence end to end against a *live* notification — Cursor
+quit before a new bullet appeared, and a bullet only arrives when an agent finishes a turn
+while Cursor is in the background. What is unproven is narrow (that the second walk still finds
+its row a beat after the first press); each press is proven on its own. Re-run
+`cursor_press_next_attention` with a real notification pending before this ships.
+
+**Left alone (deliberately).** A *session* light's click (#047) presses that composer's row and
+nothing else, so it still leaves the bullet up. That is the same defect, but it was not what
+was reported and the fix is heavier there — a session click would clear notifications for
+composers the user never mentioned. Recorded in `NEXT_STEPS.md` instead.
+
+## 082 — Settings become a window; the bar keeps only lights and a right-click controls row
+
+**Date:** 2026-08-18
+**Status:** Accepted (supersedes #015's in-bar panel; amends #024, #074, #075, #080)
+
+**Context.** Reported live: "lets also move the settings off the bar: its starting to be a
+bit much", and separately "add the option to not show the cursor menu bar pip". The panel
+had grown from #015's one orientation toggle to sixteen controls — mode, condense,
+orientation, three sliders, five color wells, sort, unknown, audio plus three chimes and a
+volume, three footer links — all rendered *inside* the always-on-top strip, which grew to
+~360 px tall when opened. Everything about that fights UI Principle #1: the bar exists to be
+read in under a second, and it had become a settings surface that also shows lights.
+
+**Decision.**
+
+1. **A settings window.** `open_settings` builds a plain decorated window (560×430,
+   non-resizable, `settings.html` / `settings.css` / `settings.js`) with a sidebar —
+   General, Lights, Colors, Audio, About — and a footer of Reload / Reset to defaults /
+   Quit. It follows the system light/dark appearance rather than the bar's frosted dark,
+   because it is a document window sitting next to other document windows, not part of the
+   overlay. Deliberately **not** the main window's NSPanel (#008): that panel exists to
+   float without taking focus, and settings wants the opposite — normal stacking, keyboard
+   focus, a title bar to close. Built lazily; an always-on bar should not carry a second
+   webview it may never show. It needs its own capability file, since Tauri scopes
+   capabilities by window label and the existing one names only `main`.
+
+2. **Right-click reveals the bar's controls, and nothing else.** First cut had right-click
+   open the window directly; the user's next message — "instead of opening the settings
+   immediately when right clicking, lets just show the close buttons and a small settings
+   icon" — replaced it. So a right-click toggles the controls row: #080's one × per light,
+   plus a **gear** one slot past the last of them. The gear's box is exactly one light wide
+   so the × buttons keep their one-for-one alignment with the lights (#080); only its
+   drawing overflows, at 1.7 lights across. It is an inline SVG (eight teeth around a ring),
+   not U+2699, which some system fonts render as a color emoji — a smudge at 13 px.
+
+3. **The bar owns the preferences; the window edits them.** `prefs.js` holds every key,
+   default and getter and is loaded by both webviews. The window writes a change locally and
+   emits `pref-changed {key, value}`; the bar writes it too and runs `applyPref`, the one
+   place that knows what a preference *does*. On open the window emits `prefs-request` and
+   renders from the `prefs-snapshot` the bar returns — so the window shows what is actually
+   on screen rather than whatever its own webview's storage happens to hold, and nothing
+   rests on two WKWebViews sharing a localStorage they are not guaranteed to share.
+
+4. **The Cursor pip becomes optional** (Lights → Cursor pip, default Show). Hiding it
+   removes the pip *and* stops `cursor_attention_count` being called at all — the last
+   remaining reader that can cancel Cursor's own menu-bar menu while the user has it open
+   (#038, #081). The row is hidden on Windows, where there is no such item to read.
+
+**Three follow-ons, each reported live during the change.**
+
+- **A stadium, not an oval.** `border-radius: 999px` clamps to half the *smaller side*,
+  which is exactly right for a one-row bar and wrong the moment the controls row makes the
+  bar two rows thick — the corners inflate and the pill reads as an oval. The radius is now
+  `--pill-radius: (dot-size + 2 × bar-pad) / 2`, half the light strip's own thickness: the
+  identical shape for the plain bar, straight sides for the revealed one.
+- **Both directions of the toggle suppress their paint.** #075 hid the bar with
+  `visibility: hidden` across a *collapse* only, because the panel grew below the lights and
+  revealing moved nothing. The controls row is placed by `panel-above`/`panel-left`, so it
+  lands on whichever side the lights already sit on and shifts them **either way** — the
+  reported "it's both ways" flicker. The suppression is now symmetric.
+- **#074 is dropped.** "The Windows tray popover opens with its settings panel already
+  shown" opened a panel that no longer exists. The popover now just shows the lights.
+
+**Options considered.**
+
+| Option | Verdict |
+|---|---|
+| Settings window with a sidebar (chosen) | Room for the sixteen controls and their explanations; the bar goes back to being only lights; the window is where a Mac user expects settings to be |
+| Keep the in-bar panel, just trim it | Does not address the complaint — the panel is the problem, not its length — and every control removed is a feature removed |
+| One scrolling page instead of a sidebar | Less code, but the user picked the sidebar; with five sections it also keeps each pane short enough to read without scrolling |
+| Close buttons move into the window as a session list | Loses #080's one-for-one alignment between a light and the × that closes it: closing a light would mean finding it in a list |
+| localStorage as the shared store, no snapshot | Rests on two webviews sharing one store; a stale read would show the wrong values in the window and write them back |
+
+**Verified.**
+
+- **The window opens, and the bar grows around it.** A synthetic right-click on the bar
+  (before the gear existed) produced a second window, `AgentStatus Settings` at 560×431,
+  and grew the bar from 37×100 to 57×100 at an x 20 px further left — the controls column
+  appearing on the side facing the screen's middle, with the lights unmoved.
+- **The window renders live values, not defaults**, and its sections switch: its AX tree
+  lists the rail (General / Lights / Colors / Audio / About), the General pane, and the
+  footer; pressing **Lights** swapped the pane to Order / Unknown state / Cursor pip.
+- **The Cursor pip pref does what it says.** With **Hide** set, 45 s produced **zero**
+  `cursor_attention_count` reads in the marker-gated log; with **Show** set again, they
+  resumed immediately at the 20 s cadence. Set through the real window, read from the real
+  backend.
+- **The gear's wiring** — `app/tests/settings-gear.mjs`, evaluating the shipped
+  `ensureGear` against a stub DOM: built once rather than once per poll, always last in the
+  row with the close buttons undisturbed, drawn as an SVG of eight teeth and a ring, and a
+  click invokes `open_settings`. Live clicking could not be scripted reliably here — the
+  bar is a non-activating panel whose webview ignored synthetic left clicks even with
+  `clickState` set, while right-clicks landed — so the one link a script cannot drive is
+  pinned by a test instead.
+- **A "vanishing" settings window was instrumented before being believed:** the log showed
+  `built → Focused(true) → CloseRequested → Destroyed`, i.e. an ordinary user close, not a
+  teardown. The instrumentation stayed only as the one `open_settings` trace line.
+- The four existing frontend tests still pass; `light-order` and `dismiss-light` now read
+  `prefs.js` alongside `main.js`, since that is where the keys they exercise moved.
 
 ## 084 — An orange background-agent light has to be a question
 

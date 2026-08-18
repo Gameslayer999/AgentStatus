@@ -12,7 +12,8 @@
 //   docs/lightbar-states.svg       every state labeled with its meaning
 //   docs/lightbar-hover.svg        one light with its badge + hover tooltip
 //   docs/lightbar-orientation.svg  the same bar horizontal vs vertical
-//   docs/lightbar-settings.svg     the right-click settings panel
+//   docs/lightbar-controls.svg     the close buttons + gear a right-click reveals
+//   docs/lightbar-settings.svg     the settings window the gear opens
 //
 // SVGs bake in their own dark backdrop so the frosted pill and the white "done"
 // light read correctly in both GitHub light and dark themes. GitHub's SVG sanitizer
@@ -109,9 +110,11 @@ function backdrop(w, h, windows = false) {
 }
 
 function pill(x, y, w, h) {
-  // styles.css uses `border-radius: 999px`, which clamps to half the SMALLER side —
-  // a stadium (rounded end-caps, straight sides), whether the bar is a row or a column.
-  const rx = Math.min(w, h) / 2;
+  // styles.css uses `--pill-radius`: half the thickness of the light strip itself. On a
+  // one-row bar that is exactly half the smaller side (a stadium with rounded end-caps);
+  // when the controls row makes the bar two rows thick, the corners stay put instead of
+  // inflating into an oval (decision 082).
+  const rx = Math.min(Math.min(w, h) / 2, (D + 2 * PAD) / 2);
   return `<g filter="url(#softshadow)">
       <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" fill="${PILL_FILL}" stroke="${PILL_BORDER}" stroke-width="1"/>
     </g>`;
@@ -269,116 +272,166 @@ function orientation() {
   </svg>\n`;
 }
 
-// ── 5. Settings: the right-click panel ───────────────────────────────────────
-function seg(x, y, w, labels, active) {
-  const h = 26;
+// ── 5. Controls: what a right-click on the bar reveals ──────────────────────
+// One close button per light plus the settings gear, on the row that appears beside the
+// lights (decisions 080/082). Drawn at the same scale as the other bar art.
+const CLOSE_BG = "#db4241"; // fixed red — oklch(60% 0.19 25), never the Error color
+const CLOSE_INK = "#fff6f5"; // oklch(98% 0.01 25)
+
+function closeButton(cx, cy) {
+  const k = R * 0.42;
+  return `<g opacity="0.62"><circle cx="${cx}" cy="${cy}" r="${R}" fill="${CLOSE_BG}"/>` +
+    `<path d="M ${cx - k} ${cy - k} L ${cx + k} ${cy + k} M ${cx + k} ${cy - k} L ${cx - k} ${cy + k}" stroke="${CLOSE_INK}" stroke-width="2.2" stroke-linecap="round"/></g>`;
+}
+
+// The gear, drawn exactly as main.js draws it: eight teeth around a ring, in a 24-unit
+// box scaled to 1.7 lights across, so the icon overflows its slot the way it does live.
+function gearIcon(cx, cy, ink = "rgba(255,255,255,0.88)") {
+  const k = (D * 1.7) / 24;
+  const teeth = [0, 45, 90, 135, 180, 225, 270, 315]
+    .map((a) => `<rect x="-2.1" y="-11.2" width="4.2" height="5.4" rx="1.1" transform="rotate(${a})"/>`)
+    .join("");
+  return `<g transform="translate(${cx}, ${cy}) scale(${k.toFixed(3)})" fill="${ink}" opacity="0.78">
+      ${teeth}<circle r="6.1" fill="none" stroke="${ink}" stroke-width="3.4"/>
+    </g>`;
+}
+
+function controls() {
+  const seq = [{ state: "running" }, { state: "blocked" }, { state: "done" }, { state: "idle" }];
+  const ROWGAP = 16; // #strip's 7px gap at this art's scale
+  const pad = PAD + 8;
+  // The controls row is one slot longer than the lights (the gear sits past the end), and
+  // the pill grows to the longer row — the lights themselves never move.
+  const inner = (seq.length + 1) * D + seq.length * GAP;
+  const w = inner + 2 * pad;
+  const h = 2 * D + ROWGAP + 2 * PAD;
+  const W = 620;
+  const H = 260;
+  const x = (W - w) / 2;
+  const y = (H - h) / 2 - 10;
+  let grads = "";
+  let dots = "";
+  let ctrls = "";
+  seq.forEach((it, i) => {
+    const cx = x + pad + R + i * (D + GAP);
+    const gid = `cb${i}`;
+    const st = STATES[it.state];
+    if (st.glow > 0) grads += haloGradient(gid, st.color, st.glow);
+    dots += dot(cx, y + PAD + R, it.state, gid, null);
+    ctrls += closeButton(cx, y + PAD + D + ROWGAP + R);
+  });
+  ctrls += gearIcon(x + pad + R + seq.length * (D + GAP), y + PAD + D + ROWGAP + R);
+  const capY = y + h + 34;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The light bar after a right-click: a row of four lights with a red close button under each one, and a settings gear one slot past the last close button.">
+    ${backdrop(W, H)}
+    <defs>${SHADOW_DEF}${grads}</defs>
+    ${pill(x, y, w, h)}${dots}${ctrls}
+    <text x="${W / 2}" y="${capY}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="15" text-anchor="middle">Right-click: one close button per light, and the settings gear</text>
+  </svg>\n`;
+}
+
+// ── 6. Settings: the window the gear opens ───────────────────────────────────
+// A normal, decorated window that follows the system appearance (decision 082), so this
+// one picture is drawn light — unlike the bar art, it is not part of the overlay.
+const WIN_BG = "#ffffff";
+const WIN_BAR = "#ececee";
+const WIN_SIDE = "#f2f2f4";
+const WIN_INK = "#1d1d1f";
+const WIN_MUTED = "#6c6c70";
+const WIN_LINE = "rgba(0,0,0,0.12)";
+const WIN_ACCENT = "#0a6cff"; // the stock macOS accent; the real window uses AccentColor
+
+function lseg(x, y, w, labels, active) {
+  const h = 24;
   const sw = w / labels.length;
-  let out = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="7" fill="none" stroke="${UI_LINE}" stroke-width="1"/>`;
+  let out = `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="7" fill="none" stroke="${WIN_LINE}" stroke-width="1"/>`;
   labels.forEach((lab, i) => {
     const sx = x + i * sw;
     const on = i === active;
-    if (on) out += `<rect x="${sx}" y="${y}" width="${sw}" height="${h}" rx="${i === 0 || i === labels.length - 1 ? 7 : 0}" fill="${ACCENT}"/>`;
-    if (i > 0) out += `<line x1="${sx}" y1="${y}" x2="${sx}" y2="${y + h}" stroke="${UI_LINE}" stroke-width="1"/>`;
-    out += `<text x="${sx + sw / 2}" y="${y + h / 2 + 1}" fill="${on ? ACCENT_INK : UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" font-weight="${on ? 600 : 400}" text-anchor="middle" dominant-baseline="central">${lab}</text>`;
+    if (on) out += `<rect x="${sx}" y="${y}" width="${sw}" height="${h}" rx="7" fill="${WIN_ACCENT}"/>`;
+    if (i > 0) out += `<line x1="${sx}" y1="${y}" x2="${sx}" y2="${y + h}" stroke="${WIN_LINE}" stroke-width="1"/>`;
+    out += `<text x="${sx + sw / 2}" y="${y + h / 2 + 1}" fill="${on ? "#ffffff" : WIN_INK}" font-family="-apple-system, system-ui, sans-serif" font-size="12" text-anchor="middle" dominant-baseline="central">${lab}</text>`;
   });
   return out;
 }
-function slider(x, y, w, frac) {
-  const cy = y + 13;
+
+function lslider(x, y, w, frac) {
+  const cy = y + 12;
   const tx = x + w * frac;
-  return `<line x1="${x}" y1="${cy}" x2="${x + w}" y2="${cy}" stroke="${UI_LINE}" stroke-width="3" stroke-linecap="round"/>
-    <line x1="${x}" y1="${cy}" x2="${tx}" y2="${cy}" stroke="${ACCENT}" stroke-width="3" stroke-linecap="round"/>
-    <circle cx="${tx}" cy="${cy}" r="7" fill="${ACCENT}"/>`;
+  return `<line x1="${x}" y1="${cy}" x2="${x + w}" y2="${cy}" stroke="${WIN_LINE}" stroke-width="3" stroke-linecap="round"/>
+    <line x1="${x}" y1="${cy}" x2="${tx}" y2="${cy}" stroke="${WIN_ACCENT}" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="${tx}" cy="${cy}" r="6.5" fill="#ffffff" stroke="rgba(0,0,0,0.22)" stroke-width="1"/>`;
 }
-// A checkbox (per-state chime toggle): accent-filled with a check when on.
-function checkbox(x, y, on) {
-  const s = 15;
-  let out = `<rect x="${x}" y="${y}" width="${s}" height="${s}" rx="4" fill="${on ? ACCENT : "none"}" stroke="${UI_LINE}" stroke-width="1"/>`;
-  if (on) out += `<path d="M ${x + 3.5} ${y + 7.8} L ${x + 6.2} ${y + 10.6} L ${x + 11.5} ${y + 4.4}" fill="none" stroke="${ACCENT_INK}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`;
-  return out;
-}
+
 function settings() {
-  const PW = 320;
-  const P = 20; // panel padding
-  const x0 = P;
-  const x1 = PW - P; // right edge of content
-  const ctrlW = 150; // segmented-control / slider width, right-aligned to x1
-  const cx = x1 - ctrlW;
-  const rows = [];
-  let y = P;
-  // Lights row at the top of the panel (settings grows below the bar).
-  const lights = [{ state: "running" }, { state: "blocked" }, { state: "done" }, { state: "idle" }];
-  let grads = "";
-  let head = "";
-  const lgap = 22;
-  const lw = lights.length * D + (lights.length - 1) * lgap;
-  lights.forEach((it, i) => {
-    const dcx = PW / 2 - lw / 2 + R + i * (D + lgap);
-    const gid = `pl${i}`;
-    const s = STATES[it.state];
-    if (s.glow > 0) grads += haloGradient(gid, s.color, s.glow);
-    head += dot(dcx, y + R, it.state, gid, null);
-  });
-  y += D + 7;
-  // Close buttons (decision 080): one red x under each light, revealed with the panel.
-  // Fixed red — deliberately not the Error state color, which the user can change.
-  const CLOSE_BG = "#db4241"; // oklch(60% 0.19 25)
-  const CLOSE_INK = "#fff6f5"; // oklch(98% 0.01 25)
-  lights.forEach((_, i) => {
-    const dcx = PW / 2 - lw / 2 + R + i * (D + lgap);
-    const k = R * 0.42;
-    head += `<g opacity="0.62"><circle cx="${dcx}" cy="${y + R}" r="${R}" fill="${CLOSE_BG}"/>` +
-      `<path d="M ${dcx - k} ${y + R - k} L ${dcx + k} ${y + R + k} M ${dcx + k} ${y + R - k} L ${dcx - k} ${y + R + k}" stroke="${CLOSE_INK}" stroke-width="2.2" stroke-linecap="round"/></g>`;
-  });
-  y += D + 16;
-  const sep = () => { const s = `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="${UI_LINE}" stroke-width="1"/>`; y += 16; return s; };
-  const label = (t) => `<text x="${x0}" y="${y + 13}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" dominant-baseline="central">${t}</text>`;
-  let body = sep();
-  const segRow = (t, labels, active) => { const r = label(t) + seg(cx, y, ctrlW, labels, active); y += 38; return r; };
-  const sliderRow = (t, frac) => { const r = label(t) + slider(cx, y, ctrlW, frac); y += 34; return r; };
-  body += segRow("Orientation", ["Horizontal", "Vertical"], 0);
-  body += segRow("Sort", ["Stable", "Urgency"], 0);
-  body += segRow("Unknown", ["Show", "Hide"], 0);
-  body += sliderRow("Size", 0.4);
-  body += sliderRow("Padding", 0.55);
-  body += sliderRow("Opacity", 0.82);
-  body += sep();
-  // Colors: 2-column grid of state swatches.
-  const colStates = [["running", "Running"], ["blocked", "Blocked"], ["done", "Done"], ["idle", "Idle"], ["error", "Error"]];
-  const colW = (x1 - x0) / 2;
-  colStates.forEach(([st, name], i) => {
-    const col = i % 2;
-    const rowi = Math.floor(i / 2);
-    const rx = x0 + col * colW;
-    const ry = y + rowi * 26;
-    body += `<text x="${rx}" y="${ry + 10}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" dominant-baseline="central">${name}</text>`;
-    body += `<rect x="${rx + colW - 34}" y="${ry + 2}" width="22" height="16" rx="4" fill="${STATES[st].color}" stroke="${UI_LINE}" stroke-width="1"/>`;
-  });
-  y += 3 * 26 + 6;
-  body += sep();
-  // Audio: master On/Off toggle + the revealed sub-panel (per-state chimes + volume).
-  const checkRow = (t, on) => { const r = label(t) + checkbox(x1 - 15, y, on); y += 24; return r; };
-  body += segRow("Audio", ["Off", "On"], 1);
-  body += checkRow("Blocked chime", true);
-  body += checkRow("Error chime", true);
-  body += checkRow("Done chime", true);
-  body += sliderRow("Volume", 0.6);
-  body += sep();
-  // Footer links.
-  const footer = `<text x="${x0}" y="${y + 10}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" text-decoration="underline" dominant-baseline="central">Reload</text>
-    <text x="${PW / 2}" y="${y + 10}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" text-decoration="underline" text-anchor="middle" dominant-baseline="central">Reset to defaults</text>
-    <text x="${x1}" y="${y + 10}" fill="#e8807f" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" text-decoration="underline" text-anchor="end" dominant-baseline="central">Quit</text>`;
-  y += 22;
-  const PH = y + P - 10;
+  const PW = 560;
+  const PH = 430; // the window's real size
+  const TITLE = 28;
+  const RAIL = 148;
   const W = 620;
-  const H = PH + 48;
+  const H = PH + 52;
   const px = (W - PW) / 2;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The AgentStatus settings panel, opened by right-clicking the bar: the lights with a row of red close buttons beneath them, orientation and sort toggles, an Unknown Show/Hide toggle, size/padding/opacity sliders, per-state color swatches, an Audio On/Off toggle with per-state chime checkboxes (Blocked, Error, Done) and a volume slider, and reload/reset/quit links.">
+  const win = (t) => `<text font-family="-apple-system, system-ui, sans-serif" ${t}`;
+
+  // Sidebar.
+  const panes = ["General", "Lights", "Colors", "Audio", "About"];
+  let rail = `<rect x="0" y="${TITLE}" width="${RAIL}" height="${PH - TITLE}" fill="${WIN_SIDE}"/>
+    <line x1="${RAIL}" y1="${TITLE}" x2="${RAIL}" y2="${PH}" stroke="${WIN_LINE}" stroke-width="1"/>`;
+  panes.forEach((name, i) => {
+    const y = TITLE + 12 + i * 28;
+    const on = i === 0;
+    if (on) rail += `<rect x="8" y="${y}" width="${RAIL - 16}" height="26" rx="6" fill="${WIN_ACCENT}"/>`;
+    rail += win(`x="18" y="${y + 13}" fill="${on ? "#ffffff" : WIN_INK}" font-size="12.5" dominant-baseline="central">${name}</text>`);
+  });
+
+  // The General pane.
+  const cx0 = RAIL + 18;
+  const cx1 = PW - 18;
+  const ctrlW = 170;
+  let y = TITLE + 16;
+  let body = "";
+  const row = (label, control) => {
+    body += win(`x="${cx0}" y="${y + 12}" fill="${WIN_MUTED}" font-size="12.5" dominant-baseline="central">${label}</text>`) + control;
+    y += 34;
+  };
+  row("Mode", lseg(cx1 - ctrlW, y, ctrlW, ["Floating", "Menu bar"], 0));
+  row("Orientation", lseg(cx1 - ctrlW, y, ctrlW, ["Horizontal", "Vertical"], 0));
+  row("Light size", lslider(cx1 - 150, y, 150, 0.4));
+  row("Padding", lslider(cx1 - 150, y, 150, 0.55));
+  row("Opacity", lslider(cx1 - 150, y, 150, 0.82));
+  y += 6;
+  body += win(`x="${cx0}" y="${y + 10}" fill="${WIN_MUTED}" font-size="11">Right-click the bar to reveal its controls: a close</text>`);
+  body += win(`x="${cx0}" y="${y + 25}" fill="${WIN_MUTED}" font-size="11">button for each light, and the gear that opens this window.</text>`);
+
+  // Footer.
+  const fy = PH - 40;
+  let footer = `<line x1="${RAIL}" y1="${fy}" x2="${PW}" y2="${fy}" stroke="${WIN_LINE}" stroke-width="1"/>`;
+  const btns = [["Reload", 62], ["Reset to defaults", 118], ["Quit AgentStatus", 116]];
+  let bx = cx1;
+  for (const [label, bw] of btns.reverse()) {
+    bx -= bw;
+    footer += `<rect x="${bx}" y="${fy + 8}" width="${bw}" height="24" rx="6" fill="none" stroke="${WIN_LINE}" stroke-width="1"/>`;
+    footer += win(`x="${bx + bw / 2}" y="${fy + 21}" fill="${WIN_INK}" font-size="12" text-anchor="middle" dominant-baseline="central">${label}</text>`);
+    bx -= 8;
+  }
+
+  const lights = ["#ff5f57", "#febc2e", "#28c840"]
+    .map((c, i) => `<circle cx="${16 + i * 18}" cy="${TITLE / 2}" r="6" fill="${c}"/>`)
+    .join("");
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The AgentStatus settings window: a sidebar listing General, Lights, Colors, Audio and About, with the General pane showing Mode and Orientation toggles and sliders for light size, padding and opacity, and Reload, Reset to defaults and Quit AgentStatus buttons along the bottom.">
     ${backdrop(W, H)}
-    <defs>${grads}</defs>
-    <g transform="translate(${px}, 24)">
-      <rect x="0" y="0" width="${PW}" height="${PH}" rx="15" fill="${PANEL_BG}" stroke="${UI_LINE}" stroke-width="1"/>
-      ${head}${body}${footer}
+    <defs>${SHADOW_DEF}</defs>
+    <clipPath id="winclip"><rect x="0" y="0" width="${PW}" height="${PH}" rx="10"/></clipPath>
+    <g transform="translate(${px}, 26)" filter="url(#softshadow)">
+      <g clip-path="url(#winclip)">
+      <rect x="0" y="0" width="${PW}" height="${PH}" rx="10" fill="${WIN_BG}"/>
+      <path d="M 0 10 a 10 10 0 0 1 10 -10 h ${PW - 20} a 10 10 0 0 1 10 10 v ${TITLE - 10} h -${PW} Z" fill="${WIN_BAR}"/>
+      <line x1="0" y1="${TITLE}" x2="${PW}" y2="${TITLE}" stroke="${WIN_LINE}" stroke-width="1"/>
+      ${lights}
+      ${win(`x="${PW / 2}" y="${TITLE / 2 + 1}" fill="#3c3c43" font-size="12.5" font-weight="600" text-anchor="middle" dominant-baseline="central">AgentStatus Settings</text>`)}
+      ${rail}${body}${footer}
+      </g>
+      <rect x="0.5" y="0.5" width="${PW - 1}" height="${PH - 1}" rx="10" fill="none" stroke="${WIN_LINE}" stroke-width="1"/>
     </g>
   </svg>\n`;
 }
@@ -387,5 +440,6 @@ writeFileSync(join(DIR, "lightbar-hero.svg"), hero());
 writeFileSync(join(DIR, "lightbar-states.svg"), states());
 writeFileSync(join(DIR, "lightbar-hover.svg"), hover());
 writeFileSync(join(DIR, "lightbar-orientation.svg"), orientation());
+writeFileSync(join(DIR, "lightbar-controls.svg"), controls());
 writeFileSync(join(DIR, "lightbar-settings.svg"), settings());
-console.log("Wrote docs/lightbar-{hero,states,hover,orientation,settings}.svg");
+console.log("Wrote docs/lightbar-{hero,states,hover,orientation,controls,settings}.svg");

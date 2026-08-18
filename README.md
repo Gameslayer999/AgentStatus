@@ -148,7 +148,10 @@ a Cursor agent.
   opens that agent conversation. Set **Unknown → Hide** in the settings to keep these
   rings off the bar.
 - **A ring pip** at the end of the bar counts the Cursor agents that wait for you and have
-  no light of their own. Click the pip to open the next one in the queue.
+  no light of their own. Click the pip to open the next one in the queue. The click also
+  presses **Clear All Notifications** in Cursor's own menu, because Cursor offers no way to
+  clear one agent's notification from outside. So one click empties the whole count, not only
+  the agent it opens, and the pip disappears until the next agent notifies you.
 - **An orange light always means one thing: that session waits for you to decide.** It is a
   permission prompt, a question, or a **background agent** that stopped to ask you something
   and now waits for the answer. Click it to go there.
@@ -183,19 +186,28 @@ a Cursor agent.
   front. A **background agent** has no terminal of its own, so the first click opens it in a
   Ghostty tab; every click after that goes to the tab that is already open, never to a new
   one.
-- **Right-click the bar** to open the settings.
-- **Close a light yourself.** The settings panel adds a row of small red × buttons beside
-  the lights, one for each light. Click one to remove that light now, instead of waiting
-  for the application to notice the session is over. If the session is in fact still
-  running, its light comes back on its next event.
+- **Right-click the bar** to reveal its controls: one small red × beside each light, and
+  a settings gear one slot past them. Right-click again to put them away.
+- **Close a light yourself.** Click the × beside a light to remove it now, instead of
+  waiting for the application to notice the session is over. If the session is in fact
+  still running, its light comes back on its next event.
+- **Click the gear** to open the settings window.
 - **Drag the bar** to move it. Hold the bar by the padding, not by a light. The
   application keeps the position.
 
 ## Customize it
 
-**Right-click** the bar to open the settings panel. All settings stay after a restart.
+**Right-click** the bar to reveal its controls — a close button under each light, and the
+settings gear.
 
-![The AgentStatus settings panel. The lights sit at the top with a row of red close buttons beneath them. It has Orientation, Sort, and Unknown controls, sliders for Size, Padding, and Opacity, color swatches for Running, Blocked, Done, Idle, and Error, and Reload, Reset to defaults, and Quit links.](docs/lightbar-settings.svg)
+![The light bar after a right-click: four lights with a red close button under each one, and a settings gear one slot past the last close button.](docs/lightbar-controls.svg)
+
+**Click the gear** to open the settings window: a normal window with **General**,
+**Lights**, **Colors**, **Audio**, and **About** sections, which follows your light or
+dark appearance. All settings stay after a restart, and the bar changes as you change
+them.
+
+![The AgentStatus settings window: a sidebar listing General, Lights, Colors, Audio, and About, with the General pane showing Mode and Orientation toggles, sliders for light size, padding, and opacity, and Reload, Reset to defaults, and Quit AgentStatus buttons along the bottom.](docs/lightbar-settings.svg)
 
 - **Mode** — show the lights as the floating bar (default), or in the **macOS menu bar** /
   the **Windows notification area**. Refer to
@@ -205,36 +217,40 @@ a Cursor agent.
 
 ![The same light bar as a horizontal row on the left and as a vertical column on the right.](docs/lightbar-orientation.svg)
 
-- **Sort** — **Stable** (default) keeps each light in the slot it got when its session
+- **Order** — **Stable** (default) keeps each light in the slot it got when its session
   appeared, so a light never moves while you aim at it and a new session goes to the end of
   the bar. **Urgency** moves the attention states (error, then blocked, then done) to the
   front, so a light moves when its own state changes.
-- **Unknown** — **Show** (default) or **Hide** the hollow rings.
-- **Close buttons** — while the panel is open, a small red × sits beside each light. The
-  row goes on the side that faces the middle of the screen, the same way the panel itself
-  opens toward the middle: under a horizontal bar near the top of the screen and above one
-  near the bottom, to the right of a vertical bar on the left of the screen and to its left
-  on the right. The lights do not move. Click a button to drop that light at once. The buttons appear only with the panel, so a light is never a click away from
-  being deleted while you are aiming at it. A light removed this way returns if its
-  session is still active and reports again.
-- **Size, padding, and opacity** — change the size of the lights, the space in the bar,
-  and the opacity of the bar. The lights stay fully opaque.
+- **Unknown state** — **Show** (default) or **Hide** the hollow rings.
+- **Cursor pip** — **Show** (default) or **Hide** the single ring that counts the Cursor
+  composers waiting for you. Hiding it also stops the Accessibility read behind it, which
+  is the one thing the application does that can close Cursor's own menu-bar menu while
+  you have it open.
+- **Close buttons** — a right-click on the bar puts a small red × beside each light, and
+  the settings gear one slot past them. The row goes on the side that faces the middle of
+  the screen: under a horizontal bar near the top of the screen and above one near the
+  bottom, to the right of a vertical bar on the left of the screen and to its left on the
+  right. The lights do not move. Click a button to drop that light at once. The buttons
+  appear only after a right-click, so a light is never a click away from being deleted
+  while you are aiming at it. A light removed this way returns if its session is still
+  active and reports again.
+- **Light size, padding, and opacity** — change the size of the lights, the space in the
+  bar, and the opacity of the bar. The lights stay fully opaque.
 - **Colors** — change the color of each of the five states with the system color picker.
-- **Audio alerts** — off by default. Set **Audio** to on to get a short tone when a
-  session becomes blocked, has an error, or completes a turn. In the sub-panel, select
+- **Audio alerts** — off by default. Set **Alerts** to on to get a short tone when a
+  session becomes blocked, has an error, or completes a turn. Below the toggle, select
   which of the three events make a tone, and set the volume. The tone sounds one time at
   the change of state, and only while the application runs.
 
 ### Run it in the menu bar instead
 
 For a smaller and permanent presence, set **Mode → Menu bar** (macOS) or **Mode → Tray**
-(Windows) in the settings panel. The same lights become a live item in the macOS menu bar or
-the Windows notification area. Click the item to show the full bar as a popover.
+(Windows) in the settings window. The same lights become a live item in the macOS menu bar
+or the Windows notification area. Click the item to show the full bar as a popover.
 Click-to-focus, tooltips, and subagent badges continue to operate.
 
-On Windows the popover opens **with the settings panel already shown** — the tray item there
-is a single dot, so the panel is what the popover is for. It closes when you click anywhere
-else, and always opens clear of the taskbar.
+On Windows the popover closes when you click anywhere else, and always opens clear of the
+taskbar.
 
 - **Dots or Single** (macOS) — show one dot for each session (default), or one dot for the
   most urgent state (error, then blocked, then done, then running, then idle). One dot uses

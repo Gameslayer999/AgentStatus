@@ -1,0 +1,251 @@
+/* AgentStatus — settings window (decision 082). A normal, decorated window that
+   follows the system appearance, so it sits next to System Settings rather than
+   next to the bar. The bar's own dark-frosted look deliberately does not apply
+   here: this is a document window, not the overlay. */
+
+:root {
+  color-scheme: light dark;
+
+  /* The system accent, with a static fallback for engines that don't expose the
+     `AccentColor` system color (the second declaration simply wins where it does). */
+  --accent: #0a6cff;
+  --accent: AccentColor;
+  --accent-ink: #ffffff;
+  --accent-ink: AccentColorText;
+
+  --bg: #ffffff;
+  --sidebar-bg: #f2f2f4;
+  --ink: #1d1d1f;
+  --muted: #6c6c70;
+  --line: rgba(0, 0, 0, 0.12);
+  --hover: rgba(0, 0, 0, 0.06);
+  --danger: #c1352b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e1e;
+    --sidebar-bg: #2a2a2c;
+    --ink: #f2f2f5;
+    --muted: #9b9ba1;
+    --line: rgba(255, 255, 255, 0.14);
+    --hover: rgba(255, 255, 255, 0.08);
+    --danger: #ff6b60;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 148px 1fr;
+  grid-template-rows: 1fr auto;
+  background: var(--bg);
+  color: var(--ink);
+  font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+
+#rail {
+  grid-row: 1 / 3; /* full height, like System Settings */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 8px;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--line);
+}
+
+#rail button {
+  appearance: none;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+#rail button:hover {
+  background: var(--hover);
+}
+
+#rail button.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* ── Content pane ────────────────────────────────────────────────────────── */
+
+#pane {
+  overflow-y: auto;
+  padding: 16px 18px;
+}
+
+section[hidden] {
+  display: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 28px;
+}
+
+/* Same specificity fight as the bar's panel had: `.row { display: flex }` would beat
+   the UA `[hidden] { display: none }` and leave a conditional row always visible. */
+.row[hidden] {
+  display: none;
+}
+
+.label {
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.note {
+  margin: 6px 0 14px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.note:last-child {
+  margin-bottom: 0;
+}
+
+/* Segmented control — one choice of two, macOS-style. */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.seg button {
+  appearance: none;
+  border: none;
+  margin: 0;
+  padding: 4px 11px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: default;
+}
+
+.seg button + button {
+  border-left: 1px solid var(--line);
+}
+
+.seg button:hover {
+  background: var(--hover);
+}
+
+.seg button.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+input[type="range"] {
+  width: 140px;
+  accent-color: var(--accent);
+  cursor: default;
+}
+
+input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: default;
+}
+
+input[type="color"] {
+  width: 44px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: none;
+  cursor: default;
+}
+
+input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
+/* Keyboard focus: an instant accent ring, never a transition. */
+:is(#rail button, .seg button, input, footer button):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 5px;
+}
+
+#audio-panel[hidden] {
+  display: none;
+}
+
+/* ── About ───────────────────────────────────────────────────────────────── */
+
+h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.version {
+  margin: 2px 0 12px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+
+footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line);
+}
+
+footer button {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 12px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: default;
+}
+
+footer button:hover {
+  background: var(--hover);
+}
+
+#quit-btn:hover {
+  color: var(--danger);
+}

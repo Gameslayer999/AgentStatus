@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="settings.css" />
+    <title>AgentStatus Settings</title>
+    <script src="/prefs.js" defer></script>
+    <script src="/settings.js" defer></script>
+  </head>
+  <body>
+    <!-- Sidebar sections, one pane visible at a time (decision 082). -->
+    <nav id="rail">
+      <button type="button" data-pane="general" class="active">General</button>
+      <button type="button" data-pane="lights">Lights</button>
+      <button type="button" data-pane="colors">Colors</button>
+      <button type="button" data-pane="audio">Audio</button>
+      <button type="button" data-pane="about">About</button>
+    </nav>
+
+    <main id="pane">
+      <section data-pane="general">
+        <div class="row">
+          <span class="label">Mode</span>
+          <div class="seg" id="mode-seg">
+            <button type="button" data-mode="floating">Floating</button>
+            <button type="button" data-mode="menubar">Menu bar</button>
+          </div>
+        </div>
+        <div class="row" id="condense-row" hidden>
+          <span class="label">Menu bar</span>
+          <div class="seg" id="condense-seg">
+            <button type="button" data-condense="false">Dots</button>
+            <button type="button" data-condense="true">Single</button>
+          </div>
+        </div>
+        <div class="row" id="orient-row">
+          <span class="label">Orientation</span>
+          <div class="seg" id="orient-seg">
+            <button type="button" data-orient="horizontal">Horizontal</button>
+            <button type="button" data-orient="vertical">Vertical</button>
+          </div>
+        </div>
+        <div class="row">
+          <span class="label">Light size</span>
+          <input type="range" id="size-range" min="8" max="24" step="1" />
+        </div>
+        <div class="row">
+          <span class="label">Padding</span>
+          <input type="range" id="pad-range" min="2" max="20" step="1" />
+        </div>
+        <div class="row">
+          <span class="label">Opacity</span>
+          <input type="range" id="opacity-range" min="0" max="100" step="5" />
+        </div>
+        <p class="note">Right-click the bar to reveal its controls: a close button for
+          each light, and the gear that opens this window.</p>
+      </section>
+
+      <section data-pane="lights" hidden>
+        <div class="row">
+          <span class="label">Order</span>
+          <div class="seg" id="sort-seg">
+            <button type="button" data-sort="stable">Stable</button>
+            <button type="button" data-sort="urgency">Urgency</button>
+          </div>
+        </div>
+        <p class="note">Stable keeps each light where it first appeared. Urgency puts
+          the sessions needing you first.</p>
+        <div class="row">
+          <span class="label">Unknown state</span>
+          <div class="seg" id="unknown-seg">
+            <button type="button" data-unknown="true">Show</button>
+            <button type="button" data-unknown="false">Hide</button>
+          </div>
+        </div>
+        <p class="note">A Cursor window with no folder open runs no hooks, so its state
+          can't be read. It draws as a hollow ring.</p>
+        <div class="row" id="pip-row">
+          <span class="label">Cursor pip</span>
+          <div class="seg" id="pip-seg">
+            <button type="button" data-pip="true">Show</button>
+            <button type="button" data-pip="false">Hide</button>
+          </div>
+        </div>
+        <p class="note" id="pip-note">One extra ring counting the Cursor composers
+          waiting for you, read from Cursor's own menu-bar item. Hiding it also stops
+          that read, which can close Cursor's menu while you have it open.</p>
+      </section>
+
+      <section data-pane="colors" hidden>
+        <div class="colors" id="colors">
+          <div class="row"><span class="label">Running</span><input type="color" data-state="running" /></div>
+          <div class="row"><span class="label">Blocked</span><input type="color" data-state="blocked" /></div>
+          <div class="row"><span class="label">Done</span><input type="color" data-state="done" /></div>
+          <div class="row"><span class="label">Idle</span><input type="color" data-state="idle" /></div>
+          <div class="row"><span class="label">Error</span><input type="color" data-state="error" /></div>
+        </div>
+        <p class="note">Blocked and error pulse; done is steady and bright; idle is
+          dimmed. Colors apply to the bar and the menu-bar icon alike.</p>
+      </section>
+
+      <section data-pane="audio" hidden>
+        <div class="row">
+          <span class="label">Alerts</span>
+          <div class="seg" id="audio-seg">
+            <button type="button" data-audio="off">Off</button>
+            <button type="button" data-audio="on">On</button>
+          </div>
+        </div>
+        <div id="audio-panel" hidden>
+          <div class="row"><span class="label">Blocked chime</span><input type="checkbox" data-chime="blocked" /></div>
+          <div class="row"><span class="label">Error chime</span><input type="checkbox" data-chime="error" /></div>
+          <div class="row"><span class="label">Done chime</span><input type="checkbox" data-chime="done" /></div>
+          <div class="row">
+            <span class="label">Volume</span>
+            <input type="range" id="vol-range" min="0" max="100" step="5" />
+          </div>
+        </div>
+        <p class="note">A chime plays once when a session enters that state — not while
+          it stays there.</p>
+      </section>
+
+      <section data-pane="about" hidden>
+        <h1>AgentStatus</h1>
+        <p class="version" id="version">—</p>
+        <p class="note">A floating light bar for live Claude Code and Cursor session
+          status. One light per session: green running, orange waiting on you, white
+          finished and unread, gray idle, red error.</p>
+        <p class="note">Clicking a light jumps to that session. Focusing another app's
+          window and reading Cursor's menu-bar item both need macOS Accessibility
+          permission, granted once in System Settings → Privacy &amp; Security.</p>
+      </section>
+    </main>
+
+    <footer>
+      <button type="button" id="reload-btn">Reload</button>
+      <button type="button" id="reset-btn">Reset to defaults</button>
+      <button type="button" id="quit-btn">Quit AgentStatus</button>
+    </footer>
+  </body>
+</html>

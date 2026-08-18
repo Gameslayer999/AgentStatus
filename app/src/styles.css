@@ -12,8 +12,8 @@ body {
 }
 
 #bar {
-  /* Light size + per-state colors are CSS variables so the settings panel can
-     override them at runtime (JS sets these from localStorage). Defaults here are
+  /* Light size + per-state colors are CSS variables so the settings window can
+     change them at runtime (JS sets these from the saved prefs). Defaults here are
      the originals, so the bar looks right before/without any saved prefs. */
   --dot-size: 13px;
   --bar-pad: 9px; /* wrapper padding around the lights; +4px on the sides keeps the pill shape */
@@ -24,17 +24,17 @@ body {
   --c-idle: #7f8c8d;
   --c-error: #e74c3c;
 
-  /* One considered UI accent for the settings panel (active toggles, slider thumb,
-     focus rings). Deliberately blue-family — the only hue that doesn't collide with
-     any of the five state colors above — but a hand-picked OKLCH indigo, not the
-     stock #3b82f6 Tailwind default. Panel neutrals below are tinted toward the same
-     cool hue (262) as the pill fill so the surface reads as one material, not
-     white-on-black. */
+  /* One considered UI accent, worn by the subagent count badge. Deliberately
+     blue-family — the only hue that doesn't collide with any of the five state colors
+     above — but a hand-picked OKLCH indigo, not the stock #3b82f6 Tailwind default. */
   --ui-accent: oklch(60% 0.15 262);
   --ui-accent-ink: oklch(98% 0.01 262);
-  --ui-ink: oklch(96% 0.008 262); /* panel text/values */
-  --ui-muted: oklch(96% 0.008 262 / 0.6); /* labels — recede under the values */
-  --ui-line: oklch(96% 0.008 262 / 0.13); /* dividers, control borders */
+
+  /* Half the thickness of the light strip itself — the radius a bar of one row of
+     lights already has. Keeping it fixed means revealing the controls row grows a
+     stadium (straight sides, the same rounded ends) instead of inflating into an oval,
+     which a 999px radius would do the moment the box stops being one row thick. */
+  --pill-radius: calc((var(--dot-size) + 2 * var(--bar-pad)) / 2);
 
   position: fixed;
   top: 0;
@@ -44,7 +44,7 @@ body {
   align-items: center;
   gap: 9px;
   padding: var(--bar-pad) calc(var(--bar-pad) + 4px);
-  border-radius: 999px;
+  border-radius: var(--pill-radius);
   /* The drop shadow lives on #bar (not #pill) because #pill is clipped to its own
      shape with clip-path, which would clip the outer shadow away. A box-shadow
      follows #bar's border-radius, so it stays a rounded shadow with no leak. */
@@ -67,34 +67,17 @@ body {
   z-index: -1;
   background: rgba(20, 22, 26, var(--bar-opacity));
   border: 1px solid rgba(255, 255, 255, calc(var(--bar-opacity) * 0.11));
-  border-radius: inherit; /* tracks #bar (stadium, or 15px when settings-open) */
+  border-radius: inherit; /* tracks #bar's stadium */
   backdrop-filter: blur(calc(var(--bar-opacity) * 17px));
   -webkit-backdrop-filter: blur(calc(var(--bar-opacity) * 17px));
-  /* Clamp the blur to the stadium. 999px clamps to a half-height radius; the tall
-     settings panel overrides this to match its 15px corners. */
-  clip-path: inset(0 round 999px);
+  /* Clamp the blur to the stadium; clip-path takes a fixed value, so it repeats the
+     radius rather than inheriting it. */
+  clip-path: inset(0 round var(--pill-radius));
   pointer-events: none; /* dragging/clicks belong to #bar and the lights */
 }
 #bar:active {
   cursor: grabbing;
 }
-/* Opening the settings panel turns the pill into a rounded panel — a stadium
-   radius on a tall box looks wrong. */
-#bar.settings-open {
-  border-radius: 15px;
-}
-/* border-radius: inherit tracks the panel shape, but clip-path is a fixed value and
-   must be switched to match the 15px corners. */
-#bar.settings-open #pill {
-  clip-path: inset(0 round 15px);
-}
-/* Grow the panel ABOVE the lights (when the bar sits in the bottom half of the
-   screen). DOM order is lights → settings; column-reverse renders settings on top
-   while the lights stay anchored in place. */
-#bar.panel-above {
-  flex-direction: column-reverse;
-}
-
 /* Lights + the close-button row (decision 080). flex-start, not center: when the
    closers row is one item shorter than the lights row (the Cursor pip has no close
    button) centering would slide every X half a light out of line with the light it
@@ -109,8 +92,8 @@ body {
 #bar.vertical #strip {
   flex-direction: row;
 }
-/* Keep the buttons on the side facing the middle of the screen — the same direction
-   the settings panel grows (see chooseGrowthDirection). A bar parked on the bottom
+/* Keep the buttons on the side facing the middle of the screen (see
+   chooseGrowthDirection). A bar parked on the bottom
    edge would otherwise push its own close buttons off the screen, and a vertical bar
    on the right edge the same. The lights never move either way: the strip grows
    around them.  Horizontal takes the above/below answer, vertical the left/right one. */
@@ -129,7 +112,7 @@ body {
 
 /* One close button per light, laid out with the same box size and the same gap as
    the lights so each X lines up with the light it closes. Only shown while the
-   settings panel is open. */
+   settings window is open. */
 #closers {
   display: inline-flex;
   align-items: center;
@@ -174,6 +157,45 @@ body {
   transform: scale(1.18);
 }
 #bar.nohover .closer:hover {
+  transform: none;
+}
+/* The settings gear, last in the controls row. A bare icon rather than a filled chip:
+   the close buttons are chips because they are destructive and must read as one kind of
+   thing, and the gear is the one control in that row that isn't (decision 082). Its box
+   stays exactly one light wide so the close buttons keep their one-for-one alignment
+   with the lights (decision 080) — the drawing simply overflows it, the way a subagent
+   badge overflows its dot. */
+.gear {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--dot-size);
+  height: var(--dot-size);
+  flex: none;
+  overflow: visible;
+  color: rgba(255, 255, 255, 0.88);
+  opacity: 0.78;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+.gear svg {
+  display: block;
+  width: calc(var(--dot-size) * 1.7);
+  height: calc(var(--dot-size) * 1.7);
+  fill: currentColor;
+}
+/* Same widened pointer target as a close button — a dot can be as small as 8px. */
+.gear::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+.gear:hover {
+  opacity: 1;
+  transform: scale(1.18);
+}
+#bar.nohover .gear:hover {
   transform: none;
 }
 /* Vertical orientation: stack the lights in a column. The window auto-resizes to
@@ -298,167 +320,4 @@ body {
   50% {
     opacity: 0.38;
   }
-}
-
-/* ── Settings panel ─────────────────────────────────────────────────────── */
-
-/* `#settings { display: flex }` would override the UA `[hidden]{display:none}` by
-   specificity, leaving the panel always visible — so hide it with a rule that wins. */
-#settings[hidden] {
-  display: none;
-}
-
-#settings {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
-  font: 500 11px/1.2 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  color: var(--ui-ink);
-}
-
-#settings .sep {
-  height: 1px;
-  background: var(--ui-line);
-}
-
-#settings .row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-/* Same specificity fight as #settings[hidden]: `#settings .row` sets display:flex,
-   which would beat the UA [hidden]{display:none}. This wins it back so the Condense
-   row stays hidden outside menu-bar mode. */
-#settings .row[hidden] {
-  display: none;
-}
-#settings .row-label {
-  white-space: nowrap;
-  color: var(--ui-muted); /* labels recede; the control/value is the figure */
-}
-
-/* Segmented horizontal/vertical toggle. */
-.seg {
-  display: inline-flex;
-  border: 1px solid var(--ui-line);
-  border-radius: 7px;
-  overflow: hidden;
-}
-.seg button {
-  appearance: none;
-  border: none;
-  margin: 0;
-  padding: 4px 9px;
-  background: transparent;
-  color: var(--ui-muted);
-  font: inherit;
-  cursor: pointer;
-}
-.seg button + button {
-  border-left: 1px solid var(--ui-line);
-}
-.seg button:hover {
-  background: oklch(96% 0.008 262 / 0.08);
-}
-.seg button.active {
-  background: var(--ui-accent);
-  color: var(--ui-accent-ink);
-}
-
-/* Size + padding + opacity sliders. */
-#size-range,
-#pad-range,
-#opacity-range {
-  width: 96px;
-  accent-color: var(--ui-accent);
-  cursor: pointer;
-}
-
-/* Keyboard focus: an instant accent ring on every control (Hallmark: focus rings
-   appear instantly, never transition in). No effect on mouse use — :focus-visible
-   only fires for keyboard traversal, which the panel had no indicator for before. */
-#settings :is(.seg button, input, button):focus-visible {
-  outline: 2px solid var(--ui-accent);
-  outline-offset: 1px;
-  border-radius: 4px;
-}
-
-/* Color rows: a native swatch per state, labeled. */
-#settings .colors {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px 12px;
-}
-#settings .crow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-#settings .crow input[type="color"] {
-  width: 22px;
-  height: 16px;
-  padding: 0;
-  border: 1px solid var(--ui-line);
-  border-radius: 4px;
-  background: none;
-  cursor: pointer;
-}
-#settings .crow input[type="color"]::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-#settings .crow input[type="color"]::-webkit-color-swatch {
-  border: none;
-  border-radius: 3px;
-}
-
-/* Audio sub-panel: revealed under the Audio On/Off toggle. Same vertical stack as
-   the settings panel, and the same [hidden]-wins specificity trick as the rows. */
-#audio-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-#audio-panel[hidden] {
-  display: none;
-}
-#vol-range {
-  width: 96px;
-  accent-color: var(--ui-accent);
-  cursor: pointer;
-}
-#audio-panel input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: var(--ui-accent);
-  cursor: pointer;
-}
-
-/* Footer links — low-key, on one row (Reload left, Reset right). */
-#settings .footer {
-  display: flex;
-  align-self: stretch;
-  justify-content: space-between;
-}
-#reload-btn,
-#reset-btn,
-#quit-btn {
-  appearance: none;
-  border: none;
-  padding: 2px 0;
-  background: none;
-  color: var(--ui-muted);
-  font: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-#reload-btn:hover,
-#reset-btn:hover {
-  color: var(--ui-ink);
-}
-#quit-btn:hover {
-  color: rgba(255, 120, 120, 0.95);
 }

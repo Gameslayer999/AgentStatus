@@ -12,6 +12,21 @@
   you something; the bar now reads the job's own `needs` to tell them apart, so only a job
   that is actually asking paints orange — and a finished one retires on #065's five-minute
   timer instead of holding a light for two hours.
+- **Settings live in their own window; the bar is lights again (decision 082).** A
+  right-click no longer grows a 16-control panel out of the strip — it reveals the bar's
+  controls: one red × per light (#080) and a settings **gear** one slot past them. The gear
+  opens a normal, decorated window with a sidebar (General / Lights / Colors / Audio /
+  About) that follows the system appearance. Preferences moved to a shared `prefs.js`, but
+  the **bar stays the source of truth**: the window asks it for a snapshot on open and
+  announces each change, and the bar alone applies them. New: **Lights → Cursor pip
+  Show/Hide**, where hiding also stops the Accessibility read behind the pip.
+- **The bar no longer interferes with Cursor's menu bar (decision 081).** Reported live:
+  Cursor's status-item menu closed itself as soon as it was opened. Both AX readers of that
+  item can cancel an open menu, and #052's `", Running"` veto — the deeper of the two — was
+  walking it every 5 s for as long as an **idle** Cursor light sat on the bar, to decide
+  something already decided. The walk is now gated on a light that could actually change:
+  zero reads in the steady state, one when a silent running light needs reconciling, and the
+  pip's 20 s read unchanged.
 - **Lights can now be closed by hand (decision 080).** Right-click reveals a row of small red
   × buttons alongside the lights — one per light — and clicking one deletes that session's
   status file immediately, instead of waiting for an evidence-based prune or the 2 h backstop.
@@ -265,6 +280,24 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 ---
 
 ## Now (build queue, in order)
+
+**Verify decision 083's two-press click against a live Cursor notification.** Each press is
+proven on its own (composer row opens the agent; `"Clear All Notifications"` takes the count
+2 → 0), but the **sequence** was never run end to end: Cursor quit before a fresh bullet
+appeared, and a bullet only arrives when an agent finishes a turn while Cursor is in the
+background. Unproven bit, and it is narrow: that the second AX walk still finds its row a beat
+after the first press. With a notification pending, run
+
+    cargo test --release -- --ignored --nocapture cursor_press_next_attention
+
+in `app/src-tauri` and confirm the menu-bar count goes to **0** and every bullet is gone.
+
+**A Cursor *session* light's click still leaves its notification up (same defect as #083).**
+#047's click presses that composer's tray row and nothing else, which on 3.15.6 opens the
+agent without clearing its bullet. Deliberately not fixed with #083: it was not what was
+reported, and the only clear Cursor exposes is all-or-nothing, so a click on one session's
+light would retire notifications for composers the user never touched. Decide whether that
+trade is worth making there too.
 
 **✅ CLEARED 2026-08-18 — decision 076 is verified on a Mac.** All seven checks below were
 run on macOS 26.6.1 (arm64, Rust 1.96.1, Node 25.1.0) against commit `776d052`. Results:
@@ -605,6 +638,56 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
   a missed attention light costs more than one that lingers. New test:
   `bg_blocked_needs_a_question`; `dump_cli_facts` now prints `needs` alongside the light it
   resolves to.
+
+- **2026-08-18** — **the settings panel became a settings window (decision 082).** "Lets
+  also move the settings off the bar: its starting to be a bit much." The panel had grown
+  from #015's single toggle to sixteen controls rendered inside the always-on-top strip,
+  which opened ~360 px tall. Now: `open_settings` builds a lazy 560×430 window
+  (`settings.html`/`.css`/`.js`, its own Tauri capability, since capabilities are scoped by
+  window label) with five sidebar sections and a Reload / Reset / Quit footer, drawn in the
+  system light or dark appearance rather than the bar's frosted dark. The bar keeps a
+  right-click that reveals its **controls row** — the × buttons plus a gear whose box is one
+  light wide (so #080's alignment holds) and whose SVG drawing is 1.7 lights across.
+  `prefs.js` is shared by both webviews, but the bar answers `prefs-request` with a
+  snapshot and owns `applyPref`, so nothing depends on two WKWebViews sharing a
+  localStorage. Also here: **Cursor pip Show/Hide** (hiding stops the AX read too, closing
+  out #081's residual), a `--pill-radius` that keeps the two-row bar a stadium instead of an
+  oval, #075's paint suppression extended to **both** toggle directions after "it's
+  flickering again … it's both ways", and #074's Windows popover-opens-with-the-panel
+  behaviour dropped along with the panel. New test: `app/tests/settings-gear.mjs`. README
+  art regenerated — `docs/lightbar-controls.svg` is new, `docs/lightbar-settings.svg` now
+  draws the window.
+
+- **2026-08-18** — **the pip's click now clears Cursor's notifications itself
+  (decision 083).** "Clicking the Cursor composer pip does not close out the notification in
+  the Cursor menu bar, so the pip just keeps coming back." #045's premise — press the
+  `"• <name>"` tray row and Cursor both opens the composer and marks it read, verified on
+  Cursor 3.12.10 — is **false on 3.15.6**. That row's click sends only `vscode:openComposer`,
+  whose handler opens the agent and clears neither half of a bullet
+  (`hasUnreadMessages || badgeCount > 0`); only `"Clear All Notifications"` sends
+  `vscode:clearAllNotifications` → `markAgentRead` + `clearAllBadges`. In **Glass** mode (this
+  user's Cursor) the listener that clears a composer's badge when its window is focused is
+  never registered, so a bullet outlives opening the composer by up to its **1 h** auto-clear
+  timer. Measured live: pressing the composer row leaves the count at **2** with *and* without
+  activating Cursor; pressing the clear-all row takes it **2 → 0** — so `AXPress` still
+  reaches Cursor's handlers and it is the row that changed. The click presses both rows now,
+  navigating first and clearing second. Cursor exposes no per-composer clear, so this
+  necessarily clears the other waiting composers' bullets — accepted over three alternatives
+  (see #083), since on Glass those bullets would sit for an hour regardless and their sessions
+  keep their own hook-driven lights.
+
+- **2026-08-18** — **stopped reading Cursor's menu when there is nothing to decide
+  (decision 081).** "I can't click into the Cursor menu bar item because it keeps clicking off
+  of it." Two paths read Cursor's status item over the Accessibility API and either cancels
+  the menu if it lands while it is open — #038 knew this and set the pip's cadence to a
+  deliberate 20 s, but #052's tray-row veto then added a deeper walk on a 5 s cache without
+  inheriting the constraint. It also ran when it could not matter: the guard's other
+  conditions (`terminal && stale && !subs_live`) stay true forever on a settled light, so an
+  idle Cursor light drove a walk into Cursor's menu every 5 s, forever, to assign `idle` to a
+  light already idle. `state != "idle"` now short-circuits ahead of the read. Measured with
+  the marker-gated trace the same fix adds to the walk: 45 s / two idle Cursor lights → **0**
+  walks; one silent running light → exactly **1** walk, then none. Residual, deliberately left
+  until it is reported: the pip's own 20 s read can still land on an open menu.
 
 - **2026-08-18** — **a light can be closed by hand (decision 080).** Every prune the bar had
   was evidence-based — closed window (#027), dead pid (#054), archived composer (#048),
