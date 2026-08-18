@@ -302,3 +302,187 @@ fn merge_hooks(
     std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)? + "\n")?;
     Ok(())
 }
+
+/// Undo the self-install, from the settings window's Uninstall button.
+///
+/// Two steps, both idempotent — running this with nothing installed succeeds quietly:
+/// 1. Drop this app's hook entries from `~/.claude/settings.json`, matched by the same
+///    `HOOK_MARKERS` the install path uses, so every other setting and every third-party
+///    hook survives byte-for-byte.
+/// 2. Delete the status directory (the installed hook binary and the per-session files),
+///    honouring the same `AGENTSTATUS_DIR` / `CLAUDESTATUS_DIR` overrides as the install.
+///
+/// The `settings.json.agentstatus-bak` backup is deliberately left in place: step 1 already
+/// restores the pre-install hook state, and the backup is the user's own copy of their
+/// config, not ours to delete.
+///
+/// Errors name the file and the OS error (Agent Guideline #11) — the caller shows them
+/// verbatim — and are returned *before* the app quits, so a failed uninstall leaves a
+/// running app rather than a half-removed one.
+pub fn uninstall() -> Result<(), String> {
+    let settings = claude_dir().join("settings.json");
+    remove_hooks(&settings)
+        .map_err(|e| format!("Could not update {}: {e}", settings.display()))?;
+
+    let status = status_dir();
+    if let Err(e) = std::fs::remove_dir_all(&status) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return Err(format!("Could not delete {}: {e}", status.display()));
+        }
+    }
+    Ok(())
+}
+
+/// Remove exactly our entries from a Claude hook config: our hooks out of each event's
+/// array, an event whose array we emptied, and the `hooks` object once it is empty.
+///
+/// The file is rewritten only when something of ours was actually found, so an uninstall
+/// with nothing installed does not touch the user's file at all. Unparseable JSON is left
+/// alone for the same reason — nothing of ours can be identified in it, so there is nothing
+/// to remove and overwriting it would destroy settings we cannot read.
+fn remove_hooks(path: &Path) -> std::io::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(path)?)
+    else {
+        return Ok(());
+    };
+    let Some(obj) = settings.as_object_mut() else {
+        return Ok(());
+    };
+
+    let mut changed = false;
+    let mut hooks_empty = false;
+    if let Some(hooks) = obj.get_mut("hooks").and_then(|h| h.as_object_mut()) {
+        for list in hooks.values_mut() {
+            if let Some(arr) = list.as_array_mut() {
+                let before = arr.len();
+                arr.retain(|entry| !is_ours(entry));
+                changed |= arr.len() != before;
+            }
+        }
+        if changed {
+            hooks.retain(|_, list| list.as_array().is_none_or(|a| !a.is_empty()));
+            hooks_empty = hooks.is_empty();
+        }
+    }
+    if !changed {
+        return Ok(());
+    }
+    if hooks_empty {
+        obj.remove("hooks");
+    }
+    std::fs::write(path, serde_json::to_string_pretty(&settings)? + "\n")
+}
+
+/// `remove_hooks` rewrites the user's own `settings.json`, so its blast radius is tested
+/// rather than trusted: ours goes, everything else — third-party hooks, unrelated settings,
+/// an unparseable file — is left exactly as it was.
+///
+/// These run under `cargo test --release` only, because `mod install` is gated to release
+/// builds (see the gate on the module).
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A unique scratch file per test; no `Date::now`, so the pid plus the caller's name.
+    fn scratch(name: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("agentstatus-{}-{name}.json", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
+    fn write(path: &PathBuf, text: &str) {
+        std::fs::write(path, text).unwrap();
+    }
+
+    fn read(path: &PathBuf) -> String {
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    /// Ours out, foreign in — including a foreign entry sharing an event with ours, and an
+    /// event we emptied, which is dropped rather than left as `[]`.
+    #[test]
+    fn removes_only_our_entries() {
+        let p = scratch("mixed");
+        write(&p, r#"{
+          "model": "opus",
+          "hooks": {
+            "SessionStart": [
+              {"hooks":[{"type":"command","command":"/n/notify.sh SessionStart"}]},
+              {"hooks":[{"type":"command","command":"~/.claude/status/agentstatus-hook SessionStart"}]}
+            ],
+            "Stop": [
+              {"hooks":[{"type":"command","command":"~/.claude/status/agentstatus-hook Stop"}]}
+            ],
+            "PreToolUse": [
+              {"matcher":"Bash","hooks":[{"type":"command","command":"/n/audit.py"}]},
+              {"matcher":"*","hooks":[{"type":"command","command":"~/.claude/status/report.sh PreToolUse"}]}
+            ]
+          }
+        }"#);
+        remove_hooks(&p).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&read(&p)).unwrap();
+
+        assert_eq!(v["model"], "opus", "unrelated settings must survive");
+        let hooks = v["hooks"].as_object().unwrap();
+        assert!(!hooks.contains_key("Stop"), "an emptied event is dropped, not left as []");
+        assert_eq!(hooks["SessionStart"].as_array().unwrap().len(), 1);
+        assert!(read(&p).contains("notify.sh"));
+        assert_eq!(hooks["PreToolUse"].as_array().unwrap().len(), 1);
+        assert!(read(&p).contains("audit.py"));
+        // Both markers, in any shipped form, are gone.
+        assert!(!read(&p).contains("agentstatus-hook"));
+        assert!(!read(&p).contains("report.sh"));
+
+        // Idempotent: a second uninstall is a no-op, byte for byte.
+        let after = read(&p);
+        remove_hooks(&p).unwrap();
+        assert_eq!(read(&p), after);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// When ours were the only hooks, the `hooks` object goes too — no empty husk left.
+    #[test]
+    fn drops_an_emptied_hooks_object() {
+        let p = scratch("only-ours");
+        write(&p, r#"{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"a/agentstatus-hook Stop"}]}]}}"#);
+        remove_hooks(&p).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&read(&p)).unwrap();
+        assert!(v.get("hooks").is_none());
+        assert_eq!(v["model"], "opus");
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Nothing of ours to find: the file is not rewritten at all, so a user's formatting
+    /// and key order survive an uninstall that had nothing to do.
+    #[test]
+    fn leaves_a_foreign_config_byte_identical() {
+        let p = scratch("foreign");
+        let original = "{\n  \"hooks\": { \"Stop\": [ {\"hooks\":[{\"command\":\"/n/other.sh\"}]} ] },\n  \"model\": \"opus\"\n}\n";
+        write(&p, original);
+        remove_hooks(&p).unwrap();
+        assert_eq!(read(&p), original);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// Unreadable JSON is left alone rather than clobbered: nothing of ours can be
+    /// identified in it, and overwriting would destroy settings we cannot parse.
+    #[test]
+    fn leaves_unparseable_json_alone() {
+        let p = scratch("broken");
+        let original = "{ this is not json";
+        write(&p, original);
+        remove_hooks(&p).unwrap();
+        assert_eq!(read(&p), original);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    /// No settings file at all is a quiet success, not an error.
+    #[test]
+    fn missing_file_is_ok() {
+        let p = scratch("absent");
+        assert!(remove_hooks(&p).is_ok());
+    }
+}

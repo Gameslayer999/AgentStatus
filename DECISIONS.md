@@ -98,6 +98,9 @@
 | 086 | 2026-08-18 | **The menu-bar icon closes itself, and says the urgent states in shapes.** Two defects found by comparing the tray path against [autonomous-ai/agent-status](https://github.com/autonomous-ai/agent-status), a native SwiftUI menu-bar app for the same status files. (1) The popover never closed on a click outside on macOS: #073 dismisses on `Focused(false)`, which #008's non-activating panel can never fire. Fixed with a global `NSEvent` mouse-down monitor, which sees only clicks delivered to *other* applications — so a click on our own lights or on the status item stays local, the tray icon keeps toggling, and Windows' 400 ms debounce needs no counterpart. (2) `done` (`#ecf0f1`) and the empty placeholder (white at 0.28) were invisible on a **light** menu bar, because the dots are painted straight onto it. Fixed by outlining any fill too close to the bar behind it (luminance > 0.72 on a light bar, < 0.2 on a dark one) rather than recolouring it, so a state keeps the exact colour the user picked. And `blocked` now draws as a triangle and `error` as a square: their app separates states by SF Symbol as well as colour, and a tray icon cannot afford the bar's pulse — they measured that several animated status items wedge the main thread | Accepted |
 | 087 | 2026-08-18 | **AgentStatus is MIT-licensed.** The repository had no licence of any kind — no `LICENSE` file, no `license` field in either `Cargo.toml`, `app/package.json`, or the extension manifest — which makes published code "all rights reserved": GitHub's ToS grants the public only viewing and forking, so nobody could legally build, redistribute, or deploy the DMG the README advertises, and a pull request would arrive with no inbound grant. A dependency audit found nothing that constrains the choice: of 268 crates resolved from `Cargo.lock`, zero GPL/LGPL/AGPL/SSPL, and the five MPL-2.0 crates (`cssparser`, `selectors`, `dtoa-short`, `option-ext`, `cssparser-macros`) are file-level copyleft we do not modify. MIT over Apache-2.0 because there is no patentable invention here to need a patent grant, and over GPL-3.0 because that would deter contributors and complicate Marketplace distribution for a free utility whose value is convenience. The accepted cost: someone may repackage and sell it, with attribution | Accepted |
 | 088 | 2026-08-18 | **A background subagent keeps its badge past the end of the turn.** Reported live: "a parallel run says it's using subagents but I don't see them in the lightbar." `SubagentStart`/`SubagentStop` do fire for an `Agent` launched with `run_in_background: true` on 2.1.234 — the marker landed 0.06 s after the launch — but our own turn-boundary sweep (`clear_subagents` on `Stop`, from #010) wiped the whole marker directory 1.6 s later, while the agent ran on for 40 s. #010's premise was that a subagent cannot outlive the turn that spawned it; an async agent breaks it, since the parent reports "launched" and ends its turn immediately. The sweep was carrying nothing for these agents anyway: measured, a background agent that finishes removes its own marker via `SubagentStop` (marker gone, directory still standing), and a synchronous one holds its marker for its whole life. `clear_subagents` is now `SessionStart` only (`SessionEnd` still clears through `RemoveSession`). The accepted cost is the narrow case the sweep was built for — a synchronous subagent interrupted mid-turn whose `SubagentStop` never arrives leaks a badge until the session restarts or the light is dismissed (#080) — chosen over a magic-number age gate, which keeps the same defect on a timer. `report.sh` takes the same one-line change and the 46 goldens regenerate byte-identical | Accepted |
+| 089 | 2026-08-18 | **A security policy, and private vulnerability reporting as its one channel.** `SECURITY.md` at the root: the latest release is the only supported version, GitHub's private advisory form is the only reporting route (public issues are not), and the acknowledgement window is 7 days for a one-person project. Private reporting was disabled on the repository, so a policy naming it would have dead-ended — it is now enabled (`PUT /repos/…/private-vulnerability-reporting`). Chosen over listing an email, which would publish a personal address in a public repo and give no coordinated-disclosure workflow. The policy also states the footprint a reader needs to judge a finding — no network at all, what the status files hold, the `~/.claude/settings.json` edit and its backup, the read-only reads of Claude Code's session records and Cursor's `state.vscdb`, and what the macOS Accessibility and Automation grants are used for — and puts the unsigned builds out of scope, since the README already declares them. Writing that down exposed a false claim in the README, corrected in the same change: it said the status files hold "only the session ID, the state, a short project name, and a time" and that AgentStatus "does not store prompt text", while the hook has always written 160 characters of the prompt as `task` and a truncated tool line as `detail` — the two fields the tooltip displays. **Amended the same day:** this entry's own replacement text kept the claim "no transcript text, no model output", which is also false — on a clean `Stop` the hook writes up to 160 characters of `last_assistant_message` into `detail`, and `claude_ai_title` reads the session transcript for the tooltip name (storing nothing from it). "No network connections" is unaffected and verified | Accepted |
+| 090 | 2026-08-18 | **The VS Code extension stops installing hooks.** Found auditing the README against the code: the README said the extension only reads, but `activate()` called `ensureHooks()` on every window, defaulted **on**, and wrote `~/.claude/status/report.sh` across the same eleven events the app registers. Two faults, not one. Its already-installed check read `s.hooks.Stop[0].hooks[0].command` and returned early only on `report.sh`, so it never recognised the native `agentstatus-hook` the app has installed since #068/#076 — every fresh VS Code window appended a **second** hook to all eleven events. And the script it installed needs a `jq` macOS ships only from 15 and Windows not at all, the exact dependency #076 removed; the shipped `0.1.3` vsix was verified to contain it. `ensureHooks`, the `agentstatus.ensureHooks` setting, the `copyhook` step, and `extension/report.sh` are deleted, and the package is rebuilt as `0.1.4` (verified: no `report.sh`, and `grep -c` on the compiled JS returns 0). Teaching the check to match both markers was rejected — it keeps two uncoordinated writers of one config. No cleanup is needed for existing installs: `merge_hooks` retains-not-ours before registering and `HOOK_MARKERS` includes `report.sh`, so the app's next launch strips the duplicates. A second defect fell out: the documented install path `extension/agentstatus-0.1.3.vsix` never existed in the repository (`.gitignore` carries `extension/*.vsix`), so it failed from a clone | Accepted |
+| 091 | 2026-08-18 | **Uninstall is a button in the settings window.** Requested live. Undoing the first-start self-install meant hand-editing `~/.claude/settings.json` or running `node hooks/setup.mjs uninstall`, which needs Node **and a clone of the repo** — so every DMG/`.exe` user had a product that installs itself and cannot uninstall itself. **About** now carries an Uninstall button: it removes our entries from `settings.json`, deletes `status_dir()` (honouring `AGENTSTATUS_DIR`/`CLAUDESTATUS_DIR`), and quits. **Quitting is part of the operation** — `ensure_installed` runs on every launch, so an uninstall leaving the app up would be undone by the next start; it exits through the same `app.exit(0)` the Quit button uses. Removal is surgical rather than a backup restore (which would discard every settings change made since first start): only entries matching the existing `is_ours`/`HOOK_MARKERS` go, then an emptied event array, then the `hooks` object; the file is rewritten **only if something of ours was found**, and unparseable JSON is left alone rather than clobbered. `settings.json.agentstatus-bak` is deliberately kept — it is a copy of the user's own config. The confirm is a two-click arm rather than a modal, which would mean a new crate for one button. It cannot delete the app bundle, and says so. Verified by five tests now living in `install.rs` (mixed config, idempotence, emptied `hooks`, foreign-only byte-identical, unparseable byte-identical), replacing a throwaway scratch crate that Guideline #8 forbids; they run under `cargo test --release`, since `mod install` is release-gated — the same gate makes a dev build's button quit only | Accepted |
 
 ---
 
@@ -5553,3 +5556,183 @@ specification `gen-golden.sh` replays (#076) — takes the same one-line change,
 goldens regenerate byte-identical, since subagent events write no status file. The unit test
 `turn_boundaries_clear_subagent_markers` becomes `session_boundaries_clear_subagent_markers`
 and now asserts `Stop` does **not** clear.
+
+---
+
+## 089 — A security policy, and private vulnerability reporting as its one channel
+
+**Date:** 2026-08-18
+**Status:** Accepted
+
+**Context.** The repository had no `SECURITY.md`. AgentStatus installs a hook that runs inside
+every one of the user's agent sessions, edits `~/.claude/settings.json`, and ships unsigned
+binaries from a GitHub Action — a footprint that invites a finding — and someone who found one
+had no route to report it except a public issue, which discloses it to everyone at once.
+Checked before writing: GitHub's private vulnerability reporting was **off**
+(`GET /repos/Gameslayer999/AgentStatus/private-vulnerability-reporting` → `{"enabled": false}`).
+
+**Options.**
+
+| | Option | Cost |
+|---|---|---|
+| A | GitHub private vulnerability reporting, enabled on the repo | One settings change; reporters need a GitHub account |
+| B | A contact email in `SECURITY.md` | Publishes a personal address in a public repo, where it is scraped; no private thread, no advisory, no CVE path |
+| C | Both | B's cost, for a fallback nobody needs while A is on |
+
+**Decision.** Option A. Private reporting is enabled
+(`PUT /repos/Gameslayer999/AgentStatus/private-vulnerability-reporting` → `{"enabled": true}`),
+and `SECURITY.md` names the advisory form as the only channel, with public issues ruled out
+for vulnerabilities. Supported versions: the latest release only. Response: acknowledgement
+within 7 days, assessment within 14 — the commitment a one-person project can keep.
+
+**Reasoning.** A policy that names a channel which is not open is worse than no policy. A
+publishes nothing personal, keeps the report private until a fix ships, and carries the
+advisory and credit for free. B's address is permanent once it is committed, and C pays that
+price for redundancy that only matters if GitHub itself is down.
+
+**Scope, stated in the file.** In: the app, the hook binary, the installers and what they
+write to `~/.claude/`, the extension, and the release workflow's artifacts. Out: the unsigned
+builds (a declared limit in the README, not a finding), anything that already requires code
+execution as the user, and the hosts themselves — unless AgentStatus makes one of their
+weaknesses reachable.
+
+**Footprint, stated in the file** — so a reader can judge a finding without reading the source:
+no network connections at all (verified: no HTTP crate in `app/src-tauri/Cargo.toml`, no
+`fetch`/`XMLHttpRequest`/`WebSocket` in `app/src`, and `tauri-plugin-opener` is registered but
+never called); what a status file holds; the `~/.claude/settings.json` edit and its
+`.agentstatus-bak` backup; the read-only reads of `~/.claude/sessions/` (#067) and Cursor's
+`state.vscdb` (#047/#048); the local commands a click runs; and what the macOS Accessibility
+and Automation grants are used for, including that the pip's read can be turned off (#082).
+
+**A README correction came out of it.** *How it works* claimed the status files contain "only
+the session ID, the state, a short project name, and a time" and that "AgentStatus does not
+store prompt text or transcript text." The first half is incomplete and the second is wrong:
+`decide()` in `hooks/agentstatus-hook/src/main.rs` has always written `task` — the first 160
+characters of the `prompt` field on `UserPromptSubmit` — and `detail`, a truncated line for the
+current tool call (for `Bash`, the command itself). Both are displayed in the tooltip, so the
+feature was never hidden, only mis-described. The README now states the real field list.
+
+**Amended the same day.** The paragraph above also carried forward "no transcript text, no
+model output" as true. It is not. On a clean `Stop`, `decide()` sets `detail` to
+`trunc(&str_or_empty(payload, "last_assistant_message"), 160)`
+(`hooks/agentstatus-hook/src/main.rs:402`) — up to 160 characters of the assistant's last
+message, written into the status file and left there until the next turn. Separately,
+`claude_ai_title` (`app/src-tauri/src/lib.rs:1387`) reads the session transcript under
+`~/.claude/projects/` to get the session name for the tooltip; it takes only the `ai-title`
+record and stores nothing, which its own doc comment already declared a deliberate exception
+to Guideline #5. `README.md` and `SECURITY.md` now state both. **"No network connections" is
+unaffected and still true** — that half was verified independently and holds.
+
+---
+
+## 090 — The VS Code extension stops installing hooks
+
+**Date:** 2026-08-18
+**Status:** Accepted (completes #068/#076 for the extension; supersedes the extension half of #015)
+
+**Context.** Found while auditing the README against the code. The README said the extension
+"needs the application for the signal", implying it only reads. It did not. `activate()` called
+`ensureHooks()` on every window, gated on an `agentstatus.ensureHooks` setting that defaulted to
+**true**, and that function wrote `~/.claude/status/report.sh` and registered it across the same
+eleven events the app registers.
+
+Two things made it actively harmful rather than merely redundant:
+
+1. **It never recognised the app's own hook.** Its already-installed check read
+   `s.hooks.Stop[0].hooks[0].command` and returned early only if that string contained
+   `report.sh`. Since 0.7.0 on Windows and 0.9.x on macOS the app installs the native
+   `agentstatus-hook` binary (#068/#076), so the check missed, and every fresh VS Code window
+   appended a **second** hook to all eleven events.
+2. **The script it installed cannot run.** `report.sh` needs a `jq` that macOS ships only from
+   15 and Windows does not ship at all — the exact dependency #076 removed. The shipped
+   `agentstatus-0.1.3.vsix` was verified to contain it.
+
+**Options.**
+
+| | Option | Cost |
+|---|---|---|
+| A | Delete `ensureHooks` outright; the app is the sole installer | The extension alone is useless — but it always was, since it only reads the app's files |
+| B | Teach the check to match `agentstatus-hook` too | Keeps two installers writing one config, and keeps `report.sh` shipping in the vsix |
+| C | Ship the binary hook inside the vsix as well | Three copies of an arch-specific binary, and a per-window race on `settings.json` |
+
+**Decision.** Option A. `ensureHooks` and its call are deleted, the `agentstatus.ensureHooks`
+setting and the `copyhook` packaging step are gone, `extension/report.sh` is deleted, and the
+package is rebuilt as `agentstatus-0.1.4.vsix` — verified to contain no `report.sh`, with
+`grep -c "ensureHooks\|report.sh" out/extension.js` returning 0. The reader path, the
+status-bar items, the focus relay, and `agentstatus.focusSession` are unchanged.
+
+**Reasoning.** One installer, one config writer. B leaves the structural fault — two
+independent writers of the user's `settings.json` with no coordination — for the next event
+name to expose. The extension was never the signal layer; it reads
+`~/.claude/status/sessions/` and always required the app to be running to have anything to
+read, so removing its installer takes away nothing a user had.
+
+**Existing installs need no cleanup.** `merge_hooks` in `app/src-tauri/src/install.rs` calls
+`list.retain(|entry| !is_ours(entry))` before registering, and `HOOK_MARKERS` includes
+`report.sh` — so the app's next launch strips any duplicate the old extension left behind,
+across exactly the eleven events it wrote. Confirmed against the deleted code in git rather
+than assumed.
+
+**A second README defect, found while fixing the first.** The documented install line was
+`code --install-extension extension/agentstatus-0.1.3.vsix`, but `.gitignore` carries
+`extension/*.vsix` and `git ls-files extension/` returns only source — the package has never
+been in the repository, so that command failed for anyone working from a clone. The README now
+builds it first.
+
+---
+
+## 091 — Uninstall is a button in the settings window
+
+**Date:** 2026-08-18
+**Status:** Accepted
+
+**Context.** Requested live: "make an uninstall button in the settings tab so it's a much more
+simple process." Until now, undoing the first-start self-install (#068/#076) meant hand-editing
+`~/.claude/settings.json` or running `node hooks/setup.mjs uninstall` — which needs Node **and a
+clone of this repository**. Every user who installed from the DMG or the `.exe` has neither, so
+the shipped product could install itself and not uninstall itself. That also made the README's
+uninstall section wrong for exactly the audience it was written for.
+
+**Options.**
+
+| | Option | Cost |
+|---|---|---|
+| A | A button in the settings window that undoes the install and quits | One command, one confirm affordance |
+| B | Ship an uninstaller script beside the app | Another artifact to build, sign, and document; the DMG has nowhere natural to put it |
+| C | Restore `settings.json.agentstatus-bak` over the live file | Discards every settings change the user made after first start |
+
+**Decision.** Option A, in the **About** pane. It removes our entries from
+`~/.claude/settings.json`, deletes `status_dir()` (honouring `AGENTSTATUS_DIR` /
+`CLAUDESTATUS_DIR`), and quits.
+
+**Quitting is part of the operation, not a courtesy.** `ensure_installed` runs on every launch,
+so an uninstall that left the app running would be undone by the next start. The command exits
+through the same `app.exit(0)` the Quit button uses — one way out, not two.
+
+**Surgical removal, not backup restore (rejecting C).** `remove_hooks` matches the existing
+`is_ours`/`HOOK_MARKERS` and drops only our entries, then an event array we emptied, then the
+`hooks` object once it is empty. Every other setting and every third-party hook survives. The
+file is rewritten **only if something of ours was actually found**, so an uninstall with
+nothing installed leaves the user's formatting untouched, and unparseable JSON is left alone
+rather than clobbered — nothing of ours can be identified in it, and overwriting would destroy
+settings we cannot read.
+
+**`settings.json.agentstatus-bak` is deliberately kept.** The surgical removal already restores
+the pre-install hook state, and the backup is a copy of the user's own configuration — deleting
+it is not ours to do.
+
+**The confirm is two-click, not a modal.** A modal means `tauri-plugin-dialog`, a new crate for
+one button. The button arms on the first click (relabelled, filled red) and acts on the second;
+a capture-phase document listener disarms it on any other click, including switching panes.
+
+**It does not delete the app.** An app cannot reliably remove its own bundle while running. The
+note beside the button says so, and swaps Trash for Settings → Apps on Windows.
+
+**Tested in the repository, not in a scratch directory.** The first verification was a
+throwaway crate holding extracted copies of these functions — a one-off, which Guideline #8
+forbids as a substitute for something re-runnable. `install.rs` now carries five tests covering
+the mixed config (ours out, third-party and unrelated settings in, an emptied event dropped),
+idempotence, an emptied `hooks` object, a foreign-only config left byte-identical, and
+unparseable JSON left byte-identical. They run under `cargo test --release` only, because
+`mod install` is `#[cfg(not(debug_assertions))]`; the same gate means a **dev build's button
+only quits**, which the command's doc comment states.

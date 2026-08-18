@@ -2,7 +2,7 @@
   "name": "agentstatus",
   "displayName": "AgentStatus",
   "description": "Live status of this window's Claude Code sessions, in the status bar.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "MIT",
   "publisher": "agentstatus",
   "engines": {
@@ -21,23 +21,12 @@
         "command": "agentstatus.focusSession",
         "title": "AgentStatus: Focus Session"
       }
-    ],
-    "configuration": {
-      "title": "AgentStatus",
-      "properties": {
-        "agentstatus.ensureHooks": {
-          "type": "boolean",
-          "default": true,
-          "description": "On activation, install the AgentStatus hooks into ~/.claude/settings.json if they aren't already present."
-        }
-      }
-    }
+    ]
   },
   "scripts": {
-    "copyhook": "cp ../hooks/report.sh ./report.sh",
     "copylicense": "cp ../LICENSE ./LICENSE",
     "compile": "tsc -p ./",
-    "vscode:prepublish": "npm run copyhook && npm run copylicense && npm run compile"
+    "vscode:prepublish": "npm run copylicense && npm run compile"
   },
   "devDependencies": {
     "@types/node": "^20",

@@ -59,11 +59,14 @@ function renderAll() {
   document.getElementById("audio-panel").hidden = !audioEnabled();
 }
 
-// "Menu bar" is simply the wrong word for the Windows notification area.
+// "Menu bar" is simply the wrong word for the Windows notification area, and Windows has
+// no Trash to drag the app to.
 function applyPlatformChrome() {
   if (PLATFORM !== "windows") return;
   const modeBtn = document.querySelector('#mode-seg button[data-mode="menubar"]');
   if (modeBtn) modeBtn.textContent = "Tray";
+  document.getElementById("uninstall-note").textContent =
+    "This does not delete the app itself — remove it from Settings → Apps afterwards.";
 }
 
 // ── Wiring ──────────────────────────────────────────────────────────────────
@@ -129,6 +132,51 @@ function initControls() {
     renderAll();
   });
   document.getElementById("quit-btn").addEventListener("click", () => invoke("quit_app"));
+
+  initUninstall();
+}
+
+// Uninstall removes the hook from the user's Claude config and quits, so it must never
+// happen on a stray click — but a modal would mean a new plugin and a new crate for one
+// button. Instead the button arms itself on the first click (relabelled, filled red) and
+// acts on the second; any other click in the window, including switching panes on the
+// rail, disarms it.
+function initUninstall() {
+  const btn = document.getElementById("uninstall-btn");
+  const err = document.getElementById("uninstall-error");
+  const idle = btn.textContent;
+  let armed = false;
+
+  const disarm = () => {
+    armed = false;
+    btn.textContent = idle;
+    btn.classList.remove("confirm");
+  };
+  // Capture phase, so it runs even for clicks a control handles and stops.
+  document.addEventListener("click", (e) => {
+    if (armed && e.target !== btn) disarm();
+  }, true);
+
+  btn.addEventListener("click", async () => {
+    if (!armed) {
+      armed = true;
+      btn.textContent = "Confirm — remove hook and quit";
+      btn.classList.add("confirm");
+      err.hidden = true;
+      return;
+    }
+    disarm();
+    btn.disabled = true;
+    try {
+      // On success the process exits inside this call and nothing below runs.
+      await invoke("uninstall_app");
+    } catch (e) {
+      // The backend's message names the file and the OS error; show it as it is.
+      err.textContent = String(e);
+      err.hidden = false;
+    }
+    btn.disabled = false;
+  });
 }
 
 window.addEventListener("DOMContentLoaded", async () => {

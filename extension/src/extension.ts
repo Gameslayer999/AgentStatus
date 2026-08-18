@@ -223,70 +223,7 @@ function refresh(): void {
   }
 }
 
-// Install the hooks only if they aren't already present, so multiple windows
-// don't concurrently rewrite settings.json. (The standalone app installs these
-// too; both converge on ~/.claude/status/report.sh.)
-function ensureHooks(context: vscode.ExtensionContext): void {
-  const script = path.join(statusDir(), "report.sh");
-  const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
-  try {
-    if (fs.existsSync(script) && fs.existsSync(settingsPath)) {
-      const s = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-      const cmd = s?.hooks?.Stop?.[0]?.hooks?.[0]?.command ?? "";
-      if (typeof cmd === "string" && cmd.includes("report.sh")) return; // already installed
-    }
-  } catch {
-    /* fall through and install */
-  }
-
-  try {
-    const dir = statusDir();
-    fs.mkdirSync(path.join(dir, "sessions"), { recursive: true });
-    const bundled = path.join(context.extensionPath, "report.sh");
-    fs.writeFileSync(script, fs.readFileSync(bundled, "utf8"));
-    fs.chmodSync(script, 0o755);
-
-    let settings: any = {};
-    if (fs.existsSync(settingsPath)) {
-      const txt = fs.readFileSync(settingsPath, "utf8");
-      const bak = settingsPath + ".agentstatus-bak";
-      if (!fs.existsSync(bak)) fs.writeFileSync(bak, txt);
-      try {
-        settings = JSON.parse(txt);
-      } catch {
-        settings = {};
-      }
-    } else {
-      fs.mkdirSync(path.join(os.homedir(), ".claude"), { recursive: true });
-    }
-    if (typeof settings !== "object" || settings === null) settings = {};
-    if (typeof settings.hooks !== "object" || settings.hooks === null) settings.hooks = {};
-
-    const SIMPLE = [
-      "SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "StopFailure",
-      "SubagentStart", "SubagentStop",
-    ];
-    const TOOL = ["PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest"];
-    const add = (event: string, matcher: boolean) => {
-      const arr = Array.isArray(settings.hooks[event]) ? settings.hooks[event] : [];
-      const kept = arr.filter((e: any) => !JSON.stringify(e).includes("report.sh"));
-      const hook = { type: "command", command: `${script} ${event}` };
-      kept.push(matcher ? { matcher: "*", hooks: [hook] } : { hooks: [hook] });
-      settings.hooks[event] = kept;
-    };
-    SIMPLE.forEach((e) => add(e, false));
-    TOOL.forEach((e) => add(e, true));
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-  } catch {
-    /* best-effort */
-  }
-}
-
 export function activate(context: vscode.ExtensionContext): void {
-  if (vscode.workspace.getConfiguration("agentstatus").get<boolean>("ensureHooks", true)) {
-    ensureHooks(context);
-  }
-
   // Seed the focus-relay watermark to any request already on disk so we don't replay
   // a stale click when this window (re)loads. Only requests made after now fire.
   const seedReq = readFocusRequest();

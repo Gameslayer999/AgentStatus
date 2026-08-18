@@ -2081,6 +2081,27 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// Undo the self-install from the settings window's Uninstall button, so a user who
+/// installed from the DMG/installer can back it out without a terminal or a clone of the
+/// repo. `install::uninstall` removes our hook entries from the user's Claude settings and
+/// deletes the status directory; quitting afterwards is what makes it stick, because
+/// `ensure_installed` re-registers the hook on every launch.
+///
+/// Errors come back to the webview verbatim (file plus OS error) and the app stays up — a
+/// failed uninstall must not leave a half-quit app. On success the process exits through
+/// the same `app.exit(0)` the Quit button uses, so there is one way out, not two; the
+/// invoke never resolves because the process is gone, which the caller expects.
+///
+/// Dev builds have no `install` module (see the gate on `mod install`) — they register
+/// their hooks with `node hooks/setup.mjs`, so here the button only quits.
+#[tauri::command]
+fn uninstall_app(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(not(debug_assertions))]
+    install::uninstall()?;
+    app.exit(0);
+    Ok(())
+}
+
 /// The app's own version, for the settings window's About section. The webview cannot
 /// read Cargo's version and the bundle identifier is not it.
 #[tauri::command]
@@ -2947,6 +2968,7 @@ pub fn run() {
             cursor_open_next_attention,
             dismiss_session,
             quit_app,
+            uninstall_app,
             app_version,
             open_settings
         ])

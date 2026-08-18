@@ -7,6 +7,32 @@
 
 ## Current state
 
+- **Uninstall is a button, and the extension installs nothing (decisions 090, 091).**
+  Settings → **About** now has **Uninstall AgentStatus**: a two-click confirm that strips our
+  entries from `~/.claude/settings.json`, deletes the status directory, and quits (quitting is
+  part of it — `ensure_installed` would otherwise re-register on the next launch). It is
+  surgical, not a backup restore, so third-party hooks and unrelated settings survive; five
+  tests in `install.rs` cover that, run under `cargo test --release` because `mod install` is
+  release-gated. Separately, the VS Code extension no longer installs hooks at all: its
+  `ensureHooks` defaulted **on** and wrote the obsolete `report.sh` as a *second* hook on all
+  eleven events, because its already-installed check only ever matched `report.sh` and so never
+  recognised the native binary the app has installed since #068/#076. Rebuilt as
+  `agentstatus-0.1.4.vsix`. Existing installs self-heal on the app's next launch.
+- **The README was audited claim by claim against the code.** Eleven inaccuracies fixed,
+  including two that were materially misleading: the Cursor pip described as counting agents
+  "with no light" (it mirrors Cursor's own aggregate unread count, and is macOS-only), and the
+  privacy claim — see the amendment on decision 089 below.
+- **The repository has a security policy (decision 089).** `SECURITY.md` at the root: the
+  latest release is the only supported version, and GitHub's private advisory form is the only
+  reporting channel — now enabled on the repository, which it was not before, so the policy
+  points at something that works. The file states the footprint a reporter needs (no network,
+  the status-file fields, the `settings.json` edit and backup, the read-only reads, the macOS
+  grants) and rules the unsigned builds out of scope, since the README declares them. Writing
+  it corrected a false README claim: the status files were said to hold "only the session ID,
+  the state, a short project name, and a time" with no prompt text, while the hook has always
+  written 160 characters of the prompt and a truncated tool line — the two fields the tooltip
+  shows.
+
 - **A parallel run's subagents keep their badge (decision 088).** Reported live: "a parallel
   run says it's using subagents but I don't see them in the lightbar." The hooks were firing —
   `SubagentStart` wrote the marker 0.06 s after an `Agent` launched with
@@ -666,6 +692,41 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 ---
 
 ## Recently completed
+
+- **2026-08-18** — **README audited against the code; two privacy claims corrected.** Every
+  factual claim in `README.md` was checked against the implementation. Fixed: the Cursor pip
+  (mirrors Cursor's own menu-bar unread count, macOS only — it does not exclude sessions that
+  have lights); the installed hook's name on Windows (`agentstatus-hook.exe`); the right-click
+  controls row (beside the lights, not always below — `styles.css` flips it for vertical and
+  `panel-above`); orange/red lights (exempt from the background-agent timer only, still
+  retired by a gone window/process or the 2 h backstop); the background-agent click (a Ghostty
+  tab only when Ghostty runs, otherwise a **new** Terminal.app window every click, macOS only);
+  Cursor's states (running, done, idle **and** the hollow ring); what
+  `node hooks/setup.mjs uninstall` removes (also `report.sh`, plus the legacy Codex/Antigravity
+  entries); the extension section; and the uninstall section. **The privacy correction is the
+  one that mattered:** decision 089's new *How it works* paragraph asserted "no transcript
+  text, no model output", and that is false — on a clean `Stop` the hook writes up to 160
+  characters of `last_assistant_message` into the status file
+  (`hooks/agentstatus-hook/src/main.rs:402`), and `claude_ai_title` reads the session
+  transcript for the tooltip name. `README.md`, `SECURITY.md`, and decision 089 all say so now.
+- **2026-08-18** — **The extension stops installing hooks (decision 090).** `ensureHooks`, the
+  `agentstatus.ensureHooks` setting, the `copyhook` packaging step, and `extension/report.sh`
+  deleted; rebuilt as `agentstatus-0.1.4.vsix`, verified to carry no `report.sh` and no trace
+  in the compiled JS. Reader path, status-bar items, and focus relay unchanged. Also found: the
+  README's install path pointed at a vsix that `.gitignore` keeps out of the repository, so it
+  never worked from a clone.
+- **2026-08-18** — **Uninstall button in Settings → About (decision 091).** `install::uninstall`
+  + `remove_hooks` in `install.rs`, the `uninstall_app` command in `lib.rs`, and the two-click
+  confirm in `settings.{html,css,js}`. `cargo check --release` clean; `cargo test --release`
+  green including five new tests for the `settings.json` surgery; all 6 `app/tests/*.mjs` and
+  the hook crate's 14 tests still pass.
+- **2026-08-18** — **`SECURITY.md` added, private vulnerability reporting enabled.** The repo
+  had neither. Reporting was off (`{"enabled": false}`) and is now on, so the advisory form the
+  policy names is reachable; an email channel was rejected (a personal address in a public
+  repo, no private thread, no advisory). The no-network claim in the policy was verified, not
+  assumed: no HTTP crate in `app/src-tauri/Cargo.toml`, no `fetch`/`XMLHttpRequest`/`WebSocket`
+  in `app/src`, and `tauri-plugin-opener` registered but never called. README *How it works*
+  corrected in the same change to list the real status-file fields.
 
 - **2026-08-18** — **v0.9.1 released.** Version bumped 0.9.0 → 0.9.1 across the four
   manifests (`app/package.json`, `app/src-tauri/tauri.conf.json`, and both `Cargo.toml`s) and

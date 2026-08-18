@@ -129,6 +129,16 @@
         <p class="note">Clicking a light jumps to that session. Focusing another app's
           window and reading Cursor's menu-bar item both need macOS Accessibility
           permission, granted once in System Settings → Privacy &amp; Security.</p>
+        <div class="row">
+          <span class="label">Uninstall</span>
+          <button type="button" id="uninstall-btn">Uninstall AgentStatus</button>
+        </div>
+        <p class="note">Removes the AgentStatus hook from your Claude Code settings and
+          deletes its status folder, then quits. Every other setting and hook stays as it
+          is, and the settings.json.agentstatus-bak backup is left in place.</p>
+        <p class="note" id="uninstall-note">This does not delete the app itself — drag
+          AgentStatus.app to the Trash afterwards.</p>
+        <p class="note error" id="uninstall-error" hidden></p>
       </section>
     </main>
 

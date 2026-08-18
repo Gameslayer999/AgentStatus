@@ -81,8 +81,8 @@ shortcut to AgentStatus in the folder. Windows needs no permission grants.
 
 ### What the first start does
 
-The application writes the hook to `~/.claude/status/agentstatus-hook` and registers it in
-`~/.claude/settings.json`. It makes a backup of that file first. Open sessions use the hook
+The application writes the hook to `~/.claude/status/agentstatus-hook` (`agentstatus-hook.exe`
+on Windows) and registers it in `~/.claude/settings.json`. It makes a backup of that file first. Open sessions use the hook
 immediately. A restart is not necessary. Claude Code reads this one file in VS Code, in a
 terminal, and in Claude Desktop. Cursor reads it through its Claude-compatible bridge.
 
@@ -102,9 +102,9 @@ terminal, and in Claude Desktop. Cursor reads it through its Claude-compatible b
   open folder. A click opens that conversation.
 - **A blue badge** shows the number of subagents in that session, including the ones a
   parallel run launches in the background. The badge lasts as long as the subagent does.
-- **A ring pip** at the end of the bar counts the Cursor agents that wait for you and have no
-  light. A click opens the next agent in the queue and clears all Cursor notifications,
-  because Cursor gives no way to clear one.
+- **A ring pip** at the end of the bar (macOS only) mirrors the number on Cursor's own
+  menu-bar item: the Cursor agents with an unread notification. A click opens the next one
+  and clears all Cursor notifications, because Cursor gives no way to clear one.
 
 ![A green light with a blue subagent badge that shows 2, and its tooltip. The tooltip shows the project name, the session name, the application, the state, the task, and the subagents that run.](docs/lightbar-hover.svg)
 
@@ -113,13 +113,16 @@ terminal, and in Claude Desktop. Cursor reads it through its Claude-compatible b
   terminal (`Ghostty`, `Terminal`, `iTerm2`), or `background agent`.
 - **Click a light** to go to that session. VS Code and Cursor show the tab or the
   conversation. Terminal.app and Ghostty select the tab. A background agent opens in a
-  Ghostty tab, and each subsequent click uses that same tab.
+  Ghostty tab when Ghostty runs, and each subsequent click uses that same tab; without
+  Ghostty every click opens a new Terminal.app window.
 - **A light goes away with its session.** A background agent keeps its light for five more
-  minutes. A light that waits for you (orange or red) stays until you answer it.
+  minutes, unless it waits for you (orange or red). Every light goes when its window or its
+  process goes, and after two hours without an event.
 - **Drag the bar** to move it. Hold the bar by the padding, not by a light. The application
   keeps the position.
-- **Right-click the bar** to show a red × below each light and the settings gear. Click a ×
-  to remove that light now. Right-click again to hide the controls.
+- **Right-click the bar** to show a red × for each light and the settings gear. The row sits
+  beside the lights, on the side that faces the middle of the screen. Click a × to remove
+  that light now. Right-click again to hide the controls.
 
 ## Settings
 
@@ -134,12 +137,13 @@ Click the gear to open the settings window. It has **General**, **Lights**, **Co
 - **Order** — **Stable** (default) keeps each light in its slot. **Urgency** moves error,
   then blocked, then done to the front.
 - **Unknown state** — show (default) or hide the hollow rings.
-- **Cursor pip** — show (default) or hide the pip. Hidden, it also stops the Accessibility
-  read that can close Cursor's own menu.
+- **Cursor pip** (macOS only) — show (default) or hide the pip. Hidden, it also stops the
+  Accessibility read that can close Cursor's own menu.
 - **Light size, padding, and opacity** — the lights stay fully opaque.
 - **Colors** — set the color of each of the five states.
 - **Audio alerts** — off by default. Set **Alerts** to on for a tone when a session becomes
   blocked, has an error, or completes a turn. Select the events and the volume.
+- **About** — the version, and **Uninstall AgentStatus**. Refer to [Uninstall](#uninstall).
 
 ### Menu-bar mode
 
@@ -168,44 +172,54 @@ without color, at the small size of a menu-bar icon.
   It does the minimum work and stops immediately. It does not delay a turn.
 - **The display layer** — a Tauri application reads that directory and shows the lights.
 
-The status files contain only the session ID, the state, a short project name, and a time.
-AgentStatus does not store prompt text or transcript text. For the reasons for these
-decisions, refer to [DECISIONS.md](DECISIONS.md).
+A status file holds the session ID, the state, the working directory, the host, the process
+ID, a short project name, a time, the first 160 characters of the prompt that started the
+turn, and one line for the current tool call — the two the tooltip shows. At the end of a
+turn that line becomes the first 160 characters of the assistant's last message. To name a
+session the application also reads that session's transcript, and takes the title out of it
+and nothing else. AgentStatus makes no network connections. Refer to
+[SECURITY.md](SECURITY.md) for the whole footprint, and to [DECISIONS.md](DECISIONS.md) for
+the reasons for these decisions.
 
 ## Optional — VS Code extension
 
-The extension adds a status-bar item to each VS Code window, for the workspace of that
-window. It shows **Claude Code sessions in VS Code only**. It reads the same status files,
-thus it needs the application for the signal.
+The extension adds one status-bar item per Claude Code session in that VS Code window's
+workspace. It shows **Claude Code sessions in VS Code only**. It reads the status files the
+application's hook writes and installs nothing itself, thus it needs the application for the
+signal.
+
+The package is a build artifact, not a file in the repository. Build it, then install it:
 
 ```bash
-code --install-extension extension/agentstatus-0.1.3.vsix
+npm --prefix extension ci
+cd extension && npx --yes @vscode/vsce package
+code --install-extension agentstatus-0.1.4.vsix
 ```
 
 ## Uninstall
 
-**macOS:**
+Right-click the bar, click the gear, open **About**, and click **Uninstall AgentStatus**.
+Click it a second time to confirm. It removes the hook from `~/.claude/settings.json`,
+deletes `~/.claude/status/`, and quits. Every other setting, and every hook that is not
+ours, stays as it is.
 
-```bash
-node hooks/setup.mjs uninstall
-rm -rf /Applications/AgentStatus.app ~/.claude/status
-```
+The application cannot delete itself. Afterwards drag `/Applications/AgentStatus.app` to the
+Trash (macOS), or remove **AgentStatus** in Settings → Apps → Installed apps (Windows).
 
-**Windows:** remove **AgentStatus** in Settings → Apps → Installed apps. Then:
+`~/.claude/settings.json.agentstatus-bak` — the copy of your settings file the application
+made at the first start — is left in place. Delete it when you no longer want it.
 
-```bash
-node hooks/setup.mjs uninstall
-rm -rf ~/.claude/status
-```
-
-The backup of your initial settings is at `~/.claude/settings.json.agentstatus-bak`.
+From a clone of this repository, `node hooks/setup.mjs uninstall` does the same to
+`settings.json`, and also clears the entries a past version registered in
+`~/.codex/hooks.json` and `~/.gemini/config/hooks.json`. It does not delete
+`~/.claude/status/`.
 
 ## Limits
 
 - **Downloaded builds are not signed.** The Gatekeeper step (macOS) or the SmartScreen step
   (Windows) above is necessary.
 - **Cursor has no blocked light.** Cursor sends no permission event. Its lights show
-  running, done, and idle only.
+  running, done, idle, and — for a window with no open folder — the hollow ring.
 - **Cursor needs the Accessibility permission** on macOS for click-to-focus and correct
   lights.
 - **Only Terminal.app and Ghostty 1.3 or later get tab-precise focus.** Another terminal

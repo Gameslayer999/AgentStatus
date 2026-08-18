@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "Capability for the settings window (decision 082). It reads and writes preferences over events and calls three commands; it never moves or resizes itself, so it gets none of the window permissions the bar needs.",
+  "description": "Capability for the settings window (decision 082). It reads and writes preferences over events and calls four commands; it never moves or resizes itself, so it gets none of the window permissions the bar needs.",
   "windows": ["settings"],
   "permissions": ["core:default"]
 }
