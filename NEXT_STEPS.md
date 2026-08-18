@@ -7,14 +7,18 @@
 
 ## Current state
 
-- **⚠ macOS is on unverified code (decision 076).** Both platforms now install the native
+- **✅ macOS is verified (decision 076), 2026-08-18.** Both platforms now install the native
   `agentstatus-hook` binary — `report.sh` is no longer installed anywhere, only kept as the
   reference `gen-golden.sh` generates goldens from. The supported floor is **macOS 13**
   (declared, matching Claude Code's own requirement) and the DMG is **universal**, hook
   included. This closes the real macOS-15 bug: `jq` ships at `/usr/bin/jq` only from 15, so
-  every DMG user on 13/14 had a hook that no-opped silently forever. **All of it was written
-  on the Windows box and none of it has run on a Mac** — see the blocking checklist at the top
-  of *Now* before tagging anything.
+  every DMG user on 13/14 had a hook that no-opped silently forever. Written entirely on the
+  Windows box, it has now **run on a Mac** — all seven blocking checks pass on macOS 26.6.1
+  (arm64, Rust 1.96.1); see *Recently completed*. Headline result: `gen-golden.sh` reproduces
+  all 46 goldens **byte for byte** on macOS, so `report.sh` does not diverge between the two
+  platforms and the port's equivalence claim holds here. The binary hook is also **6× faster
+  than `report.sh` on macOS** (11.5 ms vs 70.5 ms per event, 20 runs each) — decision 076 is a
+  macOS latency win, not only an Intel/13-14 portability fix.
 - **Claude Code lights now have a state reconcile of their own (decision 067).** Until this,
   Cursor had one (#048/#052) and background jobs had one (#063), but a Claude Code light was
   pure hook output — and the hook can only reach `idle` through a `Stop` event, so any turn
@@ -253,35 +257,50 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 
 ## Now (build queue, in order)
 
-**⚠ BLOCKING — verify decision 076 on a Mac before any release.** The macOS-13 floor, the
-binary hook on macOS, and the universal DMG were all written on the Windows box. `cargo check`
-passes there, which proves only that Windows is unregressed; **every line of the new macOS
-path is unrun.** Until this list is green, macOS users are on unverified code, and tagging a
-release ships it to all of them. On a Mac, in order:
+**✅ CLEARED 2026-08-18 — decision 076 is verified on a Mac.** All seven checks below were
+run on macOS 26.6.1 (arm64, Rust 1.96.1, Node 25.1.0) against commit `776d052`. Results:
 
-1. `cd app/src-tauri && cargo check` — the `#[cfg(not(windows))]` `install_binary` has never
-   been compiled.
-2. `cd hooks/agentstatus-hook && cargo test` — the golden-parity suite, on macOS this time.
-3. `./hooks/gen-golden.sh` — confirm it reproduces `tests/fixtures/golden.jsonl` byte for
-   byte. A diff means `report.sh` behaves differently on macOS than on the Windows box the
-   goldens were captured on, and the port's equivalence claim needs re-reading before
-   anything ships.
-4. `./install.sh`, then a **live session diffed old-vs-new**: run a turn with the old
-   `report.sh` registered, capture `~/.claude/status/sessions/<id>.json` after each event,
-   re-register the binary, run the same turn, diff. `pid` and `updated_at` differ by design;
-   nothing else may.
-5. Confirm the installed `~/.claude/status/agentstatus-hook` is executable and carries **no**
-   `com.apple.quarantine` (`xattr -l`) after a DMG install cleared through *"Open Anyway"*
-   rather than `xattr -dr` — that path is the reason the install writes bytes instead of
-   `fs::copy`ing, and it is the one hazard here with no Windows analogue to reason from.
-6. Build the universal DMG once (`AGENTSTATUS_HOOK_UNIVERSAL=1 npm run tauri build --
-   --target universal-apple-darwin`) and check three things: `lipo -archs` on
-   `Contents/Resources/resources/agentstatus-hook` reports both slices, `LSMinimumSystemVersion`
-   in `Info.plist` reads `13.0`, and the **actual DMG filename** matches what the README tells
-   users to download (`AgentStatus_0.7.1_universal.dmg` is an expectation, not an observation).
-7. `hooks/sign-app.sh` still verifies clean — `codesign --deep` now has a nested Mach-O in
-   `Contents/Resources` to sign, which it did not before. A failure here silently costs the
-   Accessibility grant (#039), so read its output rather than trusting its exit code.
+1. ✅ `cargo check` in `app/src-tauri` — the `#[cfg(not(windows))]` `install_binary` compiles.
+   One pre-existing `unused_mut` warning at `src/lib.rs:2785`, unrelated.
+   **Papercut found:** a bare `cargo check` on a fresh clone *fails* — `tauri.macos.conf.json`
+   now lists `resources/agentstatus-hook`, and `tauri-build` errors if the path is missing.
+   Staging is wired to Tauri's `beforeBuildCommand`, not to cargo, so the step is really
+   `node hooks/stage-hook.mjs && cargo check`. Not a code bug; the instruction was incomplete.
+2. ✅ `cargo test` in `hooks/agentstatus-hook` — 14/14 pass on macOS, including
+   `matches_report_sh_on_every_fixture`.
+3. ✅ `./hooks/gen-golden.sh` reproduces `tests/fixtures/golden.jsonl` **byte for byte**
+   (46 lines, `cmp` clean). `report.sh` does not behave differently on macOS than on the
+   Windows box the goldens were captured on — the port's equivalence claim holds.
+   **Bug found and fixed:** `gen-golden.sh` was committed mode `100644` (no exec bit, authored
+   on Windows where the bit is meaningless), so the documented `./hooks/gen-golden.sh` failed
+   with *permission denied* on macOS. Now `100755` via `git update-index --chmod=+x`.
+4. ✅ `./install.sh`, then a live old-vs-new diff. Build, `sign-app.sh`, and relaunch all
+   succeeded; the app's first launch registered **all 11 events** to the binary and **replaced**
+   the legacy `report.sh` entries rather than stacking them. Diffed a real live session's
+   `sessions/<id>.json` written by old `report.sh` against the one written by the binary —
+   *same session, same pid, same turn*: identical key order and identical values on every
+   field except `updated_at`. `pid` matched too, being the same session.
+5. ✅ Installed `~/.claude/status/agentstatus-hook` is `0755`, executable, and carries **no**
+   `com.apple.quarantine` (only the benign `com.apple.provenance`). Also confirmed empirically
+   *why* the code writes bytes instead of `fs::copy`ing: on macOS 26, `cp` propagates a
+   `com.apple.quarantine` xattr to the destination and a read+write does not.
+6. ✅ Universal DMG. Built locally (`AGENTSTATUS_HOOK_UNIVERSAL=1 ... --target
+   universal-apple-darwin`) **and** verified against the **already-published v0.8.0 artifact**:
+   `lipo -archs` on `Contents/Resources/resources/agentstatus-hook` reports `x86_64 arm64` in
+   both, `LSMinimumSystemVersion` reads `13.0`, and the real release asset is named
+   `AgentStatus_0.8.0_universal.dmg` — matching what the README tells users to download.
+7. ✅ `hooks/sign-app.sh` verifies clean with the nested Mach-O present: after install,
+   `codesign --verify --deep --strict` on `/Applications/AgentStatus.app` passes *and*
+   "satisfies its Designated Requirement", so the #039 Accessibility grant is not at risk.
+   **Noted, not a regression:** the *released* DMG is bundle-unsigned (`--verify` says "code
+   object is not signed at all" — no `_CodeSignature/CodeResources`) because CI does not run
+   `sign-app.sh`; its Mach-O still carries Tauri's ad-hoc linker signature, so it launches, and
+   v0.7.1 fails bundle verification in the same way. Only the build-from-source path is signed
+   with the stable identity, which is what #039 actually needs.
+
+**Note:** v0.8.0 was tagged and published on 2026-08-15, *before* this checklist was run — the
+unverified macOS code was live for three days. It has now been checked after the fact and is
+sound, but the ordering is the thing to avoid repeating.
 
 **Current focus — Windows support, option B (decisions 068/069).** Native Windows only;
 Cursor-AX and per-tab terminal focus are out of scope by decision. Sequenced so macOS is
@@ -561,6 +580,23 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 ---
 
 ## Recently completed
+
+- **2026-08-18** — **decision 076 verified on macOS; the blocking checklist is cleared.**
+  Pulled `776d052` onto a Mac (macOS 26.6.1, arm64) and ran all seven checks — full results in
+  the cleared block at the top of *Now*. Three things worth carrying forward. **(a)** The
+  goldens regenerate **byte for byte** on macOS, which is the check that actually validates
+  the port: `report.sh` behaves identically on both platforms, so the Rust hook's equivalence
+  is not a Windows-only claim. **(b)** The binary hook is **6× faster than `report.sh` on
+  macOS** — 11.5 ms vs 70.5 ms per event over 20 runs each — so 076 bought a real latency win
+  on the platform it was not written for (Agent Guideline #3). **(c)** Two defects surfaced,
+  both from authoring on Windows: `gen-golden.sh` shipped without its exec bit so the
+  documented `./hooks/gen-golden.sh` failed on macOS (**fixed**, now `100755`), and a bare
+  `cargo check` on a fresh clone fails because `tauri.macos.conf.json` now requires the staged
+  hook resource that only `beforeBuildCommand` produces (**doc fix** — run
+  `node hooks/stage-hook.mjs` first). Also verified against the *published* v0.8.0 DMG rather
+  than only a local build: bundled hook is `x86_64 arm64`, `LSMinimumSystemVersion` is `13.0`,
+  and the asset name matches the README. The release-vs-verification ordering was backwards —
+  v0.8.0 shipped 2026-08-15, three days before these checks ran.
 
 - **2026-08-15** — **v0.8.0 released, after the first tag published nothing (decision 079).**
   Version bumped 0.7.1 → 0.8.0 across five manifests plus both lockfiles — a minor bump
