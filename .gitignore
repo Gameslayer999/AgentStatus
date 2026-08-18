@@ -22,3 +22,6 @@ extension/report.sh
 
 # Rust build output for the standalone hook crate (decision 068)
 hooks/agentstatus-hook/target/
+
+# The extension packages a copy of the root LICENSE at publish time (npm run copylicense)
+extension/LICENSE

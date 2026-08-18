@@ -144,6 +144,10 @@ function repaintTray() {
   pushTrayImage();
 }
 
+// The menu bar's background flips with the system appearance, and `trayOutline` decides
+// from it, so the icon has to be redrawn when the appearance changes.
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", repaintTray);
+
 // Lay the lights out as a row or a column. The window auto-resizes to hug whichever
 // shape results.
 function applyOrientation(orient) {
@@ -204,6 +208,47 @@ let latestSessions = []; // most recent poll, so a pref change can repaint the t
 // what needs the user first).
 const TRAY_PRIORITY = ["error", "blocked", "done", "running", "unknown", "idle"];
 
+// Shape carries the state alongside color, so the two states that need the user read at a
+// glance and survive color blindness (UI Principle #2). The floating bar signals those with
+// a pulse, which a tray icon cannot afford — several animated status items wedge the main
+// thread — so in the menu bar the silhouette does that work instead (decision 086).
+const TRAY_SHAPE = { blocked: "triangle", error: "square", unknown: "ring" };
+
+// Trace one light's silhouette. A triangle and a square read smaller than a circle of the
+// same radius, so each is drawn slightly larger to carry the same visual weight.
+function traceLight(ctx, shape, cx, cy, r) {
+  if (shape === "triangle") {
+    const s = r * 1.22;
+    ctx.moveTo(cx, cy - s);
+    ctx.lineTo(cx + s * 0.92, cy + s * 0.72);
+    ctx.lineTo(cx - s * 0.92, cy + s * 0.72);
+    ctx.closePath();
+  } else if (shape === "square") {
+    const s = r * 0.88;
+    ctx.rect(cx - s, cy - s, s * 2, s * 2);
+  } else if (shape === "ring") {
+    ctx.arc(cx, cy, r - 1.5, 0, Math.PI * 2); // half the 3px stroke, so it stays inside D
+  } else {
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  }
+}
+
+// The menu bar takes the system appearance, and the dots are drawn straight onto it: a
+// near-white light (`done`, the empty placeholder, or a pale color the user picked) is
+// invisible on a light bar, and a near-black one is invisible on a dark bar. Outline those
+// rather than recolor them, so a state keeps the exact color the user chose in both
+// appearances. Returns null when the fill already contrasts.
+function trayOutline(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  const lum = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  if (!dark && lum > 0.72) return "rgba(0,0,0,0.55)";
+  if (dark && lum < 0.2) return "rgba(255,255,255,0.55)";
+  return null;
+}
+
 function summaryState(states) {
   for (const p of TRAY_PRIORITY) if (states.includes(p)) return p;
   return "empty";
@@ -241,20 +286,25 @@ function drawTray(states, colors, condense) {
     } else if (st === "idle") {
       alpha = 0.55; // dim acknowledged/dormant sessions, like the bar
     }
+    const shape = TRAY_SHAPE[st] || "circle";
     ctx.globalAlpha = alpha;
     ctx.beginPath();
+    traceLight(ctx, shape, cx, cy, R);
     // "unknown" draws a hollow ring, matching the bar's `.dot.unknown`.
-    if (st === "unknown") {
-      const LW = 3;
-      ctx.arc(cx, cy, R - LW / 2, 0, Math.PI * 2);
-      ctx.lineWidth = LW;
+    if (shape === "ring") {
+      ctx.lineWidth = 3;
       ctx.strokeStyle = fill;
       ctx.stroke();
       return;
     }
-    ctx.arc(cx, cy, R, 0, Math.PI * 2);
     ctx.fillStyle = fill;
     ctx.fill();
+    const outline = trayOutline(fill);
+    if (outline) {
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = outline;
+      ctx.stroke();
+    }
   });
   ctx.globalAlpha = 1;
   const data = ctx.getImageData(0, 0, W, H).data;

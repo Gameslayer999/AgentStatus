@@ -3,6 +3,7 @@ name = "agentstatus-hook"
 version = "0.9.0"
 description = "AgentStatus — the Claude Code / Cursor status hook"
 edition = "2021"
+license = "MIT"
 
 # Deliberately its own crate, outside the Tauri package (decision 068). Two reasons:
 # the hook runs on every tool call and must not carry Tauri's dependency graph, and

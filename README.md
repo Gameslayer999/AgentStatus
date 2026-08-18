@@ -10,6 +10,7 @@ open Claude Code or Cursor session.**
 [![Latest release](https://img.shields.io/github/v/release/Gameslayer999/AgentStatus?sort=semver&label=release)](https://github.com/Gameslayer999/AgentStatus/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Gameslayer999/AgentStatus/total?label=downloads)](https://github.com/Gameslayer999/AgentStatus/releases)
 ![Platform](https://img.shields.io/badge/platform-macOS%20·%20Windows-black)
+[![License](https://img.shields.io/badge/license-MIT-black)](LICENSE)
 
 [Install](#install) · [The lights](#the-lights) · [Settings](#settings) · [How it works](#how-it-works) · [Limits](#limits)
 
@@ -142,7 +143,12 @@ Click the gear to open the settings window. It has **General**, **Lights**, **Co
 ### Menu-bar mode
 
 Set **Mode → Menu bar** (macOS) or **Mode → Tray** (Windows). Click the item to show the
-full bar as a popover. Click-to-focus, tooltips, and badges continue to operate.
+full bar as a popover. Click-to-focus, tooltips, and badges continue to operate. Click
+anywhere outside the popover to close it.
+
+In the menu bar, the two states that need you also have their own shape: **blocked is a
+triangle** and **error is a square**. The other states stay round. Thus you can identify them
+without color, at the small size of a menu-bar icon.
 
 - **Dots or Single** (macOS) — one dot for each session (default), or one dot for the most
   urgent state. On Windows the item is always one dot, because the icon is square.
@@ -228,3 +234,7 @@ npm --prefix app run tauri build
 
 For the development setup and the release procedure, refer to
 [docs/DEVELOPING.md](docs/DEVELOPING.md).
+
+## License
+
+[MIT](LICENSE). Copyright (c) 2026 Gameslayer999.

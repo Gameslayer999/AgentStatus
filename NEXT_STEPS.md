@@ -7,6 +7,18 @@
 
 ## Current state
 
+- **The project is MIT-licensed (decision 087).** `LICENSE` at the root, `license` fields in
+  both crates and both `package.json`s, a badge and a `## License` section in the README. The
+  extension copies the root LICENSE into its own package at publish time (`npm run
+  copylicense`, git-ignored like `report.sh`), because `vsce` warns without one. Until now the
+  repository had no licence at all, which made the advertised DMG legally undistributable.
+- **The menu-bar icon closes on a click outside, and shapes its urgent states (decision
+  086).** A global `NSEvent` mouse-down monitor gives macOS the dismissal #073 could only give
+  Windows (the non-activating panel of #008 never takes focus, so `Focused(false)` never
+  fires). A pale light — `done`, the empty placeholder, or a pale colour from the settings —
+  is now outlined instead of vanishing into a **light** menu bar. And `blocked` draws as a
+  triangle, `error` as a square, so the two states that need the user survive colour blindness
+  at 11pt, which is the job the floating bar's pulse does and a tray icon cannot.
 - **An orange light is a question again (decision 084).** A `--bg` job that finished and is
   sitting at an empty prompt reports `state: "blocked"` exactly like one that stopped to ask
   you something; the bar now reads the job's own `needs` to tell them apart, so only a job
@@ -280,6 +292,14 @@ to `~/.claude/status/calibration.log` (calibration only — no `tool_input`).
 ---
 
 ## Now (build queue, in order)
+
+**Confirm the menu-bar popover's click-away dismissal with a real click (decision 086).**
+The monitor compiles, installs on the main thread, and the app runs with it for minutes
+without incident, but no test here can click a menu-bar item and then another application.
+Switch to **Mode → Menu bar**, click the item, then click into any other app: the popover must
+close. Then click the item twice in a row: it must open and close, proving the status-item
+click stays a *local* event the global monitor never sees (the Windows equivalent needed a
+400 ms debounce for exactly that race).
 
 **Verify decision 083's two-press click against a live Cursor notification.** Each press is
 proven on its own (composer row opens the agent; `"Clear All Notifications"` takes the count
@@ -556,6 +576,13 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 
 ## Decisions needed
 
+- **Should the floating bar use the menu bar's shapes too? (decision 086 left this open.)**
+  `blocked` is a triangle and `error` a square in the menu-bar icon, and a plain circle on the
+  floating bar — the same state with two silhouettes, which cuts against UI Principle #1's
+  "unambiguous and consistent". The bar has its pulse to mark those states and the icon cannot
+  animate, so the split is defensible; it is still a split. Decide either way rather than
+  leaving it to drift.
+
 - **What should the Windows hook record as `pid`? (decision 068 — unresolved, blocks nothing
   yet.)** The shell hook records `$PPID`; the binary records its own parent, which under Git
   Bash may be `bash` rather than `claude.exe`. Which one it actually resolves to has **not been
@@ -629,6 +656,14 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 ---
 
 ## Recently completed
+
+- **2026-08-18** — **The README lost 186 lines, and the developer docs moved out.** It
+  repeated the same facts across its intro, "The lights", and "Customize it", and pinned the
+  download filenames to `0.9.0`; it now names the release assets by pattern and points at the
+  latest-release page. Dev setup, `windows-diagnostics.ps1`, and the release procedure moved
+  to `docs/DEVELOPING.md`. Also fixed: the install command named
+  `extension/claudestatus-0.1.2.vsix`, which has not been the extension's name or version
+  since it became `agentstatus-0.1.3.vsix`.
 
 - **2026-08-18** — **CI actions moved to their current majors, and two build warnings are
   gone.** The v0.9.0 run warned that `actions/checkout@v4`, `setup-node@v4`,

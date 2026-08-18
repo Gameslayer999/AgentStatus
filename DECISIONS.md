@@ -95,6 +95,8 @@
 | 083 | 2026-08-18 | **The pip's click clears Cursor's notifications itself.** Reported live: clicking the pip never retired the Cursor menu-bar notification, so the pip kept coming back. #045's premise — press the `"• <name>"` row and Cursor both opens the composer and marks it read, verified on 3.12.10 — is false on **3.15.6**: that row's click sends only `vscode:openComposer`, whose handler opens the agent and touches neither half of a bullet (`hasUnreadMessages || badgeCount > 0`). Only `"Clear All Notifications"` sends `vscode:clearAllNotifications` → `markAgentRead` + `clearAllBadges`. In **Glass** mode (this user's Cursor) the per-composer badge-clear-on-focus listener is never registered at all, so a bullet survives opening the composer for up to its 1 h auto-clear. Measured: pressing the composer row leaves the count at 2 (with or without activating Cursor), pressing the clear-all row takes it 2 → 0 — so `AXPress` works and it is the row that changed. The click now presses both rows, navigating first and clearing second. Cursor exposes no per-composer clear, so this necessarily clears the other waiting composers' bullets — accepted, since on Glass they would sit for an hour anyway and their sessions keep their own lights. End-to-end press against a live notification still unverified (Cursor quit before one appeared) | Accepted |
 | 084 | 2026-08-18 | **An orange background-agent light has to be a question.** Reported live: "why is there an orange light in my lightbar from a session that already finished?" #063 maps Claude Code's `state: "blocked"` for a `--bg` job straight to orange, on the premise that `blocked` means the job stopped to ask something. It has a second meaning: a job that finished its turn and sits at an empty prompt reports the same `blocked`. Both were measured on 2.1.234 — the difference is the `needs` in the job's own `~/.claude/jobs/<id>/state.json`, which is the question verbatim when one was asked (`"Should the fallback be red or blue?"`) and the literal `"send a prompt to start"` when nothing is being asked at all. `claude agents --json` carries the job's `tempo` as `state` but not the `needs` behind it, so the bar now reads it from the job record. `needs == "send a prompt to start"` no longer paints orange (the light stays as the hook wrote it) and no longer blocks #065's five-minute retirement — which had left the light orange for the full two-hour backstop, since #065's "never retire a blocked light" guard applied to it too. An exact-string test, deliberately: an unrecognised or absent `needs` keeps #063's orange, because a missed attention light costs more than one that lingers (UI Principle #2 over #4) | Accepted |
 | 085 | 2026-08-18 | **A release says what changed in its own words, from a file in the repo.** Until now the publish step ran `gh release create --generate-notes`, so every release read as a bare commit list — accurate, but it never says what the version is *for*. The step now looks for `docs/release-notes/<tag>.md` and passes it as `--notes-file` alongside `--generate-notes`, which puts the written description above the generated list; with no such file the release is exactly what it was before, so the description is optional and can never block a tag. Written in the repo rather than typed into the GitHub UI after the fact, because a release is cut by pushing a tag from a machine that may not be the author's (Guideline #8), and because the notes then review with the code that earned them. The publish job gains an `actions/checkout` it did not need before — it previously only downloaded artifacts | Accepted |
+| 086 | 2026-08-18 | **The menu-bar icon closes itself, and says the urgent states in shapes.** Two defects found by comparing the tray path against [autonomous-ai/agent-status](https://github.com/autonomous-ai/agent-status), a native SwiftUI menu-bar app for the same status files. (1) The popover never closed on a click outside on macOS: #073 dismisses on `Focused(false)`, which #008's non-activating panel can never fire. Fixed with a global `NSEvent` mouse-down monitor, which sees only clicks delivered to *other* applications — so a click on our own lights or on the status item stays local, the tray icon keeps toggling, and Windows' 400 ms debounce needs no counterpart. (2) `done` (`#ecf0f1`) and the empty placeholder (white at 0.28) were invisible on a **light** menu bar, because the dots are painted straight onto it. Fixed by outlining any fill too close to the bar behind it (luminance > 0.72 on a light bar, < 0.2 on a dark one) rather than recolouring it, so a state keeps the exact colour the user picked. And `blocked` now draws as a triangle and `error` as a square: their app separates states by SF Symbol as well as colour, and a tray icon cannot afford the bar's pulse — they measured that several animated status items wedge the main thread | Accepted |
+| 087 | 2026-08-18 | **AgentStatus is MIT-licensed.** The repository had no licence of any kind — no `LICENSE` file, no `license` field in either `Cargo.toml`, `app/package.json`, or the extension manifest — which makes published code "all rights reserved": GitHub's ToS grants the public only viewing and forking, so nobody could legally build, redistribute, or deploy the DMG the README advertises, and a pull request would arrive with no inbound grant. A dependency audit found nothing that constrains the choice: of 268 crates resolved from `Cargo.lock`, zero GPL/LGPL/AGPL/SSPL, and the five MPL-2.0 crates (`cssparser`, `selectors`, `dtoa-short`, `option-ext`, `cssparser-macros`) are file-level copyleft we do not modify. MIT over Apache-2.0 because there is no patentable invention here to need a patent grant, and over GPL-3.0 because that would deter contributors and complicate Marketplace distribution for a free utility whose value is convenience. The accepted cost: someone may repackage and sell it, with attribution | Accepted |
 
 ---
 
@@ -5367,3 +5369,123 @@ build artifacts.
 **Verified.** The workflow parses as YAML, and the v0.9.0 file is in place at
 `docs/release-notes/v0.9.0.md`. The publish path itself is exercised by the v0.9.0 tag —
 the first release cut with a description.
+
+## 086 — The menu-bar icon closes itself, and says the urgent states in shapes
+
+**Date:** 2026-08-18
+**Status:** Accepted (fixes two defects in #024/#072's tray mode; extends #073 to macOS)
+
+**Context.** Asked to compare our menu-bar implementation against
+[autonomous-ai/agent-status](https://github.com/autonomous-ai/agent-status) — a native Swift
+6 / SwiftUI + AppKit menu-bar app, Apache-2.0, that tails the same on-disk state Claude Code
+writes. Reading their status-item code against ours turned up two defects of ours and one
+idea worth taking.
+
+**Defect 1 — the macOS popover never closed on a click outside.** #073 dismisses the popover
+on `Focused(false)` and is explicitly Windows-only, because the macOS panel is a
+non-activating NSPanel (#008): it never takes focus, so it never loses any, and the event the
+Windows fix hangs on can never fire here. Their popover is an `NSPopover` with
+`behavior: .transient`, which macOS closes for them. Ours is the same panel the floating bar
+uses, so there is no `NSPopover` to inherit that from.
+
+**Decision.** A global `NSEvent` monitor
+(`addGlobalMonitorForEventsMatchingMask:handler:`, left/right/other mouse-down), installed
+once from `setup` — where AppKit's main-thread requirement is already satisfied — hides the
+window when `TRAY_MODE` is set and the window is on screen. A *global* monitor sees only
+events delivered to **other** applications, which is exactly the "clicked away" gesture: a
+click on our own lights, on the settings window, or on the status item is a local event that
+never reaches the handler. That is why this needs no counterpart to Windows' 400 ms
+debounce — the tray click that closes the popover was never at risk of racing an auto-hide.
+`TRAY_MODE` stops being `#[cfg(windows)]` and now answers "am I a popover?" on both
+platforms.
+
+**Defect 2 — a pale light was invisible on a light menu bar.** The tray dots are the
+webview's canvas painted straight onto the bar (#017 keeps one source of truth for the state
+colours), and the bar takes the system appearance. `done` is `#ecf0f1` and the no-sessions
+placeholder is white at 0.28 alpha: on a light menu bar both were very close to invisible,
+and a pale colour chosen in the settings would be too.
+
+**Decision.** Outline rather than recolour. A fill whose luminance is above 0.72 on a light
+bar, or below 0.2 on a dark one, gets a 2px 55%-opaque outline in the opposite ink; every
+other fill is drawn exactly as it is. Recolouring was the obvious alternative and was
+rejected: darkening `#ecf0f1` enough to show lands it in the same grey as `idle`, which
+would make the one state that means "you have not read this" indistinguishable from the one
+that means "nothing to do". The icon repaints on `prefers-color-scheme` change, since the
+answer flips with the appearance.
+
+**Taken from their app — shape, not only colour.** Their status item renders SF Symbols that
+differ in glyph as well as colour (`circle.fill`, `bell.badge.fill`,
+`exclamationmark.octagon.fill`). Ours distinguished six states by hue alone, in an icon about
+11pt tall, which fails for a red/green colour-blind user precisely on the pair that matters
+most (`running` vs `error`). `blocked` is now a triangle and `error` a square; `unknown`
+keeps its ring, and `running`/`done`/`idle` stay round. This is UI Principle #2's job in the
+menu bar: the floating bar pulses its attention states, and a tray icon cannot — their
+write-up records that three or more animated `NSStatusItem`s wedge the main thread, which is
+a good reason not to try.
+
+**Scope, deliberately.** The shapes are the menu-bar icon only; the floating bar is
+unchanged, so the same state now has two silhouettes in two places. Taking shapes into the
+bar as well is recorded in `NEXT_STEPS.md` as an open question rather than decided here.
+
+**Not taken.** Their SF Symbol rendering wholesale — it would hand the state colours to the
+system and drop the per-state colours the settings window exists to set (#017, #082). Their
+one-icon-plus-count chip in place of a dot strip — offered and declined for now; our
+condensed mode (#024) already covers the "one dot" case.
+
+**Verified.** `node app/tests/tray-icon.mjs` covers the silhouette per state and the outline
+thresholds in both appearances, against the real functions read out of `app/src/main.js`.
+`cargo check` is clean on macOS. The click-away dismissal itself is **not** yet confirmed by
+a real click — it needs a human clicking a menu-bar item and then another application, which
+no test here can stand in for; recorded as such in `NEXT_STEPS.md`.
+
+## 087 — AgentStatus is MIT-licensed
+
+**Date:** 2026-08-18
+**Status:** Accepted
+
+**Context.** The repository had no licence at all: no `LICENSE`/`COPYING` file anywhere, no
+`license` field in `app/package.json`, `extension/package.json`,
+`app/src-tauri/Cargo.toml`, or `hooks/agentstatus-hook/Cargo.toml`, and no mention in the
+README. `app/src-tauri/Cargo.toml` still carried the scaffold's `authors = ["you"]`.
+
+**What that meant.** Published code with no licence is "all rights reserved" by default.
+GitHub's terms grant the public only the right to view the repository and fork it within
+GitHub — nothing else. So the DMG and the `.exe` the README advertises carried no grant to
+run or redistribute them, a company could not deploy the tool at all, and a pull request
+would arrive with no inbound licence to merge it under. The status quo was an accident, not
+a position.
+
+**Copyleft check, since it constrains the choice.** 268 of the 483 crates in
+`app/src-tauri/Cargo.lock` resolved from the local registry cache: zero GPL, LGPL, AGPL,
+SSPL, CDDL, or EPL. The bulk is `MIT OR Apache-2.0`. The only copyleft is five MPL-2.0
+crates — `cssparser`, `cssparser-macros`, `dtoa-short`, `option-ext`, `selectors` — and
+MPL-2.0 is file-level: it obliges publication of modifications to *those files*, which we do
+not modify. Tauri itself is `Apache-2.0 OR MIT`; `tauri-nspanel` ships both licences. The
+unresolved remainder is Linux/wasm/Windows-target crates not vendored on this machine; the
+LGPL question around GTK/WebKitGTK does not arise, since we ship macOS (WKWebView) and
+Windows (WebView2) only.
+
+**Options considered.**
+
+| Option | Verdict |
+| **MIT** | **Chosen.** Shortest licence people actually read, maximally compatible, and the convention in both target ecosystems |
+| Apache-2.0 | Its patent grant and retaliation clause are real protection, but this app reads a JSON file and draws dots — no patentable invention to defend, and NOTICE/change-notice obligations for nothing |
+| MIT OR Apache-2.0 | Tauri's own answer. Offered as the alternative if repackaging were the concern; two licence files for a benefit this project does not need |
+| GPL-3.0 | Would stop a closed-source repackage, at the cost of deterring contributors and complicating Marketplace and store distribution. Disproportionate for a free convenience utility |
+| No licence | The status quo, and the one clearly wrong answer — it blocks exactly the adoption the README's download badges invite |
+
+**The accepted cost.** MIT lets someone repackage AgentStatus and sell it, with attribution.
+For a free tool whose source is a public repository, that was judged a smaller risk than the
+adoption an unlicensed repository forfeits.
+
+**Files changed.** `LICENSE` (MIT, `Copyright (c) 2026 Gameslayer999`); `license` fields in
+both `Cargo.toml`s, `app/package.json`, and `extension/package.json`; the scaffold
+`authors = ["you"]` replaced; a licence badge and a `## License` section in the README. The
+extension packages its own copy — `vsce` warns without one and the Marketplace renders a
+License tab — copied from the root at publish time by a `copylicense` script beside the
+existing `copyhook`, so it can never drift, and git-ignored like the `report.sh` it mirrors
+(Guideline #8).
+
+**Worth an actual lawyer, and flagged rather than answered here:** who owns the copyright if
+any of this was written for or during employment, and Microsoft's Publisher Agreement if the
+extension is ever put on the Marketplace — a separate contract from the MIT grant.
