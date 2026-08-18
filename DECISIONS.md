@@ -90,6 +90,7 @@
 | 078 | 2026-08-15 | **A plan-mode approval turns the light orange.** Reported live as "Windows isn't picking up on orange", with the light showing **green** while waiting. Instrumenting the chain exonerated the Windows port — `AskUserQuestion` and Bash permission prompts already held `blocked` for 43 s / 32 s and rendered orange on screen. The defect is `ExitPlanMode`: its `PermissionRequest` fires when the user *answers*, so `PreToolUse` is the only event that lands while the prompt is up and the light stayed green for the whole 48 s wait, turning orange for under 150 ms at the end. The approved first fix — extend #067's reconcile on Claude Code's own `status: "waiting"` — was **falsified by the same measurement** (status read `busy` throughout the plan prompt) and dropped rather than shipped as dead weight. Instead `ExitPlanMode`/`EnterPlanMode` rewrite their `PreToolUse` to `PermissionRequest` in both hook implementations, so state and detail stay in agreement and `PostToolUse` greens the light on approval. `AskUserQuestion` left out as redundant; `EnterPlanMode` included at the user's choice, accepting a sub-second orange flicker when auto-approved as cheaper than 48 s of wrong-green (UI Principle #2). Golden regeneration is +4 lines / 0 changed, proving the refactor touched nothing else. Verified live: 31.9 s of `blocked` across a real approval, against 48 s of green before | Accepted |
 | 079 | 2026-08-15 | **The release publishes with `find`, not a `dist/*` glob.** The first `v0.8.0` tag built both platforms and then published nothing: `read dist/msi: is a directory`. `actions/upload-artifact` preserves the structure below the **common ancestor of the paths it is given**, and the two jobs give it different numbers of paths — macOS one (its DMG lands flat), Windows two (`msi/` and `nsis/` arrive as directories) — so `dist/*` handed `gh` two files and two directories. Invisible until now because #069 checked the globs against the *local* build output; the asymmetry is created by `upload-artifact`, not by the build. Nothing broken reached users only because `gh release create` deletes the release it just made when an asset upload fails — `v0.7.1` stayed Latest. Now `find dist -type f`, plus a count guard that fails before publishing rather than shipping a release quietly missing an installer (the same class as #041's version guard). Flattening the Windows upload was rejected: it fixes this shape and leaves the next one to another failed tag | Accepted |
 | 080 | 2026-08-18 | **A light can be closed by hand.** Every prune the bar had was evidence-based — a closed window (#027), a dead pid (#054), an archived composer (#048), a retired background agent (#065), the 2 h backstop (#004) — so a session the *user* knows is finished can keep its light until the evidence arrives. Right-click now reveals, alongside the lights, one small red × per light; clicking it invokes `dismiss_session`, which deletes that session's status file and subagent markers exactly as a prune does. A deletion, not a hide: a session that is genuinely alive re-registers on its next hook event and its light returns (UI Principle #4 — the bar must not withhold a light for a live session any more than it may show one for a dead session). A local tombstone hides the light on the click so a poll already in flight cannot paint it back, and is lifted the moment the poll agrees the session is gone — or after 5 s if the delete never took. The buttons ride with the settings panel rather than sitting on the bar: a close button always visible next to a click-to-focus light is a misclick that deletes what you meant to open (UI Principle #1/#3). Their red is a fixed constant, not `--c-error`, so recoloring the error state cannot turn them blue nor make a row of controls read as five sessions in error | Accepted |
+| 084 | 2026-08-18 | **An orange background-agent light has to be a question.** Reported live: "why is there an orange light in my lightbar from a session that already finished?" #063 maps Claude Code's `state: "blocked"` for a `--bg` job straight to orange, on the premise that `blocked` means the job stopped to ask something. It has a second meaning: a job that finished its turn and sits at an empty prompt reports the same `blocked`. Both were measured on 2.1.234 — the difference is the `needs` in the job's own `~/.claude/jobs/<id>/state.json`, which is the question verbatim when one was asked (`"Should the fallback be red or blue?"`) and the literal `"send a prompt to start"` when nothing is being asked at all. `claude agents --json` carries the job's `tempo` as `state` but not the `needs` behind it, so the bar now reads it from the job record. `needs == "send a prompt to start"` no longer paints orange (the light stays as the hook wrote it) and no longer blocks #065's five-minute retirement — which had left the light orange for the full two-hour backstop, since #065's "never retire a blocked light" guard applied to it too. An exact-string test, deliberately: an unrecognised or absent `needs` keeps #063's orange, because a missed attention light costs more than one that lingers (UI Principle #2 over #4) | Accepted |
 
 ---
 
@@ -5031,3 +5032,64 @@ indistinguishable from a successful prune.
   quadrant of a 1440×900 monitor: horizontal bar → buttons below at the top of the screen,
   above at the bottom; vertical bar → buttons right on the left of the screen, left on the
   right; and each × still on its own light's axis in every case.
+
+## 084 — An orange background-agent light has to be a question
+
+**Date:** 2026-08-18
+**Status:** Accepted (narrows #063; restores #065's timer for one case)
+
+**Symptom (reported live).** "Why is there an orange light in my lightbar from a session that
+already finished?"
+
+**The light.** Background job `40edcbe8` ("Cursor menu bar notification persistence"). Its own
+status file said `idle`, written by its `Stop` hook; the bar painted it orange anyway, and had
+been doing so for far longer than a finished job should keep any light at all.
+
+**Root cause.** #063 reads Claude Code's own word on a `--bg` job and maps `state: "blocked"`
+to orange, on the premise that `blocked` means *the job stopped and the ball is in your court
+because it asked you something*. `blocked` is broader than that. Measured on 2.1.234 against
+two live jobs — one told to ask a question and stop, one finished and left alone:
+
+| job | `agents --json` `status`/`state` | `jobs/<id>/state.json` `needs` | what it actually is |
+|---|---|---|---|
+| `ccae1eca` | `idle` / `blocked` | `"Should the fallback be red or blue?"` | waiting on an answer |
+| `40edcbe8` | `idle` / `blocked` | `"send a prompt to start"` | finished, sitting at an empty prompt |
+
+The two are identical in `agents --json`, which carries the job's `tempo` as its `state`. The
+`needs` behind that `tempo` separates them, and only the job's own record has it: it is the
+question verbatim when one was asked, and the literal `"send a prompt to start"` when nothing
+is being asked of the user at all.
+
+The same premise made the light *permanent*. #065 retires a finished background agent's light
+after five minutes of hook silence, and exempts `blocked` — a job waiting on an answer goes
+silent by nature, and deleting its light is exactly the miss #063 was written to fix. An
+unprompted job inherited that exemption, so nothing retired it short of the two-hour
+`MAX_IDLE_SECS` backstop.
+
+**Decision.** A `blocked` background job is treated as waiting on the user only when it is
+actually asking something. `bg_light_state` and `bg_retirable` both consult `bg_unprompted`,
+which reads `needs` from `~/.claude/jobs/<id>/state.json` (only background agents have a job
+id, so nothing else pays for the read). When `needs` is `"send a prompt to start"`:
+
+- the light stays as the hook wrote it — `idle`, which is the truth (UI Principle #4), and
+- #065's five-minute timer applies again, so the light retires like any other finished job.
+
+**Why an exact string match.** An unrecognised `needs` — a re-worded phrase in a later Claude
+Code, a job with no record on disk, a null field — keeps #063's orange. The failure modes are
+not symmetric: a light that lingers is noise, a missing orange light is a session waiting on
+you that you never see (UI Principle #2). The narrowing only ever fires on the one phrase that
+has been observed to mean "nothing is being asked of you".
+
+**Verified.** `dump_cli_facts` against both live jobs at once:
+
+```
+40edcbe8 kind=background status=idle state=blocked needs="send a prompt to start"
+         -> light=None retirable=true
+ccae1eca kind=background status=idle state=blocked needs="Should the fallback be red or blue?"
+         -> light=Some("blocked") retirable=false
+```
+
+The finished job stops painting orange and becomes retirable; the job that asked a question
+keeps its orange light and its exemption from the timer. Unit test
+`bg_blocked_needs_a_question` pins all four combinations, including the unrecognised-`needs`
+fallback.

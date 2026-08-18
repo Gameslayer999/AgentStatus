@@ -7,6 +7,11 @@
 
 ## Current state
 
+- **An orange light is a question again (decision 084).** A `--bg` job that finished and is
+  sitting at an empty prompt reports `state: "blocked"` exactly like one that stopped to ask
+  you something; the bar now reads the job's own `needs` to tell them apart, so only a job
+  that is actually asking paints orange — and a finished one retires on #065's five-minute
+  timer instead of holding a light for two hours.
 - **Lights can now be closed by hand (decision 080).** Right-click reveals a row of small red
   × buttons alongside the lights — one per light — and clicking one deletes that session's
   status file immediately, instead of waiting for an evidence-based prune or the 2 h backstop.
@@ -584,6 +589,22 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 ---
 
 ## Recently completed
+
+- **2026-08-18** — **a finished background agent stopped lighting up orange (decision 084).**
+  "Why is there an orange light in my lightbar from a session that already finished?" It was
+  background job `40edcbe8`, whose own hook had written `idle`. #063 maps Claude Code's
+  `state: "blocked"` for a `--bg` job to orange on the premise that `blocked` means it asked
+  you something — but a job that finished its turn and sits at an empty prompt reports the
+  same `blocked`. Measured on 2.1.234 against two live jobs: the `needs` in
+  `~/.claude/jobs/<id>/state.json` tells them apart — the question verbatim when one was
+  asked, the literal `"send a prompt to start"` when nothing is being asked. `agents --json`
+  carries the `tempo` but not the `needs`, so the bar reads the job record for it. An
+  unprompted job now keeps the `idle` its hook wrote and is retirable again by #065's
+  five-minute timer, which its inherited `blocked` exemption had been holding off until the
+  2 h backstop. Exact-string match on purpose: any unrecognised `needs` keeps the orange, since
+  a missed attention light costs more than one that lingers. New test:
+  `bg_blocked_needs_a_question`; `dump_cli_facts` now prints `needs` alongside the light it
+  resolves to.
 
 - **2026-08-18** — **a light can be closed by hand (decision 080).** Every prune the bar had
   was evidence-based — closed window (#027), dead pid (#054), archived composer (#048),

@@ -1691,17 +1691,40 @@ struct CliFact {
     status: String,
     /// A background job's own lifecycle word — `working`, `done` or `blocked` (decision 063).
     /// Independent of `status`: `status` is live (is it burning a turn right now), `job_state`
-    /// is what the job last declared about itself, and only `blocked` means it stopped to ask
-    /// the user something. Empty for interactive sessions, which report none.
+    /// is what the job last declared about itself. `blocked` means it will not move without
+    /// the user, which covers *two* situations — it asked a question, and it is sitting at an
+    /// empty prompt — separated by `needs` (decision 084). Empty for interactive sessions,
+    /// which report none.
     job_state: String,
+    /// What a `blocked` job says it is waiting for, from its own record at
+    /// `~/.claude/jobs/<id>/state.json`: the question it stopped to ask, verbatim, or the
+    /// literal `send a prompt to start` when nothing has been asked of the user at all
+    /// (decision 084). Empty for anything that reports none.
+    needs: String,
 }
 
 /// Whether a background job's light may be retired by the silence timer: Claude Code says the
 /// job is idle and it is not waiting on the user. `blocked` is the one answer that must keep a
 /// light — the job stopped to ask something, so it goes silent by nature, and its light is the
-/// only place that question is visible (UI Principle #2).
+/// only place that question is visible (UI Principle #2) — unless that `blocked` is only an
+/// empty prompt, which asks the user nothing and retires like any other finished job (#084).
 fn bg_retirable(f: &CliFact) -> bool {
-    f.kind == "background" && f.status == "idle" && f.job_state != "blocked"
+    f.kind == "background"
+        && f.status == "idle"
+        && (f.job_state != "blocked" || bg_unprompted(f))
+}
+
+/// The `needs` a background job reports when it is idle at an empty prompt: it is not asking
+/// anything, it is waiting to be given work. Every other `needs` on a `blocked` job is the
+/// question it stopped to ask, verbatim (both measured live — see decision 084).
+const BG_NEEDS_PROMPT: &str = "send a prompt to start";
+
+/// Whether a `blocked` background job is merely unprompted rather than waiting on an answer.
+/// Deliberately an exact match against the one phrase that means "nothing is being asked of
+/// you": an unrecognised `needs` — a new wording, a job with no record on disk — keeps
+/// decision 063's orange, because a missed attention light is the costlier mistake.
+fn bg_unprompted(f: &CliFact) -> bool {
+    f.needs == BG_NEEDS_PROMPT
 }
 
 /// The state a background agent's light should show when its own hook last wrote `idle`
@@ -1717,8 +1740,10 @@ fn bg_light_state(f: &CliFact) -> Option<&'static str> {
         // running, and its light is green (requested live).
         ("busy", _) => Some("running"),
         // Stopped, and waiting on the user: that is what orange means everywhere else on the
-        // bar (a permission prompt, a question), and it is what this is.
-        (_, "blocked") => Some("blocked"),
+        // bar (a permission prompt, a question), and it is what this is — provided the job is
+        // actually asking. A job that finished and sits at an empty prompt reports the same
+        // `blocked` and asks nothing, so it keeps the `idle` its own hook wrote (#084).
+        (_, "blocked") if !bg_unprompted(f) => Some("blocked"),
         // `done` and `working` both read as the hook wrote them: finished, or stale.
         _ => None,
     }
@@ -1790,10 +1815,31 @@ fn cli_facts_query() -> Option<std::collections::HashMap<String, CliFact>> {
                 pid: a.get("pid").and_then(|x| x.as_i64()).unwrap_or(0),
                 status: a.get("status").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                 job_state: a.get("state").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                needs: a.get("id").and_then(|x| x.as_str()).map(job_needs).unwrap_or_default(),
             },
         );
     }
     Some(map)
+}
+
+/// What a background job says it is waiting for, read from the job's own record rather than
+/// taken from `claude agents --json` — which carries the job's `tempo` as its `state` but not
+/// the `needs` behind it (decision 084). Only background agents have a job id, so this is read
+/// only for them. A missing file, an unreadable one, or a null `needs` all read as empty, which
+/// changes nothing.
+fn job_needs(job_id: &str) -> String {
+    let path = std::path::PathBuf::from(home())
+        .join(".claude")
+        .join("jobs")
+        .join(job_id)
+        .join("state.json");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("needs").and_then(|x| x.as_str()).map(str::to_string))
+        .unwrap_or_default()
 }
 
 /// Cached `cli_facts_query`, refreshed at most every `CLI_FACTS_TTL` seconds. A failed query
@@ -2884,11 +2930,17 @@ pub fn run() {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     fn fact(kind: &str, status: &str, job_state: &str) -> super::CliFact {
+        needy(kind, status, job_state, "")
+    }
+
+    /// The same, for a job whose own record says what it is waiting for (decision 084).
+    fn needy(kind: &str, status: &str, job_state: &str, needs: &str) -> super::CliFact {
         super::CliFact {
             kind: kind.to_string(),
             pid: 1,
             status: status.to_string(),
             job_state: job_state.to_string(),
+            needs: needs.to_string(),
         }
     }
 
@@ -2916,6 +2968,30 @@ mod tests {
         assert_eq!(super::bg_light_state(&fact("interactive", "busy", "")), None);
         assert_eq!(super::bg_light_state(&fact("interactive", "idle", "blocked")), None);
         assert!(!super::bg_retirable(&fact("interactive", "idle", "")));
+    }
+
+    /// Decision 084: `state: "blocked"` reaches the bar for two different situations, and only
+    /// one of them is a light the user must act on. Both `needs` values were measured from live
+    /// jobs — a job told to ask a question, and a job left at an empty prompt.
+    #[test]
+    fn bg_blocked_needs_a_question() {
+        // Asking something: orange, and the silence timer must not touch it (as before).
+        let asking = needy("background", "idle", "blocked", "Should the fallback be red or blue?");
+        assert_eq!(super::bg_light_state(&asking), Some("blocked"));
+        assert!(!super::bg_retirable(&asking));
+        // Sitting at an empty prompt: asks nothing, so the light stays as the hook wrote it and
+        // the 5-minute timer clears it like any other finished job.
+        let unprompted = needy("background", "idle", "blocked", "send a prompt to start");
+        assert_eq!(super::bg_light_state(&unprompted), None);
+        assert!(super::bg_retirable(&unprompted));
+        // Still working, whatever it last said it needed: green, and never retirable.
+        let busy = needy("background", "busy", "blocked", "send a prompt to start");
+        assert_eq!(super::bg_light_state(&busy), Some("running"));
+        assert!(!super::bg_retirable(&busy));
+        // Unrecognised or absent `needs` keeps the orange: a missed attention light costs more
+        // than a light that lingers (this is also the pre-084 behaviour, unchanged).
+        assert_eq!(super::bg_light_state(&fact("background", "idle", "blocked")), Some("blocked"));
+        assert!(!super::bg_retirable(&fact("background", "idle", "blocked")));
     }
 
     /// The first live pid that owns a controlling terminal, or None on a machine with no
@@ -3094,12 +3170,13 @@ mod tests {
                 println!("{} session(s)", m.len());
                 for (id, f) in m {
                     println!(
-                        "  {} kind={} pid={} status={} state={} -> light={:?} retirable={}",
+                        "  {} kind={} pid={} status={} state={} needs={:?} -> light={:?} retirable={}",
                         &id[..8.min(id.len())],
                         f.kind,
                         f.pid,
                         f.status,
                         f.job_state,
+                        f.needs,
                         super::bg_light_state(&f),
                         super::bg_retirable(&f)
                     );
