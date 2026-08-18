@@ -7,6 +7,16 @@
 
 ## Current state
 
+- **A parallel run's subagents keep their badge (decision 088).** Reported live: "a parallel
+  run says it's using subagents but I don't see them in the lightbar." The hooks were firing —
+  `SubagentStart` wrote the marker 0.06 s after an `Agent` launched with
+  `run_in_background: true` — but our own turn-boundary sweep (`clear_subagents` on `Stop`,
+  from #010) deleted the whole marker directory 1.6 s later, while the agent ran on for 40 s.
+  #010 assumed a subagent cannot outlive its turn; an async one can, and the parent ends its
+  turn the moment it reports "launched". The sweep now runs on `SessionStart` only
+  (`SessionEnd` still clears through `RemoveSession`), because `SubagentStop` already removes
+  each agent's own marker — measured for both the background and the synchronous case.
+
 - **The project is MIT-licensed (decision 087).** `LICENSE` at the root, `license` fields in
   both crates and both `package.json`s, a badge and a `## License` section in the README. The
   extension copies the root LICENSE into its own package at publish time (`npm run
@@ -656,6 +666,18 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 ---
 
 ## Recently completed
+
+- **2026-08-18** — **The subagent badge survives the turn that launched it.** Diagnosed
+  against Claude Code 2.1.234 with a watcher on a throwaway `AGENTSTATUS_DIR` (Guideline #4):
+  a synchronous subagent held its marker for its whole 1.3 s life; a background one
+  (`run_in_background: true`, sleeping 40 s) had its marker created at 14:08:17.37 and wiped
+  at 14:08:18.94 by the parent's `Stop`; a third run showed a finished background agent
+  removing its own marker through `SubagentStop`, directory still standing — so the sweep was
+  carrying nothing for these agents. Fix: `clear_subagents: event == "SessionStart"` in
+  `hooks/agentstatus-hook/src/main.rs`, the same one-line change in `report.sh`, and the unit
+  test renamed to `session_boundaries_clear_subagent_markers` (it now asserts `Stop` does not
+  clear). `gen-golden.sh` reproduces all 46 goldens byte-identical; 14/14 hook tests pass.
+  Decision 088.
 
 - **2026-08-18** — **The README lost 186 lines, and the developer docs moved out.** It
   repeated the same facts across its intro, "The lights", and "Customize it", and pinned the

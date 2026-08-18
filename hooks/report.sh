@@ -189,8 +189,9 @@ esac
   printf '%s\n' "$obj" >"$tmp" 2>/dev/null && mv -f "$tmp" "$SESSIONS_DIR/$sid.json" 2>/dev/null
   rm -f "$tmp" 2>/dev/null
 
-  # Turn boundary: clear any lingering subagent markers.
-  if [ "$EVENT" = "Stop" ] || [ "$EVENT" = "SessionStart" ]; then
+  # Session boundary: clear any lingering subagent markers. Not on Stop — a background
+  # agent (Agent with run_in_background) outlives the turn that launched it (decision 088).
+  if [ "$EVENT" = "SessionStart" ]; then
     rm -rf "$subdir" 2>/dev/null
   fi
 } >/dev/null 2>&1

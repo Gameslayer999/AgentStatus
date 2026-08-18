@@ -89,7 +89,8 @@ pub struct Outcome {
     pub action: Action,
     /// A line to append to `calibration.log` (failure calibration, decision 013).
     pub calibration: Option<String>,
-    /// Turn boundary — clear any lingering subagent markers (`Stop`/`SessionStart`).
+    /// Session boundary — clear any lingering subagent markers (`SessionStart`/`SessionEnd`).
+    /// Not `Stop`: a background agent outlives the turn that launched it (decision 088).
     pub clear_subagents: bool,
 }
 
@@ -428,7 +429,14 @@ pub fn decide(event: &str, payload: &Value, old: Option<&Value>, env: &Env) -> O
         session_id: sid,
         action: Action::Write(status),
         calibration,
-        clear_subagents: event == "Stop" || event == "SessionStart",
+        // `SessionStart` only. `Stop` used to clear too, back when a subagent could not
+        // outlive the turn that launched it — an `Agent` call with `run_in_background: true`
+        // now can: measured live on 2.1.234, the marker was created 0.06 s after launch and
+        // the parent's `Stop` wiped it 1.6 s later while the agent ran on for 40 s, so the
+        // badge for a parallel run was never visible. `SubagentStop` fires for those agents
+        // and removes its own marker, so the turn-boundary sweep was carrying nothing for
+        // them (decision 088).
+        clear_subagents: event == "SessionStart",
     })
 }
 
@@ -796,14 +804,15 @@ mod tests {
     }
 
     #[test]
-    fn turn_boundaries_clear_subagent_markers() {
+    fn session_boundaries_clear_subagent_markers() {
         let env = Env { host: String::new(), pid: 0, now: 0 };
         let p = json!({"session_id": "s", "cwd": "/a"});
-        for event in ["Stop", "SessionStart"] {
-            assert!(decide(event, &p, None, &env).unwrap().clear_subagents, "{event}");
-        }
-        assert!(!decide("PreToolUse", &p, None, &env).unwrap().clear_subagents);
+        assert!(decide("SessionStart", &p, None, &env).unwrap().clear_subagents);
         assert!(decide("SessionEnd", &p, None, &env).unwrap().clear_subagents);
+        assert!(!decide("PreToolUse", &p, None, &env).unwrap().clear_subagents);
+        // A background agent keeps running past the turn that launched it, so the end of
+        // that turn must leave its marker alone (decision 088).
+        assert!(!decide("Stop", &p, None, &env).unwrap().clear_subagents);
     }
 
     /// A recovered tool failure is logged but must not flip the light (decision 013).

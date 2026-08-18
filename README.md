@@ -100,7 +100,8 @@ terminal, and in Claude Desktop. Cursor reads it through its Claude-compatible b
   one second.
 - **A hollow ring** is a session that reports no state, for example a Cursor window with no
   open folder. A click opens that conversation.
-- **A blue badge** shows the number of subagents in that session.
+- **A blue badge** shows the number of subagents in that session, including the ones a
+  parallel run launches in the background. The badge lasts as long as the subagent does.
 - **A ring pip** at the end of the bar counts the Cursor agents that wait for you and have no
   light. A click opens the next agent in the queue and clears all Cursor notifications,
   because Cursor gives no way to clear one.

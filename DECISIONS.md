@@ -97,6 +97,7 @@
 | 085 | 2026-08-18 | **A release says what changed in its own words, from a file in the repo.** Until now the publish step ran `gh release create --generate-notes`, so every release read as a bare commit list — accurate, but it never says what the version is *for*. The step now looks for `docs/release-notes/<tag>.md` and passes it as `--notes-file` alongside `--generate-notes`, which puts the written description above the generated list; with no such file the release is exactly what it was before, so the description is optional and can never block a tag. Written in the repo rather than typed into the GitHub UI after the fact, because a release is cut by pushing a tag from a machine that may not be the author's (Guideline #8), and because the notes then review with the code that earned them. The publish job gains an `actions/checkout` it did not need before — it previously only downloaded artifacts | Accepted |
 | 086 | 2026-08-18 | **The menu-bar icon closes itself, and says the urgent states in shapes.** Two defects found by comparing the tray path against [autonomous-ai/agent-status](https://github.com/autonomous-ai/agent-status), a native SwiftUI menu-bar app for the same status files. (1) The popover never closed on a click outside on macOS: #073 dismisses on `Focused(false)`, which #008's non-activating panel can never fire. Fixed with a global `NSEvent` mouse-down monitor, which sees only clicks delivered to *other* applications — so a click on our own lights or on the status item stays local, the tray icon keeps toggling, and Windows' 400 ms debounce needs no counterpart. (2) `done` (`#ecf0f1`) and the empty placeholder (white at 0.28) were invisible on a **light** menu bar, because the dots are painted straight onto it. Fixed by outlining any fill too close to the bar behind it (luminance > 0.72 on a light bar, < 0.2 on a dark one) rather than recolouring it, so a state keeps the exact colour the user picked. And `blocked` now draws as a triangle and `error` as a square: their app separates states by SF Symbol as well as colour, and a tray icon cannot afford the bar's pulse — they measured that several animated status items wedge the main thread | Accepted |
 | 087 | 2026-08-18 | **AgentStatus is MIT-licensed.** The repository had no licence of any kind — no `LICENSE` file, no `license` field in either `Cargo.toml`, `app/package.json`, or the extension manifest — which makes published code "all rights reserved": GitHub's ToS grants the public only viewing and forking, so nobody could legally build, redistribute, or deploy the DMG the README advertises, and a pull request would arrive with no inbound grant. A dependency audit found nothing that constrains the choice: of 268 crates resolved from `Cargo.lock`, zero GPL/LGPL/AGPL/SSPL, and the five MPL-2.0 crates (`cssparser`, `selectors`, `dtoa-short`, `option-ext`, `cssparser-macros`) are file-level copyleft we do not modify. MIT over Apache-2.0 because there is no patentable invention here to need a patent grant, and over GPL-3.0 because that would deter contributors and complicate Marketplace distribution for a free utility whose value is convenience. The accepted cost: someone may repackage and sell it, with attribution | Accepted |
+| 088 | 2026-08-18 | **A background subagent keeps its badge past the end of the turn.** Reported live: "a parallel run says it's using subagents but I don't see them in the lightbar." `SubagentStart`/`SubagentStop` do fire for an `Agent` launched with `run_in_background: true` on 2.1.234 — the marker landed 0.06 s after the launch — but our own turn-boundary sweep (`clear_subagents` on `Stop`, from #010) wiped the whole marker directory 1.6 s later, while the agent ran on for 40 s. #010's premise was that a subagent cannot outlive the turn that spawned it; an async agent breaks it, since the parent reports "launched" and ends its turn immediately. The sweep was carrying nothing for these agents anyway: measured, a background agent that finishes removes its own marker via `SubagentStop` (marker gone, directory still standing), and a synchronous one holds its marker for its whole life. `clear_subagents` is now `SessionStart` only (`SessionEnd` still clears through `RemoveSession`). The accepted cost is the narrow case the sweep was built for — a synchronous subagent interrupted mid-turn whose `SubagentStop` never arrives leaks a badge until the session restarts or the light is dismissed (#080) — chosen over a magic-number age gate, which keeps the same defect on a timer. `report.sh` takes the same one-line change and the 46 goldens regenerate byte-identical | Accepted |
 
 ---
 
@@ -5489,3 +5490,66 @@ existing `copyhook`, so it can never drift, and git-ignored like the `report.sh`
 **Worth an actual lawyer, and flagged rather than answered here:** who owns the copyright if
 any of this was written for or during employment, and Microsoft's Publisher Agreement if the
 extension is ever put on the Marketplace — a separate contract from the MIT grant.
+
+---
+
+## 088 — A background subagent keeps its badge past the end of the turn
+
+**Date:** 2026-08-18
+**Status:** Accepted
+
+**Context.** Reported live: "a parallel run says it's using subagents but I don't see them in
+the lightbar." The session in question (`91e98255…`, Claude Code 2.1.234, CLI host) had
+launched two `general-purpose` agents with `run_in_background: true` at 13:56:12 and 13:56:27
+and was still working on their behalf — and had no `sessions/<id>.subagents/` directory at
+all, so the bar drew a bare light with no count.
+
+The signal layer was not at fault. Replayed live against a throwaway `AGENTSTATUS_DIR` on
+2.1.234 (Guideline #4), `SubagentStart`/`SubagentStop` fire for background agents exactly as
+they do for synchronous ones, carrying `agent_id` and `agent_type`; the installed hook wrote
+the marker 0.06 s after the launch. What removed it was **our own turn-boundary sweep**:
+`clear_subagents` fired on `Stop` as well as `SessionStart`, and `apply` answers it with
+`remove_dir_all` on the whole marker directory.
+
+That sweep was written under decision 010, when a subagent could not outlive the turn that
+spawned it — a `Stop` meant every marker still on disk was a leak. An asynchronous agent
+breaks the premise: the parent launches it, reports "launched", and **ends its turn seconds
+later** while the agent runs for minutes. Measured, with the agent sleeping 40 s:
+
+| clock | event | markers |
+|---|---|---|
+| 14:08:17.31 | `Agent(run_in_background: true)` | — |
+| 14:08:17.37 | `SubagentStart` → marker written | 1 |
+| 14:08:18.94 | parent's `Stop` → directory wiped | 0 |
+| (through 14:08:58) | agent still running | 0 |
+
+A badge that exists for 1.6 s is a badge nobody sees. A third run confirmed the sweep was
+carrying nothing for these agents anyway: a background agent that finished on its own had its
+marker removed by its **own** `SubagentStop` (marker gone, directory still standing), and a
+synchronous agent held its marker for its whole 1.3 s life.
+
+**Options.**
+
+| | Option | Cost |
+|---|---|---|
+| A | Clear on `SessionStart`/`SessionEnd` only | An interrupted *synchronous* subagent whose `SubagentStop` never arrives leaks a badge until the session restarts |
+| B | A + ignore markers older than the 2 h backstop (#004) in the app | Bounds that leak; ~6 lines in `lib.rs` for a leak not yet observed |
+| C | Keep the `Stop` sweep but only for markers older than N minutes | A magic number in the hook, and a background agent still loses its badge after N minutes |
+
+**Decision.** Option A. `clear_subagents: event == "SessionStart"` (`SessionEnd` clears
+through `RemoveSession`, unchanged). `SubagentStop` is the per-agent remover, and the
+session boundary stays as the backstop.
+
+**Reasoning.** The sweep only ever removed markers `SubagentStop` had already removed —
+except in the one case it was built for, an event dropped mid-turn, which is now a bounded
+leak rather than a guaranteed wipe of every live parallel agent. C keeps the same defect on a
+timer, and B spends code on a leak that has not been seen; if one shows up, B is still there
+to add. The failure it replaces is the worse one: the bar was silent about exactly the
+sessions doing the most work.
+
+**Blast radius.** Synchronous subagents are untouched (their markers are removed by
+`SubagentStop` before the turn ends, as measured). `report.sh` — kept only as the
+specification `gen-golden.sh` replays (#076) — takes the same one-line change, and the 46
+goldens regenerate byte-identical, since subagent events write no status file. The unit test
+`turn_boundaries_clear_subagent_markers` becomes `session_boundaries_clear_subagent_markers`
+and now asserts `Stop` does **not** clear.
