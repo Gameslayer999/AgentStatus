@@ -61,6 +61,7 @@ name = "app"
 version = "0.9.0"
 dependencies = [
  "accessibility-sys",
+ "block2",
  "core-foundation",
  "libc",
  "objc2-app-kit",

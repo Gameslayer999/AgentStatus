@@ -18,6 +18,15 @@
 # Building and publishing are separate jobs on purpose: `gh release create` can only run
 # once, so the matrix uploads artifacts and a single publish job assembles the release from
 # them. That also means a failure on one platform never leaves a half-published release.
+#
+# The actions/* majors are the current ones, which run on Node 24. The v4 line ran on Node
+# 20, which GitHub now force-runs on 24 and warns about on every job. Checked against the
+# inputs used here before bumping: setup-node still takes node-version / cache /
+# cache-dependency-path, upload-artifact if-no-files-found, download-artifact
+# merge-multiple. Two behaviour changes came with them, both wanted: setup-node v6 caches
+# npm only (this repo is npm), and download-artifact v8 fails on a digest mismatch instead
+# of warning about it. Swatinem/rust-cache@v2 already runs on Node 24, and
+# dtolnay/rust-toolchain is a composite action with no Node runtime at all.
 
 name: Release
 
@@ -36,17 +45,31 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Check the tag matches tauri.conf.json
+      - uses: actions/checkout@v7
+      # All four version files, not just tauri.conf.json: the DMG is named from
+      # tauri.conf.json, so a half-done bump there passes every check and still ships an
+      # app whose crate — and the hook binary inside it — report a different number. The
+      # v0.8.0 bump found the README naming only three of the files that carry the version;
+      # this makes the workflow itself the list.
+      - name: Check the tag matches every version file
         id: check
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
           conf="$(python3 -c "import json;print(json.load(open('app/src-tauri/tauri.conf.json'))['version'])")"
-          if [ "$tag" != "$conf" ]; then
-            echo "::error::tag v$tag does not match tauri.conf.json version $conf — bump the version and re-tag"
-            exit 1
-          fi
+          pkg="$(python3 -c "import json;print(json.load(open('app/package.json'))['version'])")"
+          app_crate="$(sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"/\1/p' app/src-tauri/Cargo.toml | head -1)"
+          hook_crate="$(sed -n '/^\[package\]/,/^\[/s/^version = "\(.*\)"/\1/p' hooks/agentstatus-hook/Cargo.toml | head -1)"
+          fail=0
+          for pair in "app/src-tauri/tauri.conf.json=$conf" "app/package.json=$pkg" \
+                      "app/src-tauri/Cargo.toml=$app_crate" "hooks/agentstatus-hook/Cargo.toml=$hook_crate"; do
+            file="${pair%%=*}"; found="${pair#*=}"
+            if [ "$tag" != "$found" ]; then
+              echo "::error::tag v$tag does not match $file version ${found:-<unset>} — bump the version and re-tag"
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ] || exit 1
           echo "version=$tag" >> "$GITHUB_OUTPUT"
 
   build:
@@ -77,9 +100,9 @@ jobs:
         # Git Bash on the Windows runner, so one script works on both platforms.
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -114,7 +137,7 @@ jobs:
           npm ci
           npm run tauri build -- ${{ matrix.args }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.paths }}
@@ -126,9 +149,9 @@ jobs:
     steps:
       # Checked out only for docs/release-notes/<tag>.md — the artifacts carry everything
       # else the release needs.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

@@ -520,6 +520,13 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 
 ## Later
 
+- **`block v0.1.6` will be rejected by a future Rust.** Every macOS build prints the
+  future-incompat warning. It comes only from `tauri-nspanel` → `cocoa`/`objc-foundation`,
+  and upstream's `v2` branch head *is* the commit we pin (18ffb9a2, June 2025), so there is
+  nothing to bump to. Nothing breaks until the toolchain actually drops it; when it does,
+  the options are a fork of `tauri-nspanel` on `objc2` or building the panel ourselves
+  (#008 is the decision that depends on it).
+
 6. ✅ **Milestone 6 — VS Code extension (decisions 005, 006, 012).** *Done 2026-07-05.*
    `extension/` shows per-window status-bar items (scoped to the window's workspace), hover
    detail (task/activity/subagents), and click-to-focus a specific session's tab via
@@ -622,6 +629,23 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 ---
 
 ## Recently completed
+
+- **2026-08-18** — **CI actions moved to their current majors, and two build warnings are
+  gone.** The v0.9.0 run warned that `actions/checkout@v4`, `setup-node@v4`,
+  `upload-artifact@v4` and `download-artifact@v4` target Node 20 and are being force-run on
+  Node 24. Bumped to checkout v7, setup-node v7, upload-artifact v7, download-artifact v8 —
+  each checked first against the inputs this workflow passes (they all still exist) and
+  against its majors' release notes: setup-node v6 limits automatic caching to npm (this
+  repo is npm) and download-artifact v8 turns a digest mismatch from a warning into a
+  failure (wanted). `Swatinem/rust-cache@v2` already runs on Node 24 and
+  `dtolnay/rust-toolchain` is a composite action, so both stay. Our own two warnings, one
+  per platform, are fixed: `field pid is never read` on Windows (real — the Windows click
+  path takes the pid from the status file per #071, so the field is `cfg_attr(windows,
+  allow(dead_code))` rather than blanket-allowed) and `variable does not need to be
+  mutable` on macOS (the tray builder's `mut` now starts at the binding something actually
+  reassigns). The tag guard also checks **all four** version files now, not only
+  `tauri.conf.json` — the DMG is named from that one file, so a half-done bump used to pass
+  and still ship a crate reporting a different number; tested locally in both directions.
 
 - **2026-08-18** — **v0.9.0 released, and a release can now describe itself (decision
   085).** Version bumped 0.8.0 → 0.9.0 across the four manifests plus all three lockfiles —

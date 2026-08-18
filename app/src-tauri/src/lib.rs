@@ -1688,6 +1688,11 @@ end run"#;
 #[derive(Clone, Debug)]
 struct CliFact {
     kind: String,
+    /// Read on macOS, where a click walks this pid to the terminal that owns the session
+    /// (decision 060/054). The Windows path resolves the pid from the status file instead
+    /// (decision 071), so the field is genuinely dead there — hence the targeted allow,
+    /// rather than one that would also hide it going unused on macOS.
+    #[cfg_attr(windows, allow(dead_code))]
     pid: i64,
     /// Claude Code's own word on whether this session is working right now — `busy` or
     /// `idle`. Absent for a host that reports none (Claude Desktop), which reads as neither.
@@ -2627,9 +2632,8 @@ fn set_mode(app: tauri::AppHandle, mode: String) -> bool {
         // Answered here rather than inside the closure: the caller needs it synchronously,
         // and looking a tray up by id is a registry read, not a UI call.
         let has_tray = app.tray_by_id(TRAY_ID).is_some();
-        // Tells the focus-loss handler whether the panel is a popover (dismiss it) or the
+        // Tells the dismissal handlers whether the panel is a popover (close it) or the
         // floating bar (leave it alone).
-        #[cfg(windows)]
         TRAY_MODE.store(menubar && has_tray, std::sync::atomic::Ordering::Relaxed);
         let app2 = app.clone();
         // NSStatusItem must be manipulated on the main thread; Tauri commands run on a
@@ -2694,10 +2698,11 @@ fn set_tray_image(app: tauri::AppHandle, rgba: Vec<u8>, width: u32, height: u32)
     }
 }
 
-/// Whether the bar is currently presenting as a tray item, so the focus-loss handler knows
-/// to dismiss the popover — and does nothing at all in floating mode, where the bar is
-/// supposed to stay on screen.
-#[cfg(windows)]
+/// Whether the bar is currently presenting as a tray item, so the dismissal handler knows
+/// to close the popover — and does nothing at all in floating mode, where the bar is
+/// supposed to stay on screen. Read by the focus-loss handler on Windows and by the
+/// click-outside monitor on macOS (decision 086).
+#[cfg(any(target_os = "macos", windows))]
 static TRAY_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// When the popover was last auto-hidden by losing focus. See `toggle_popover`.
@@ -2839,6 +2844,42 @@ fn fit_popover(window: tauri::WebviewWindow) {
     let _ = window;
 }
 
+/// Dismiss the tray popover when the user clicks anywhere outside this app (macOS).
+///
+/// Windows gets this from `Focused(false)` (#073), which macOS cannot use: the panel is
+/// deliberately non-activating (#008), so it never takes focus and so never loses any. A
+/// global NSEvent monitor sees only mouse-downs delivered to *other* applications, which is
+/// exactly the "clicked away" gesture. A click on our own lights or on the status item is a
+/// local event and never reaches this handler, so the tray icon keeps toggling the popover
+/// as before and the Windows 400 ms debounce has no counterpart here.
+///
+/// Installed once at startup and left in place: it does nothing unless the bar is presenting
+/// as a tray popover, and the check is one relaxed atomic load per outside click.
+#[cfg(target_os = "macos")]
+fn dismiss_popover_on_outside_click(app: &tauri::AppHandle) {
+    use objc2_app_kit::{NSEvent, NSEventMask};
+    use std::sync::atomic::Ordering;
+
+    let app = app.clone();
+    let handler = block2::RcBlock::new(move |_event: std::ptr::NonNull<NSEvent>| {
+        if !TRAY_MODE.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Some(win) = app.get_webview_window("main") {
+            if matches!(win.is_visible(), Ok(true)) {
+                let _ = win.hide();
+            }
+        }
+    });
+    let monitor = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
+        NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown,
+        &handler,
+    );
+    // The monitor must outlive this call for the whole life of the process; there is no
+    // point at which we would remove it, so hand the token to the runtime and forget it.
+    std::mem::forget(monitor);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // `mut` is used only by the release-gated single-instance block below; in a
@@ -2920,6 +2961,10 @@ pub fn run() {
             // user grants, and prompting from `tauri dev` would nag on every run.
             #[cfg(all(target_os = "macos", not(debug_assertions)))]
             prompt_accessibility();
+            // Click-away dismissal for the menu-bar popover (decision 086). Installed here
+            // because `setup` runs on the main thread, which AppKit requires for this call.
+            #[cfg(target_os = "macos")]
+            dismiss_popover_on_outside_click(app.handle());
             // Tray item — the macOS menu bar, or the Windows notification area (decision
             // 024, extended to Windows by #072). Built once here (on the main thread) but
             // hidden until the frontend switches to menu-bar mode via `set_mode`. Colored
@@ -2933,14 +2978,17 @@ pub fn run() {
                 // anonymous dot in a row of anonymous dots (and nothing, including
                 // accessibility tools, can tell which icon it is). Harmless on macOS,
                 // where menu-bar items are not hover-labelled.
-                let mut tb = TrayIconBuilder::with_id(TRAY_ID)
+                let tb = TrayIconBuilder::with_id(TRAY_ID)
                     .tooltip("AgentStatus")
                     .show_menu_on_left_click(false);
                 // Template icons are macOS-only, and would render our colored dots as a
                 // monochrome alpha mask.
                 #[cfg(target_os = "macos")]
-                let mut tb = tb.icon_as_template(false);
-                tb = tb
+                let tb = tb.icon_as_template(false);
+                // `mut` starts here, at the first binding something actually reassigns: on
+                // macOS the earlier ones are shadowed before that, so marking them mutable
+                // warned on every build.
+                let mut tb = tb
                     .on_tray_icon_event(|tray, event| {
                         if let TrayIconEvent::Click {
                             button: MouseButton::Left,

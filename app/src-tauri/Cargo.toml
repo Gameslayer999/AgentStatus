@@ -49,7 +49,16 @@ tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2"
 # Set the overlay panel's window collection behavior through the maintained
 # objc2-app-kit API instead of tauri-nspanel's deprecated `cocoa`-typed setter.
 # Pinned to the version Tauri already pulls in transitively (no extra copy).
-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSResponder"] }
+objc2-app-kit = { version = "0.3", features = [
+  "NSWindow",
+  "NSResponder",
+  # A global mouse-down monitor closes the menu-bar popover on a click outside the app
+  # (decision 086); the monitor takes a block, hence the `block2` feature.
+  "NSEvent",
+  "block2",
+] }
+# Pinned to the version Tauri already resolves, so no second copy is pulled in.
+block2 = "0.6"
 # Read Cursor's menu-bar status item via the Accessibility API directly (decision
 # 038) — needs only the Accessibility grant the app already uses, not the separate
 # Automation permission that osascript → System Events would require. Versions pinned
