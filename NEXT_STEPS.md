@@ -667,6 +667,14 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 
 ## Recently completed
 
+- **2026-08-18** — **v0.9.1 released.** Version bumped 0.9.0 → 0.9.1 across the four
+  manifests (`app/package.json`, `app/src-tauri/tauri.conf.json`, and both `Cargo.toml`s) and
+  all three lockfiles. Notes written to `docs/release-notes/v0.9.1.md`, which decision 085's
+  publish step puts above the generated commit list. Contents: the background-subagent badge
+  fix (088), the menu-bar popover closing on an outside click plus the light-menu-bar outline
+  and the blocked/error shapes (086), MIT licensing (087), the condensed README, and the CI
+  action bumps.
+
 - **2026-08-18** — **The subagent badge survives the turn that launched it.** Diagnosed
   against Claude Code 2.1.234 with a watcher on a throwaway `AGENTSTATUS_DIR` (Guideline #4):
   a synchronous subagent held its marker for its whole 1.3 s life; a background one
