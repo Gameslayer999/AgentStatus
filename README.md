@@ -184,6 +184,10 @@ a Cursor agent.
   Ghostty tab; every click after that goes to the tab that is already open, never to a new
   one.
 - **Right-click the bar** to open the settings.
+- **Close a light yourself.** The settings panel adds a row of small red × buttons beside
+  the lights, one for each light. Click one to remove that light now, instead of waiting
+  for the application to notice the session is over. If the session is in fact still
+  running, its light comes back on its next event.
 - **Drag the bar** to move it. Hold the bar by the padding, not by a light. The
   application keeps the position.
 
@@ -191,7 +195,7 @@ a Cursor agent.
 
 **Right-click** the bar to open the settings panel. All settings stay after a restart.
 
-![The AgentStatus settings panel. It has Orientation, Sort, and Unknown controls, sliders for Size, Padding, and Opacity, color swatches for Running, Blocked, Done, Idle, and Error, and Reload, Reset to defaults, and Quit links.](docs/lightbar-settings.svg)
+![The AgentStatus settings panel. The lights sit at the top with a row of red close buttons beneath them. It has Orientation, Sort, and Unknown controls, sliders for Size, Padding, and Opacity, color swatches for Running, Blocked, Done, Idle, and Error, and Reload, Reset to defaults, and Quit links.](docs/lightbar-settings.svg)
 
 - **Mode** — show the lights as the floating bar (default), or in the **macOS menu bar** /
   the **Windows notification area**. Refer to
@@ -206,6 +210,13 @@ a Cursor agent.
   the bar. **Urgency** moves the attention states (error, then blocked, then done) to the
   front, so a light moves when its own state changes.
 - **Unknown** — **Show** (default) or **Hide** the hollow rings.
+- **Close buttons** — while the panel is open, a small red × sits beside each light. The
+  row goes on the side that faces the middle of the screen, the same way the panel itself
+  opens toward the middle: under a horizontal bar near the top of the screen and above one
+  near the bottom, to the right of a vertical bar on the left of the screen and to its left
+  on the right. The lights do not move. Click a button to drop that light at once. The buttons appear only with the panel, so a light is never a click away from
+  being deleted while you are aiming at it. A light removed this way returns if its
+  session is still active and reports again.
 - **Size, padding, and opacity** — change the size of the lights, the space in the bar,
   and the opacity of the bar. The lights stay fully opaque.
 - **Colors** — change the color of each of the five states with the system color picker.

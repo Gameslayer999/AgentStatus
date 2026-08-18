@@ -7,6 +7,10 @@
 
 ## Current state
 
+- **Lights can now be closed by hand (decision 080).** Right-click reveals a row of small red
+  × buttons alongside the lights — one per light — and clicking one deletes that session's
+  status file immediately, instead of waiting for an evidence-based prune or the 2 h backstop.
+  A live session's light returns on its next hook event; that is deliberate, not a gap.
 - **✅ macOS is verified (decision 076), 2026-08-18.** Both platforms now install the native
   `agentstatus-hook` binary — `report.sh` is no longer installed anywhere, only kept as the
   reference `gen-golden.sh` generates goldens from. The supported floor is **macOS 13**
@@ -580,6 +584,27 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 ---
 
 ## Recently completed
+
+- **2026-08-18** — **a light can be closed by hand (decision 080).** Every prune the bar had
+  was evidence-based — closed window (#027), dead pid (#054), archived composer (#048),
+  retired background agent (#065), the 2 h backstop (#004) — so a session the *user* knew was
+  finished kept its light until the evidence arrived. The settings panel now reveals a second
+  row **alongside the lights**: one small red × per light, aligned one-for-one (beside the
+  column when the bar is vertical), on the side facing the middle of the screen — the same
+  rule `chooseGrowthDirection` already applies to the panel, so a bar on the bottom edge
+  puts its buttons above the lights instead of off the screen. Clicking one calls the new `dismiss_session` command,
+  which deletes that session's `sessions/<id>.json` and `<id>.subagents` — the same deletion
+  the automatic prunes do, not a second notion of "gone". It is a deletion, not a hide: a
+  session that is still alive re-registers on its next hook event and its light returns, which
+  UI Principle #4 requires in both directions. A local tombstone hides the light on the click
+  (so a poll already in flight cannot paint it back) and lifts as soon as the poll agrees the
+  session is gone, or after 5 s if the delete never took. The buttons ride with the panel
+  rather than sitting on the bar, because a delete button next to a click-to-focus light is a
+  misclick that removes what you meant to open. Covered by `app/tests/dismiss-light.mjs`
+  (the shipped `visibleSessions`/`reapDismissed`, five cases) and by a headless-Chrome layout
+  check against the real frontend: every × lands on its own light's axis at both ends of the
+  size slider, in both orientations, and a click removed the light, removed its button, and
+  invoked `dismiss_session` with that id.
 
 - **2026-08-18** — **decision 076 verified on macOS; the blocking checklist is cleared.**
   Pulled `776d052` onto a Mac (macOS 26.6.1, arm64) and ran all seven checks — full results in

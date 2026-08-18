@@ -89,6 +89,7 @@
 | 077 | 2026-08-15 | **Several Windows terminal windows are told apart by the session title.** Reported live: with three terminals open, a click brought *a* terminal forward, not the right one. #071 measured one terminal and assumed one window per host process — but Windows Terminal runs every window of an instance in **one** `WindowsTerminal.exe`, so all three chains converged on one pid owning three windows, and the walk kept whichever `EnumWindows` handed it first (z-order). The choice is now made by the title Claude Code writes into the title bar, reusing the Ghostty rule (#055/#066): ends-with is the session's window, contains must be unique. When it cannot tell — an untitled session, or one in a background tab whose window shows another title — the click does nothing rather than raise the wrong terminal (UI Principle #4), a deliberate change from #071. Tab selection remains out of reach (#069). Verified live on the three-window machine, choice asserted separately from the raise because `SetForegroundWindow` cannot succeed from a test binary | Accepted |
 | 078 | 2026-08-15 | **A plan-mode approval turns the light orange.** Reported live as "Windows isn't picking up on orange", with the light showing **green** while waiting. Instrumenting the chain exonerated the Windows port — `AskUserQuestion` and Bash permission prompts already held `blocked` for 43 s / 32 s and rendered orange on screen. The defect is `ExitPlanMode`: its `PermissionRequest` fires when the user *answers*, so `PreToolUse` is the only event that lands while the prompt is up and the light stayed green for the whole 48 s wait, turning orange for under 150 ms at the end. The approved first fix — extend #067's reconcile on Claude Code's own `status: "waiting"` — was **falsified by the same measurement** (status read `busy` throughout the plan prompt) and dropped rather than shipped as dead weight. Instead `ExitPlanMode`/`EnterPlanMode` rewrite their `PreToolUse` to `PermissionRequest` in both hook implementations, so state and detail stay in agreement and `PostToolUse` greens the light on approval. `AskUserQuestion` left out as redundant; `EnterPlanMode` included at the user's choice, accepting a sub-second orange flicker when auto-approved as cheaper than 48 s of wrong-green (UI Principle #2). Golden regeneration is +4 lines / 0 changed, proving the refactor touched nothing else. Verified live: 31.9 s of `blocked` across a real approval, against 48 s of green before | Accepted |
 | 079 | 2026-08-15 | **The release publishes with `find`, not a `dist/*` glob.** The first `v0.8.0` tag built both platforms and then published nothing: `read dist/msi: is a directory`. `actions/upload-artifact` preserves the structure below the **common ancestor of the paths it is given**, and the two jobs give it different numbers of paths — macOS one (its DMG lands flat), Windows two (`msi/` and `nsis/` arrive as directories) — so `dist/*` handed `gh` two files and two directories. Invisible until now because #069 checked the globs against the *local* build output; the asymmetry is created by `upload-artifact`, not by the build. Nothing broken reached users only because `gh release create` deletes the release it just made when an asset upload fails — `v0.7.1` stayed Latest. Now `find dist -type f`, plus a count guard that fails before publishing rather than shipping a release quietly missing an installer (the same class as #041's version guard). Flattening the Windows upload was rejected: it fixes this shape and leaves the next one to another failed tag | Accepted |
+| 080 | 2026-08-18 | **A light can be closed by hand.** Every prune the bar had was evidence-based — a closed window (#027), a dead pid (#054), an archived composer (#048), a retired background agent (#065), the 2 h backstop (#004) — so a session the *user* knows is finished can keep its light until the evidence arrives. Right-click now reveals, alongside the lights, one small red × per light; clicking it invokes `dismiss_session`, which deletes that session's status file and subagent markers exactly as a prune does. A deletion, not a hide: a session that is genuinely alive re-registers on its next hook event and its light returns (UI Principle #4 — the bar must not withhold a light for a live session any more than it may show one for a dead session). A local tombstone hides the light on the click so a poll already in flight cannot paint it back, and is lifted the moment the poll agrees the session is gone — or after 5 s if the delete never took. The buttons ride with the settings panel rather than sitting on the bar: a close button always visible next to a click-to-focus light is a misclick that deletes what you meant to open (UI Principle #1/#3). Their red is a fixed constant, not `--c-error`, so recoloring the error state cannot turn them blue nor make a row of controls read as five sessions in error | Accepted |
 
 ---
 
@@ -4940,3 +4941,93 @@ one to be discovered by another failed tag.
 Simulated `dist/` reproduced from the real CI listing (a flat DMG plus `msi/` and `nsis/`
 subdirectories); the extracted publish script collects exactly the three files and passes the
 guard. The script was also `bash -n`'d out of the YAML rather than eyeballed.
+
+
+---
+
+## 080 — A light can be closed by hand
+
+**Date:** 2026-08-18
+**Status:** Accepted
+**Context:** Every way a light could disappear was a *prune the bar decided on*: the IDE
+window is gone (#027), the owning pid is dead (#054), Cursor archived the composer (#048),
+a background agent retired (#065), or the 2 h `MAX_IDLE_SECS` backstop finally fired (#004).
+Each waits on evidence the bar can observe. The user often has evidence the bar cannot —
+"that terminal is finished, I'm done with it" — and had no way to say so. The only lever was
+Reload/Quit, which drops every light, or waiting out a timer measured in hours.
+
+### Decision
+
+The settings panel (right-click) now reveals a second row **alongside the lights** — one
+small red × per light, aligned one-for-one with the light above it (beside it, when the bar
+is vertical). Clicking one calls a new `dismiss_session` command, which deletes that
+session's `sessions/<id>.json` and its `<id>.subagents` directory — byte for byte what the
+automatic prunes already do, so there is one deletion path, not two notions of "gone".
+
+### Which side the buttons appear on
+
+The row grows toward the middle of the screen, reusing `chooseGrowthDirection` — the rule
+that already decides which way the settings panel opens (#075). The lights stay pinned
+where they are and the strip grows around them, so a bar resting on the bottom edge of the
+screen puts its buttons *above* the lights rather than pushing them off the screen (which
+is exactly what a first cut, always-below, did). A horizontal bar takes the above/below
+answer and a vertical one the left/right answer, so `panel-above` alone cannot serve both:
+a second class, `panel-left`, carries the horizontal half.
+
+### What a dismissal means
+
+**A deletion, not a hide.** If the session is genuinely alive, its next hook event rewrites
+the status file and the light comes back. That is the honest answer, not a shortcoming:
+UI Principle #4 forbids showing a light for a session that is over, and it forbids the
+mirror case just as firmly — withholding a light from a session that is running. The
+tooltip says so ("drops this light now; it returns if the session is still active") rather
+than leaving the user to discover it.
+
+**Tombstoned for the gap.** `list_sessions` is polled once a second, so a poll issued before
+the click can return after it and paint the light back for a tick. The frontend records the
+dismissed id and filters it out of `visibleSessions()` until the poll agrees the session is
+gone — and unconditionally after `DISMISS_GRACE_MS` (5 s), so a delete that failed (a status
+file the app cannot remove) surfaces the light again instead of hiding it forever. The
+grace cap is the part that matters: without it, one failed `remove_file` would be
+indistinguishable from a successful prune.
+
+### Options considered
+
+| option | why not |
+|---|---|
+| Close buttons always on the bar | The bar is a click target: a light *is* the button that opens the session (UI Principle #3). A permanent × a few pixels away turns a misclick into a deleted light, and the glanceable strip grows a second row of chrome competing with the one signal that matters (UI Principle #1). |
+| An × drawn on top of each light | Same misclick hazard on the same pixels, and it hides the state color — the thing being looked at — behind the control. |
+| Hide locally, don't delete the file | The light would stay hidden while the session kept reporting, and the next prune would delete the file anyway. Two mechanisms for one outcome, and a bar that lies about a running session. |
+| A "clear all" button in the panel | Coarser than the complaint: the user wants *that* light gone, not the four they are still using. |
+
+### Notes
+
+- `dismiss_session` validates the id (ASCII alphanumeric, `-`, `_`) before joining it onto a
+  path. It is the first command that takes a caller-supplied string and deletes a file with
+  it; the check keeps it a session id rather than a traversal.
+- The buttons use a fixed red (`oklch(60% 0.19 25)`), deliberately **not** `var(--c-error)`.
+  They are controls, not lights: a user who recolors the error state must not end up with
+  blue close buttons, and a row of red circles must never read as five sessions in error.
+- The closers row is built on every render whether or not it is shown, and only its `hidden`
+  attribute is toggled with the panel — so opening the panel reveals a row that is already
+  correct rather than one built on reveal.
+
+### Verified
+
+- `dismiss_deletes_one_session` (ignored, sets `AGENTSTATUS_DIR`) — the command deletes the
+  named session's status file and its `.subagents` directory, leaves the neighbouring
+  session untouched, answers `false` for an id that never existed, and refuses `../keep`
+  and the empty string without touching the filesystem.
+- `app/tests/dismiss-light.mjs` — evals the shipped `visibleSessions`/`reapDismissed` out of
+  `main.js`: hidden on click, tombstone lifted once the poll agrees, lifted after the grace
+  window when the delete never took, still hidden inside it, and composed with the Unknown
+  filter rather than replacing it.
+- Layout measured in headless Chrome against the real `index.html`/`styles.css`/`main.js`
+  (Tauri stubbed): with five lights, every × lands on exactly its light's x (13/36/59/82/105
+  horizontal) and on exactly its light's y when vertical, at both ends of the size slider
+  (8 px and 24 px). Clicking one removed the light *and* its button and invoked
+  `dismiss_session` with that session's id, with no flicker back on the following poll.
+- Growth direction measured the same way, with the stub reporting a window position in each
+  quadrant of a 1440×900 monitor: horizontal bar → buttons below at the top of the screen,
+  above at the bottom; vertical bar → buttons right on the left of the screen, left on the
+  right; and each × still on its own light's axis in every case.

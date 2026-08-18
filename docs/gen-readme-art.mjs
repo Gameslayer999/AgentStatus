@@ -319,6 +319,17 @@ function settings() {
     if (s.glow > 0) grads += haloGradient(gid, s.color, s.glow);
     head += dot(dcx, y + R, it.state, gid, null);
   });
+  y += D + 7;
+  // Close buttons (decision 080): one red x under each light, revealed with the panel.
+  // Fixed red — deliberately not the Error state color, which the user can change.
+  const CLOSE_BG = "#db4241"; // oklch(60% 0.19 25)
+  const CLOSE_INK = "#fff6f5"; // oklch(98% 0.01 25)
+  lights.forEach((_, i) => {
+    const dcx = PW / 2 - lw / 2 + R + i * (D + lgap);
+    const k = R * 0.42;
+    head += `<g opacity="0.62"><circle cx="${dcx}" cy="${y + R}" r="${R}" fill="${CLOSE_BG}"/>` +
+      `<path d="M ${dcx - k} ${y + R - k} L ${dcx + k} ${y + R + k} M ${dcx + k} ${y + R - k} L ${dcx - k} ${y + R + k}" stroke="${CLOSE_INK}" stroke-width="2.2" stroke-linecap="round"/></g>`;
+  });
   y += D + 16;
   const sep = () => { const s = `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="${UI_LINE}" stroke-width="1"/>`; y += 16; return s; };
   const label = (t) => `<text x="${x0}" y="${y + 13}" fill="${UI_MUTED}" font-family="-apple-system, system-ui, sans-serif" font-size="12.5" dominant-baseline="central">${t}</text>`;
@@ -362,7 +373,7 @@ function settings() {
   const W = 620;
   const H = PH + 48;
   const px = (W - PW) / 2;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The AgentStatus settings panel, opened by right-clicking the bar: orientation and sort toggles, an Unknown Show/Hide toggle, size/padding/opacity sliders, per-state color swatches, an Audio On/Off toggle with per-state chime checkboxes (Blocked, Error, Done) and a volume slider, and reload/reset/quit links.">
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="The AgentStatus settings panel, opened by right-clicking the bar: the lights with a row of red close buttons beneath them, orientation and sort toggles, an Unknown Show/Hide toggle, size/padding/opacity sliders, per-state color swatches, an Audio On/Off toggle with per-state chime checkboxes (Blocked, Error, Done) and a volume slider, and reload/reset/quit links.">
     ${backdrop(W, H)}
     <defs>${grads}</defs>
     <g transform="translate(${px}, 24)">

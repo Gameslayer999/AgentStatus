@@ -736,11 +736,20 @@ fn list_sessions() -> Vec<SessionStatus> {
                         // *flushed* turn, so a live agent whose hooks simply went quiet —
                         // writing a big file, running a long command — reads as terminal,
                         // and greying it there is a lying light (UI Principle #4).
+                        // `state != "idle"` comes before the tray read on purpose: an
+                        // already-idle light cannot be changed by this arm, and the tray read
+                        // is an AX walk into Cursor's live status-item menu, which **cancels
+                        // that menu if the user has it open** (decision 038 saw the same on
+                        // the shallower pip read and slowed it to 20s for exactly this). A
+                        // settled Cursor light is terminal + stale forever, so without this
+                        // the walk ran every CURSOR_FACTS_TTL seconds for as long as the
+                        // light existed, and the menu became unclickable (decision 081).
                         Some(f)
                             if f.terminal
                                 && stale
                                 && !subs_live
                                 && state != "error"
+                                && state != "idle"
                                 && !tray_says_running(&cursor_tray_titles_cached(now), &f.name) =>
                         {
                             state = "idle".to_string();
@@ -1983,6 +1992,32 @@ fn focus_session(cwd: String, ide: String, session_id: String) {
     }
 }
 
+/// Drop one light on the user's own say-so (decision 080). The automatic prunes in
+/// `list_sessions` are all evidence-based — a closed window, a dead pid, an archived
+/// composer, the idle backstop — so a session whose evidence has not arrived yet keeps
+/// its light until the timer catches up. This is the manual override: delete that
+/// session's status file (and its subagent markers) exactly as a prune would, from a
+/// close button in the settings panel.
+///
+/// It is a deletion, not a hide: a session that is genuinely alive re-registers on its
+/// next hook event and its light comes back, which is the honest answer (UI Principle
+/// #4) — the bar must not keep showing a light for a session it was told to forget, nor
+/// keep hiding one that is still running.
+///
+/// `id` names a file, so it is checked to be a bare session id (the uuid the hook writes,
+/// optionally `bc-`-prefixed) before it is joined onto a path — never a traversal.
+/// Returns whether a status file was actually removed.
+#[tauri::command]
+fn dismiss_session(id: String) -> bool {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return false;
+    }
+    let dir = sessions_dir();
+    let removed = std::fs::remove_file(dir.join(format!("{id}.json"))).is_ok();
+    let _ = std::fs::remove_dir_all(dir.join(format!("{id}.subagents")));
+    removed
+}
+
 /// Quit the whole app from the settings panel. As an Accessory app (no Dock icon,
 /// no app menu — see `setup`) the bar has no OS-provided Quit, so this button is the
 /// only in-UI way out. `exit(0)` tears down the panel and tray and ends the process;
@@ -2215,7 +2250,12 @@ fn cursor_tray_titles() -> Vec<String> {
         titles.borrow_mut().push(t.to_string());
         false
     });
-    titles.into_inner()
+    let titles = titles.into_inner();
+    // Marker-gated (see `cdbg`): this walk is the one thing the app does that can cancel
+    // Cursor's own menu while the user has it open, so it must be traceable without a
+    // rebuild (decision 081).
+    cdbg(&format!("tray_walk rows={}", titles.len()));
+    titles
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -2756,6 +2796,7 @@ pub fn run() {
             set_tray_image,
             cursor_attention_count,
             cursor_open_next_attention,
+            dismiss_session,
             quit_app
         ])
         .setup(|app| {
@@ -2944,6 +2985,42 @@ mod tests {
             // so there is no interactive session to model and nothing to assert.
             None => println!("no terminal session on this machine — 'alive' assertion skipped"),
         }
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// Decision 080: the manual prune deletes exactly what an automatic prune deletes —
+    /// the session's status file and its subagent markers — and nothing else, and a id
+    /// that is not a bare session id never reaches the filesystem at all.
+    /// Ignored because it sets AGENTSTATUS_DIR, which is process-global:
+    ///
+    ///   cargo test -- --ignored --nocapture dismiss_deletes_one_session
+    #[test]
+    #[ignore]
+    fn dismiss_deletes_one_session() {
+        let tmp = std::env::temp_dir().join(format!("agentstatus-080-{}", std::process::id()));
+        let sessions = tmp.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::env::set_var("AGENTSTATUS_DIR", &tmp);
+
+        for id in ["keep", "drop"] {
+            std::fs::write(sessions.join(format!("{id}.json")), "{}").unwrap();
+            std::fs::create_dir_all(sessions.join(format!("{id}.subagents"))).unwrap();
+            std::fs::write(sessions.join(format!("{id}.subagents/a1")), "Explore").unwrap();
+        }
+
+        assert!(super::dismiss_session("drop".into()), "dismiss reported no deletion");
+        assert!(!sessions.join("drop.json").exists(), "status file survived");
+        assert!(!sessions.join("drop.subagents").exists(), "subagent markers survived");
+        assert!(sessions.join("keep.json").exists(), "dismiss touched another session");
+        assert!(sessions.join("keep.subagents/a1").exists(), "dismiss touched another session");
+
+        // Unknown id: nothing to delete, and it says so rather than claiming success.
+        assert!(!super::dismiss_session("never-existed".into()), "unknown id reported a deletion");
+        // A path, not a session id — rejected before it is joined onto the status dir.
+        assert!(!super::dismiss_session("../keep".into()), "traversal accepted");
+        assert!(!super::dismiss_session("".into()), "empty id accepted");
+        assert!(sessions.join("keep.json").exists(), "traversal deleted a file");
+
         std::fs::remove_dir_all(&tmp).ok();
     }
 

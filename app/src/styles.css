@@ -95,10 +95,86 @@ body {
   flex-direction: column-reverse;
 }
 
+/* Lights + the close-button row (decision 080). flex-start, not center: when the
+   closers row is one item shorter than the lights row (the Cursor pip has no close
+   button) centering would slide every X half a light out of line with the light it
+   closes. */
+#strip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+}
+/* Vertical bar: the closers sit beside the column of lights rather than under it. */
+#bar.vertical #strip {
+  flex-direction: row;
+}
+/* Keep the buttons on the side facing the middle of the screen — the same direction
+   the settings panel grows (see chooseGrowthDirection). A bar parked on the bottom
+   edge would otherwise push its own close buttons off the screen, and a vertical bar
+   on the right edge the same. The lights never move either way: the strip grows
+   around them.  Horizontal takes the above/below answer, vertical the left/right one. */
+#bar.panel-above:not(.vertical) #strip {
+  flex-direction: column-reverse;
+}
+#bar.vertical.panel-left #strip {
+  flex-direction: row-reverse;
+}
+
 #lights {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+}
+
+/* One close button per light, laid out with the same box size and the same gap as
+   the lights so each X lines up with the light it closes. Only shown while the
+   settings panel is open. */
+#closers {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+#closers[hidden] {
+  display: none;
+}
+#bar.vertical #closers {
+  flex-direction: column;
+}
+.closer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--dot-size);
+  height: var(--dot-size);
+  flex: none;
+  border-radius: 50%;
+  /* A fixed red, deliberately NOT var(--c-error): these are controls, not lights, and
+     a user who recolors the error state must not end up with blue close buttons — nor
+     should a row of red circles ever read as five sessions in error. */
+  background: oklch(60% 0.19 25);
+  color: oklch(98% 0.01 25);
+  font: 700 calc(var(--dot-size) * 0.82) / 1 -apple-system, BlinkMacSystemFont, system-ui,
+    sans-serif;
+  opacity: 0.62;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+/* A dot can be as small as 8px, which is a hard thing to hit. This widens the
+   pointer target past the visible circle without taking any layout space, so the
+   buttons stay aligned with the lights. */
+.closer::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+.closer:hover {
+  opacity: 1;
+  transform: scale(1.18);
+}
+#bar.nohover .closer:hover {
+  transform: none;
 }
 /* Vertical orientation: stack the lights in a column. The window auto-resizes to
    hug this shape, so no other geometry needs to change. */

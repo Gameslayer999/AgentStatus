@@ -23,6 +23,7 @@ const MIN_H = 30;
 
 const appWindow = getCurrentWindow();
 const dots = new Map(); // session id -> dot element
+const closers = new Map(); // session id -> its close button in the closers row
 let emptyEl = null;
 
 // Cursor menu-bar mirror (decision 038). Cursor's live running/idle status is
@@ -114,8 +115,47 @@ function showUnknown() {
 // `latestSessions` (which stays complete) so toggling the pref re-renders instantly
 // from memory instead of waiting for the next poll.
 function visibleSessions() {
-  if (showUnknown()) return latestSessions;
-  return latestSessions.filter((s) => displayState(s) !== "unknown");
+  const shown = dismissedAt.size
+    ? latestSessions.filter((s) => !dismissedAt.has(s.id))
+    : latestSessions;
+  if (showUnknown()) return shown;
+  return shown.filter((s) => displayState(s) !== "unknown");
+}
+
+// ── Manual prune (decision 080) ─────────────────────────────────────────────
+// Every automatic prune waits on evidence — a closed window, a dead pid, an archived
+// composer, the idle backstop — so a light for a session the user knows is finished
+// can outlive its usefulness by minutes. The close buttons beside the lights (shown
+// with the settings panel) delete that session's status file now. A tombstone hides
+// the light locally in the meantime, so a poll already in flight can't paint it back
+// for a tick.
+const DISMISS_GRACE_MS = 5000;
+const dismissedAt = new Map(); // session id -> when its X was clicked
+
+// Lift a tombstone as soon as the poll agrees the session is gone — and, if it never
+// does (the file could not be deleted), after DISMISS_GRACE_MS, so a light is never
+// hidden by a dismissal that didn't take (UI Principle #4).
+function reapDismissed(sessions) {
+  if (dismissedAt.size === 0) return;
+  const live = new Set(sessions.map((s) => s.id));
+  const now = Date.now();
+  for (const [id, t] of dismissedAt) {
+    if (!live.has(id) || now - t > DISMISS_GRACE_MS) dismissedAt.delete(id);
+  }
+}
+
+async function dismissSession(id) {
+  dismissedAt.set(id, Date.now());
+  render(visibleSessions()); // the light goes on the click, not on the next poll
+  if (currentMode() === "menubar") {
+    lastTraySig = null;
+    pushTrayImage();
+  }
+  try {
+    await invoke("dismiss_session", { id });
+  } catch (_) {
+    /* fail-silent: the grace timer un-hides the light if the delete never happened */
+  }
 }
 
 function applyUnknownButtons() {
@@ -654,12 +694,14 @@ function resetPrefs() {
 // they now are, not where they were opened).
 async function toggleSettings() {
   const settings = document.getElementById("settings");
+  const closerRow = document.getElementById("closers");
   const bar = document.getElementById("bar");
   const opening = settings.hasAttribute("hidden");
   const anchor = await lightsScreenPos();
   if (opening) {
     if (anchor) await chooseGrowthDirection(anchor); // above/below, left/right toward center
     settings.removeAttribute("hidden");
+    closerRow.removeAttribute("hidden"); // close buttons ride with the panel (decision 080)
     bar.classList.add("settings-open");
   } else {
     // Closing jumps the lights unless they are hidden for the transition. With
@@ -672,7 +714,8 @@ async function toggleSettings() {
     // the layout that `resizeToContent` measures.
     bar.style.visibility = "hidden";
     settings.setAttribute("hidden", "");
-    bar.classList.remove("settings-open", "panel-above");
+    closerRow.setAttribute("hidden", "");
+    bar.classList.remove("settings-open", "panel-above", "panel-left");
     bar.style.alignItems = "";
   }
   try {
@@ -907,8 +950,17 @@ function titleFor(s, ds) {
   return lines.join("\n");
 }
 
+// Remove a light's close button when the light itself goes.
+function dropCloser(id) {
+  const x = closers.get(id);
+  if (!x) return;
+  x.remove();
+  closers.delete(id);
+}
+
 function render(sessions) {
   const lights = document.getElementById("lights");
+  const closerRow = document.getElementById("closers");
   let sizeChanged = false;
 
   // The Cursor menu-bar pip counts as content, so a bar with only pending Cursor
@@ -918,6 +970,7 @@ function render(sessions) {
       el.remove();
       dots.delete(id);
       reviewedAt.delete(id);
+      dropCloser(id);
       sizeChanged = true;
     }
     if (renderCursorPip(lights)) sizeChanged = true; // removes a lingering pip
@@ -984,6 +1037,22 @@ function render(sessions) {
     // Keep DOM order matching session order.
     const ref = lights.children[i];
     if (ref !== el) lights.insertBefore(el, ref || null);
+    // The light's close button, held at the same index in the closers row so the two
+    // stay aligned (decision 080). Built whether or not the row is currently shown —
+    // the row's own `hidden` decides that, so opening the panel reveals a row that is
+    // already correct.
+    let x = closers.get(s.id);
+    if (!x) {
+      x = document.createElement("div");
+      x.className = "closer";
+      x.textContent = "\u00d7";
+      x.addEventListener("click", () => dismissSession(s.id));
+      closers.set(s.id, x);
+    }
+    const xTitle = `Close ${headFor(s)}\n\u21b3 drops this light now; it returns if the session is still active`;
+    if (x.title !== xTitle) x.title = xTitle;
+    const xref = closerRow.children[i];
+    if (xref !== x) closerRow.insertBefore(x, xref || null);
   });
 
   for (const [id, el] of dots) {
@@ -991,6 +1060,7 @@ function render(sessions) {
       el.remove();
       dots.delete(id);
       reviewedAt.delete(id);
+      dropCloser(id);
       sizeChanged = true;
     }
   }
@@ -1307,6 +1377,12 @@ async function chooseGrowthDirection(anchor) {
   const monCx = mon.position.x + mon.size.width / 2;
   const monCy = mon.position.y + mon.size.height / 2;
   bar.classList.toggle("panel-above", cy > monCy);
+  // The close-button row grows the strip the same way the panel grows the bar, so it
+  // follows the same rule: put it on the side facing the screen's middle, or a bar
+  // resting on the bottom (or right) edge pushes its own buttons off-screen. A
+  // horizontal row of lights takes the vertical answer, a vertical column the
+  // horizontal one — which is why `panel-above` alone can't serve both (decision 080).
+  bar.classList.toggle("panel-left", cx > monCx);
   bar.style.alignItems = cx > monCx ? "flex-end" : "flex-start";
 }
 
@@ -1365,6 +1441,7 @@ async function tick() {
     // Before anything reads displayState() — sorting, chimes, render — record which
     // sessions just finished a turn, which is only visible as a change between polls.
     noteFinishes(polled);
+    reapDismissed(polled); // un-hide anything a dismissal didn't actually remove
     const sessions = sortSessions(polled);
     latestSessions = sessions;
     checkChimes(sessions); // edge-triggered audio alerts (seeds silently on first tick)
