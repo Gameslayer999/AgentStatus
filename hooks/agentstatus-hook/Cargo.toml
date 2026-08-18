@@ -1,6 +1,6 @@
 [package]
 name = "agentstatus-hook"
-version = "0.8.0"
+version = "0.9.0"
 description = "AgentStatus — the Claude Code / Cursor status hook"
 edition = "2021"
 

@@ -94,6 +94,7 @@
 | 082 | 2026-08-18 | **Settings become a window; the bar keeps only lights and a right-click controls row** — "the settings are starting to be a bit much" on a strip whose whole job is to be glanceable (UI Principle #1). The 16-control panel that grew out of the bar is now a normal, decorated window with a sidebar (General / Lights / Colors / Audio / About) that follows the system appearance, built lazily by a new `open_settings` command under its own capability. A right-click on the bar no longer opens anything: it reveals the bar's controls — decision 080's one × per light, plus a **settings gear** one slot past them, drawn as an inline SVG because U+2699 renders as a color emoji at dot size. Preferences move to a shared `prefs.js`; the **bar stays the source of truth** (it answers `prefs-request` with a snapshot and owns `applyPref`), so nothing depends on two webviews sharing localStorage. New pref: **Cursor pip Show/Hide** (default show) — hiding it also stops the Accessibility read behind it, removing the last reader that can cancel Cursor's menu (#081). Three follow-ons fall out: the pill's radius becomes `--pill-radius` (half the light strip's thickness) so the two-row bar is a stadium instead of an oval; #075's paint suppression now covers **both** toggle directions, because the controls row lands on the lights' own side and shifts them either way; and #074's Windows "popover opens with the settings panel" is dropped with the panel it opened | Accepted |
 | 083 | 2026-08-18 | **The pip's click clears Cursor's notifications itself.** Reported live: clicking the pip never retired the Cursor menu-bar notification, so the pip kept coming back. #045's premise — press the `"• <name>"` row and Cursor both opens the composer and marks it read, verified on 3.12.10 — is false on **3.15.6**: that row's click sends only `vscode:openComposer`, whose handler opens the agent and touches neither half of a bullet (`hasUnreadMessages || badgeCount > 0`). Only `"Clear All Notifications"` sends `vscode:clearAllNotifications` → `markAgentRead` + `clearAllBadges`. In **Glass** mode (this user's Cursor) the per-composer badge-clear-on-focus listener is never registered at all, so a bullet survives opening the composer for up to its 1 h auto-clear. Measured: pressing the composer row leaves the count at 2 (with or without activating Cursor), pressing the clear-all row takes it 2 → 0 — so `AXPress` works and it is the row that changed. The click now presses both rows, navigating first and clearing second. Cursor exposes no per-composer clear, so this necessarily clears the other waiting composers' bullets — accepted, since on Glass they would sit for an hour anyway and their sessions keep their own lights. End-to-end press against a live notification still unverified (Cursor quit before one appeared) | Accepted |
 | 084 | 2026-08-18 | **An orange background-agent light has to be a question.** Reported live: "why is there an orange light in my lightbar from a session that already finished?" #063 maps Claude Code's `state: "blocked"` for a `--bg` job straight to orange, on the premise that `blocked` means the job stopped to ask something. It has a second meaning: a job that finished its turn and sits at an empty prompt reports the same `blocked`. Both were measured on 2.1.234 — the difference is the `needs` in the job's own `~/.claude/jobs/<id>/state.json`, which is the question verbatim when one was asked (`"Should the fallback be red or blue?"`) and the literal `"send a prompt to start"` when nothing is being asked at all. `claude agents --json` carries the job's `tempo` as `state` but not the `needs` behind it, so the bar now reads it from the job record. `needs == "send a prompt to start"` no longer paints orange (the light stays as the hook wrote it) and no longer blocks #065's five-minute retirement — which had left the light orange for the full two-hour backstop, since #065's "never retire a blocked light" guard applied to it too. An exact-string test, deliberately: an unrecognised or absent `needs` keeps #063's orange, because a missed attention light costs more than one that lingers (UI Principle #2 over #4) | Accepted |
+| 085 | 2026-08-18 | **A release says what changed in its own words, from a file in the repo.** Until now the publish step ran `gh release create --generate-notes`, so every release read as a bare commit list — accurate, but it never says what the version is *for*. The step now looks for `docs/release-notes/<tag>.md` and passes it as `--notes-file` alongside `--generate-notes`, which puts the written description above the generated list; with no such file the release is exactly what it was before, so the description is optional and can never block a tag. Written in the repo rather than typed into the GitHub UI after the fact, because a release is cut by pushing a tag from a machine that may not be the author's (Guideline #8), and because the notes then review with the code that earned them. The publish job gains an `actions/checkout` it did not need before — it previously only downloaded artifacts | Accepted |
 
 ---
 
@@ -5336,3 +5337,33 @@ The finished job stops painting orange and becomes retirable; the job that asked
 keeps its orange light and its exemption from the timer. Unit test
 `bg_blocked_needs_a_question` pins all four combinations, including the unrecognised-`needs`
 fallback.
+
+## 085 — A release says what changed in its own words
+
+**Date:** 2026-08-18
+**Status:** Accepted (extends #041's tag-driven release, #079's publish step)
+
+**Context.** Requested while cutting v0.9.0: "add a short description to the release note".
+The publish step ended in `gh release create … --generate-notes`, which produces the commit
+list and nothing else. That tells a reader what commits landed, never what the release is
+for — and v0.9.0 moves the settings out of the bar, which is the kind of change a user wants
+described in a sentence before a list of forty commits.
+
+**Decision.** The publish step reads `docs/release-notes/<tag>.md` when it exists and passes
+it as `--notes-file` together with `--generate-notes`, so the release body is the written
+description followed by the generated list. When the file is absent it publishes exactly as
+before. The job gains `actions/checkout@v4`, which it did not have — it only ever downloaded
+build artifacts.
+
+**Options considered.**
+
+| Option | Verdict |
+|---|---|
+| A notes file in the repo (chosen) | Reviews with the code that earned it; re-runnable from any machine that can push a tag (Guideline #8); absent file degrades to today's behaviour |
+| Edit the release in the GitHub UI after publishing | A manual step after every release, invisible to the repo, and easy to forget — the class of thing Guideline #8 exists to forbid |
+| Generate the description from the commit range | It would restate the commit list the generated notes already give, in worse prose |
+| Put the description in the tag's annotation | `--generate-notes` overwrites the body anyway, and a tag message cannot be revised without re-tagging |
+
+**Verified.** The workflow parses as YAML, and the v0.9.0 file is in place at
+`docs/release-notes/v0.9.0.md`. The publish path itself is exercised by the v0.9.0 tag —
+the first release cut with a description.

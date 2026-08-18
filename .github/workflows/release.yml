@@ -124,6 +124,10 @@ jobs:
     needs: [version, build]
     runs-on: ubuntu-latest
     steps:
+      # Checked out only for docs/release-notes/<tag>.md — the artifacts carry everything
+      # else the release needs.
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -145,7 +149,22 @@ jobs:
           mapfile -t installers < <(find dist -type f | sort)
           printf 'publishing %s\n' "${installers[@]}"
           [ ${#installers[@]} -ge 3 ] || { echo "::error::expected 3 installers, found ${#installers[@]}"; exit 1; }
-          gh release create "$GITHUB_REF_NAME" "${installers[@]}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "AgentStatus ${GITHUB_REF_NAME}" \
-            --generate-notes
+          # A release says what changed in the author's words first, then the commit list
+          # GitHub generates. `docs/release-notes/<tag>.md` is that first part; gh puts it
+          # above the generated notes. Without the file the release is generated notes
+          # alone, exactly as before — the description is optional, never a blocker.
+          notes="docs/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$notes" ]; then
+            echo "using $notes as the release description"
+            gh release create "$GITHUB_REF_NAME" "${installers[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "AgentStatus ${GITHUB_REF_NAME}" \
+              --notes-file "$notes" \
+              --generate-notes
+          else
+            echo "no $notes — publishing with generated notes only"
+            gh release create "$GITHUB_REF_NAME" "${installers[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "AgentStatus ${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi

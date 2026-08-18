@@ -623,6 +623,17 @@ Two agents audited the Windows work on 2026-08-14 — one over the frontend, one
 
 ## Recently completed
 
+- **2026-08-18** — **v0.9.0 released, and a release can now describe itself (decision
+  085).** Version bumped 0.8.0 → 0.9.0 across the four manifests plus all three lockfiles —
+  a minor bump, because the settings moved out of the bar into their own window (#082) and
+  the bar gained a hand-close for a light (#080). Also in it: the Cursor menu-bar
+  interference fix (#081) with its new Cursor pip Show/Hide preference, the pip click that
+  clears Cursor's notification itself (#083), and the rule that an orange background-agent
+  light is always a question (#084). The publish step now reads
+  `docs/release-notes/<tag>.md` and puts it above GitHub's generated commit list, so a
+  release says what it is for; with no such file it publishes exactly as before. README's
+  release steps name the new file alongside the five version files.
+
 - **2026-08-18** — **a finished background agent stopped lighting up orange (decision 084).**
   "Why is there an orange light in my lightbar from a session that already finished?" It was
   background job `40edcbe8`, whose own hook had written `idle`. #063 maps Claude Code's

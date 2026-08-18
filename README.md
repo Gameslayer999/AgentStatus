@@ -46,7 +46,7 @@ needs it.
 > AgentStatus is **not signed and not notarized**. Thus macOS Gatekeeper stops it at the
 > first start. Step 3 removes the download quarantine, and the application starts.
 
-1. Download **`AgentStatus_0.8.0_universal.dmg`** from the
+1. Download **`AgentStatus_0.9.0_universal.dmg`** from the
    [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest). One
    download covers both Apple Silicon and Intel.
 2. Open the DMG. Drag **AgentStatus** into **Applications**.
@@ -85,7 +85,7 @@ Security → Automation.
 > The installer is **not signed**. Windows SmartScreen therefore shows "Windows protected
 > your PC" the first time you run it. Choose **More info → Run anyway**.
 
-1. Download **`AgentStatus_0.8.0_x64-setup.exe`** from the
+1. Download **`AgentStatus_0.9.0_x64-setup.exe`** from the
    [latest release](https://github.com/Gameslayer999/AgentStatus/releases/latest). An
    `.msi` is published alongside it if you prefer that.
 2. Run the installer.
@@ -351,11 +351,13 @@ powershell -ExecutionPolicy Bypass -File hooks\windows-diagnostics.ps1
 GitHub Actions builds and publishes the releases. Set the new version in
 `app/src-tauri/tauri.conf.json`, `app/package.json`, `app/src-tauri/Cargo.toml`, and
 `hooks/agentstatus-hook/Cargo.toml` — then rebuild once so both `Cargo.lock`s and
-`app/package-lock.json` pick the number up. Merge to `main`. Then push a tag with the same
-version:
+`app/package-lock.json` pick the number up. Write what changed in
+`docs/release-notes/v<version>.md`; the workflow puts that text above the generated commit
+list, and publishes with generated notes alone if the file is absent. Merge to `main`. Then
+push a tag with the same version:
 
 ```bash
-git tag v0.8.0 && git push origin v0.8.0
+git tag v0.9.0 && git push origin v0.9.0
 ```
 
 The workflow builds the universal (arm64 + x86_64) DMG on a macOS runner and the MSI and
